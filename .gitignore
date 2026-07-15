@@ -68,6 +68,10 @@ project/
 .env.*.local
 .env.mvp
 !.env.mvp.example
+.env.kamal
+!.env.kamal.example
+.kamal/secrets
+.kamal/vendor/
 
 data/**
 !data/elements_v2/

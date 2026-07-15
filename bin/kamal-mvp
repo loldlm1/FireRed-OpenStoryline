@@ -1,0 +1,57 @@
+#!/usr/bin/env bash
+set -Eeuo pipefail
+
+ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+ENV_FILE="${KAMAL_ENV_FILE:-$ROOT_DIR/.env.kamal}"
+KAMAL_VERSION="${KAMAL_VERSION:-2.12.0}"
+
+fail() {
+  printf 'Error: %s\n' "$*" >&2
+  exit 1
+}
+
+require_value() {
+  local name="$1"
+  local value="${!name:-}"
+  [[ -n "$value" ]] || fail "$name is required in $ENV_FILE"
+  [[ "$value" != replace-* ]] || fail "$name still contains an example value"
+}
+
+[[ -f "$ENV_FILE" ]] || fail "copy .env.kamal.example to .env.kamal and edit it first"
+
+set -a
+# shellcheck disable=SC1090
+source "$ENV_FILE"
+set +a
+
+require_value KAMAL_HOST
+require_value NINEROUTER_URL
+require_value NINEROUTER_KEY
+require_value OPENSTORYLINE_WEB_TOKEN
+
+[[ ${#OPENSTORYLINE_WEB_TOKEN} -ge 16 ]] || fail "OPENSTORYLINE_WEB_TOKEN must contain at least 16 characters"
+[[ "${KAMAL_SSH_PORT:-22}" =~ ^[0-9]+$ ]] || fail "KAMAL_SSH_PORT must be numeric"
+[[ "${KAMAL_HTTP_PORT:-80}" =~ ^[0-9]+$ ]] || fail "KAMAL_HTTP_PORT must be numeric"
+[[ "${KAMAL_HTTPS_PORT:-443}" =~ ^[0-9]+$ ]] || fail "KAMAL_HTTPS_PORT must be numeric"
+
+if [[ -n "${KAMAL_DOMAIN:-}" ]]; then
+  [[ "${KAMAL_HTTP_PORT:-80}" == 80 && "${KAMAL_HTTPS_PORT:-443}" == 443 ]] \
+    || fail "automatic HTTPS requires KAMAL_HTTP_PORT=80 and KAMAL_HTTPS_PORT=443"
+fi
+
+command -v docker >/dev/null 2>&1 || fail "Docker is required on the deploy machine to build the image"
+
+if ! command -v kamal >/dev/null 2>&1; then
+  command -v gem >/dev/null 2>&1 || fail "install Ruby, then run: gem install kamal -v $KAMAL_VERSION"
+  printf 'Installing Kamal %s on the deploy machine...\n' "$KAMAL_VERSION"
+  gem install kamal --no-document --version "$KAMAL_VERSION"
+fi
+
+mkdir -p "$ROOT_DIR/.kamal"
+if [[ ! -f "$ROOT_DIR/.kamal/secrets" ]]; then
+  cp "$ROOT_DIR/.kamal/secrets.example" "$ROOT_DIR/.kamal/secrets"
+  chmod 600 "$ROOT_DIR/.kamal/secrets"
+fi
+
+cd "$ROOT_DIR"
+exec kamal "$@"
