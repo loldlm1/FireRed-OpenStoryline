@@ -142,6 +142,21 @@ class UnderstandClipsConfig(ConfigBaseModel):
     sample_fps: float = 2.0
     max_frames: int = 64
 
+
+class RemoteASRConfig(ConfigBaseModel):
+    base_url: str = ""
+    api_key: str = ""
+    models: List[str] = Field(default_factory=lambda: [
+        "groq/whisper-large-v3-turbo",
+        "groq/whisper-large-v3",
+        "huggingface/openai/whisper-large-v3",
+        "huggingface/openai/whisper-small",
+    ])
+    timeout: float = Field(default=180.0, gt=0)
+    language: str = "es"
+    response_format: Literal["json", "text", "verbose_json", "srt", "vtt"] = "verbose_json"
+
+
 class GroupClipsConfig(ConfigBaseModel):
     base_max_tokens: int = Field(default=4096, ge=256, description="Base max output token budget for group_clips")
     tokens_per_clip: int = Field(default=48, ge=0, description="Additional output token budget per selected clip")
@@ -251,6 +266,7 @@ class Settings(ConfigBaseModel):
     search_media: PexelsConfig
     split_shots: SplitShotsConfig
     understand_clips: UnderstandClipsConfig
+    remote_asr: RemoteASRConfig = Field(default_factory=RemoteASRConfig)
     group_clips: GroupClipsConfig = Field(default_factory=GroupClipsConfig)
     script_template: RecommendScriptTemplateConfig
     generate_voiceover: GenerateVoiceoverConfig

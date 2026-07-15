@@ -44,7 +44,7 @@ available_node_pkgs = [
     "open_storyline.nodes.core_nodes"
 ]
 available_nodes = [
-    "LoadMediaNode", "SearchMediaNode", "SplitShotsNode", "LocalASRNode", "SpeechRoughCutNode", "GenerateAITransitionNode", 
+    "LoadMediaNode", "SearchMediaNode", "SplitShotsNode", "RemoteASRNode", "SpeechRoughCutNode", "GenerateAITransitionNode",
     "UnderstandClipsNode", "FilterClipsNode", "GroupClipsNode", "GenerateScriptNode", "ScriptTemplateRecomendation",
     "GenerateVoiceoverNode", "SelectBGMNode", "RecommendTransitionNode", "RecommendTextNode",
     "PlanTimelineProNode", "PlanTimelineAITransitionNode", "RenderVideoNode"
@@ -67,6 +67,20 @@ transnet_device = "cpu"
 [understand_clips]
 sample_fps = 2.0                 # 每秒抽几帧 / Frames sampled per second
 max_frames = 64                  # 单clip抽帧上限兜底，避免长视频爆 token / Max frames per clip limit to prevent token overflow
+
+# ============= Remote-only speech to text ======================
+[remote_asr]
+base_url = "" # Prefer NINEROUTER_URL
+api_key = ""  # Prefer NINEROUTER_KEY
+models = [
+    "groq/whisper-large-v3-turbo",
+    "groq/whisper-large-v3",
+    "huggingface/openai/whisper-large-v3",
+    "huggingface/openai/whisper-small",
+]
+timeout = 180.0
+language = "es"
+response_format = "verbose_json"
 
 # ============= 镜头分组 / Clip Grouping =============
 [group_clips]
