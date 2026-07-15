@@ -70,6 +70,7 @@ class JobStore:
         job_dir = self._job_dir(job_id)
         (job_dir / "input").mkdir(parents=True)
         (job_dir / "output").mkdir()
+        (job_dir / "work").mkdir()
         now = _now()
         state = {
             "id": job_id,
@@ -136,6 +137,22 @@ class JobStore:
     def output_dir(self, job_id: str) -> Path:
         path = self._job_dir(job_id) / "output"
         path.mkdir(exist_ok=True)
+        return path
+
+    def work_dir(self, job_id: str) -> Path:
+        path = self._job_dir(job_id) / "work"
+        path.mkdir(exist_ok=True)
+        return path
+
+    def source_path(self, job_id: str) -> Path:
+        state = self.load(job_id)
+        filename = str((state.get("input") or {}).get("stored_filename") or "")
+        if not filename or Path(filename).name != filename:
+            raise JobStoreError("JOB_INPUT_MISSING", "job input is missing")
+        path = (self._job_dir(job_id) / "input" / filename).resolve()
+        input_dir = (self._job_dir(job_id) / "input").resolve()
+        if input_dir not in path.parents or not path.is_file():
+            raise JobStoreError("JOB_INPUT_MISSING", "job input is missing")
         return path
 
     def register_artifact(self, job_id: str, path: str | Path, *, kind: str) -> dict[str, Any]:

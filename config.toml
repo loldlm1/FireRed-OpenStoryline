@@ -91,6 +91,15 @@ reasoning_effort = "medium"
 timeout = 180.0
 max_retries = 2
 
+# ============= Remote-only video MVP ===========================
+[mvp]
+frame_count = 6
+render_width = 1080
+render_height = 1920
+render_fps = 30
+render_preset = "veryfast"
+render_crf = 23
+
 # ============= 镜头分组 / Clip Grouping =============
 [group_clips]
 base_max_tokens = 4096           # group_clips 基础输出 token 预算 / Base output token budget for group_clips
