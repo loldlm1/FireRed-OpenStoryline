@@ -1,50 +1,94 @@
-# Guía rápida del MVP remoto
+# Guía de producción del MVP remoto con Kamal
 
-Este perfil no instala ni ejecuta Whisper, Torch, TransNet, embeddings u otros
-modelos locales. 9Router hace la inferencia remota; FFmpeg/FFprobe sólo procesan
-audio y video de forma determinista en CPU.
+Este perfil no instala ni ejecuta modelos de IA locales. 9Router realiza toda
+la inferencia; FFmpeg/FFprobe sólo procesan audio y video de forma determinista
+en CPU. Si todos los Whisper remotos fallan, el trabajo falla y guarda las
+razones sanitizadas en `failure.json`.
 
-Los niveles gratuitos de Groq y Hugging Face tienen límites, pueden cambiar y
-no son un servicio ilimitado. La aplicación prueba los modelos en orden; si
-todos fallan, el trabajo completo falla y conserva las razones en
-`failure.json`.
+Kamal reemplaza el flujo manual con Docker Compose, pero usa Docker
+internamente. `kamal setup` entra al VPS por SSH, instala Docker si falta,
+construye la imagen con Python, FFmpeg y todas las dependencias del servicio,
+arranca el proxy y verifica `/up`. No hace falta instalar Python ni FFmpeg a
+mano en el VPS.
 
-## 1. Consigue las dos credenciales STT
+## 1. Prepara las credenciales remotas
 
-1. Entra a <https://console.groq.com/keys>, crea una API key y guárdala.
-2. Entra a <https://huggingface.co/settings/tokens>, crea un token fino con
-   permiso para Inference Providers y guárdalo.
-3. En 9Router abre **Providers**, agrega la key de Groq y el token de Hugging
-   Face, y ejecuta la prueba de conexión de cada proveedor.
+1. Crea una key en <https://console.groq.com/keys>.
+2. Crea un token fino en <https://huggingface.co/settings/tokens> con acceso a
+   Inference Providers.
+3. En 9Router abre **Providers**, agrega ambas credenciales y prueba las
+   conexiones.
+4. Crea una endpoint key de 9Router sólo para OpenStoryline.
 
-No pegues esas dos credenciales en este repositorio: quedan dentro de 9Router.
+Las keys de Groq y Hugging Face quedan en 9Router. Este repositorio sólo recibe
+la URL y la endpoint key de 9Router. Revisa la [guía de keys](api-keys.md) y los
+[límites gratuitos verificados](limites-gratis.md).
 
-## 2. Crea la configuración local
+## 2. Prepara la máquina desde la que desplegarás
+
+Necesitas Git, Docker en ejecución, acceso SSH por clave al VPS y Ruby con
+`gem`. El script instala Kamal 2.12.0 si Ruby existe y Kamal todavía no está
+instalado. En Windows, ejecuta estos pasos desde WSL2.
+
+El VPS puede ser una instalación nueva de Ubuntu/Debian sin Python ni Docker.
+Para el primer despliegue se recomienda SSH como `root`; abre el puerto SSH y
+el puerto público elegido. Para dominio con HTTPS deben estar abiertos 80 y
+443.
 
 ```bash
-cp .env.mvp.example .env.mvp
+git clone https://github.com/loldlm1/FireRed-OpenStoryline.git
+cd FireRed-OpenStoryline
+git switch agent/remote-video-mvp
+cp .env.kamal.example .env.kamal
 openssl rand -hex 32
 ```
 
-Copia el resultado de `openssl` a `OPENSTORYLINE_WEB_TOKEN`. Luego edita sólo:
+Copia el resultado de `openssl` a `OPENSTORYLINE_WEB_TOKEN` y edita como mínimo:
 
 ```dotenv
-NINEROUTER_URL=http://host.docker.internal:20128
-NINEROUTER_KEY=la-clave-del-endpoint-de-9router
-OPENSTORYLINE_LLM_MODEL=cx/gpt-5.6-sol
-OPENSTORYLINE_REASONING_EFFORT=medium
+KAMAL_HOST=203.0.113.10
+KAMAL_SSH_USER=root
+NINEROUTER_URL=https://tu-9router.example.com
+NINEROUTER_KEY=clave-del-endpoint-de-9router
+OPENSTORYLINE_WEB_TOKEN=token-aleatorio-de-64-caracteres
 ```
 
-Si tu instalación de 9Router muestra otro identificador para GPT‑5.6 Sol,
-utiliza exactamente el nombre que aparezca en su catálogo.
+`NINEROUTER_URL` debe ser accesible desde el VPS. Si 9Router sólo escucha en
+`127.0.0.1` de otra computadora, el servidor remoto no podrá conectarse.
 
-## 3. Comprueba 9Router
+## 3. Elige IP:puerto o dominio
 
-Desde el host, sustituye `host.docker.internal` por `127.0.0.1` si hace falta:
+Para una prueba por IP, deja `KAMAL_DOMAIN` vacío. Puedes usar el puerto 80 o
+uno personalizado:
+
+```dotenv
+KAMAL_DOMAIN=
+KAMAL_HTTP_PORT=8080
+```
+
+La URL será `http://203.0.113.10:8080`. Este modo no cifra la clave durante el
+transporte; úsalo sólo en una red privada, VPN o prueba controlada.
+
+Para producción con dominio, crea primero un registro DNS A/AAAA que apunte al
+VPS y configura:
+
+```dotenv
+KAMAL_DOMAIN=video.example.com
+KAMAL_HTTP_PORT=80
+KAMAL_HTTPS_PORT=443
+```
+
+Kamal-proxy solicitará y renovará el certificado de Let's Encrypt. La URL será
+`https://video.example.com`. El HTTPS automático requiere un solo servidor y
+los puertos 80/443.
+
+## 4. Verifica 9Router y despliega
+
+Antes del despliegue, carga el archivo y comprueba el catálogo STT:
 
 ```bash
 set -a
-source .env.mvp
+source .env.kamal
 set +a
 
 curl -fsS \
@@ -52,52 +96,97 @@ curl -fsS \
   "$NINEROUTER_URL/v1/models/stt"
 ```
 
-La lista debe incluir al menos un modelo `groq/whisper-*` y uno
-`huggingface/openai/whisper-*`.
-
-## 4. Inicia el servicio
+Confirma los identificadores exactos que 9Router expone y corrige
+`OPENSTORYLINE_STT_MODELS` si difieren. Después ejecuta:
 
 ```bash
-docker compose --env-file .env.mvp -f docker-compose.mvp.yml up --build
+./bin/kamal-mvp setup
 ```
 
-Abre <http://127.0.0.1:8000>, pega `OPENSTORYLINE_WEB_TOKEN`, sube el video y
-escribe el prompt. La página muestra el progreso y permite descargar cada
-artefacto o un ZIP completo.
+Ese comando instala Docker en el VPS, levanta un registro temporal local,
+construye `Dockerfile.remote`, despliega el contenedor, monta
+`/var/lib/openstoryline/outputs` y arranca el proxy. Los trabajos, las cuotas y
+los outputs sobreviven a redeploys.
 
-Para exponerlo desde un VPS, mantén `MVP_BIND_IP=127.0.0.1` y publícalo detrás
-de un reverse proxy HTTPS. No expongas el puerto sin TLS y sin el token.
+Los siguientes cambios se publican con:
 
-## 5. Activa FFMPEGA, si lo deseas
+```bash
+./bin/kamal-mvp deploy
+```
 
-1. Instala ComfyUI y, dentro de `ComfyUI/custom_nodes`, clona
-   <https://github.com/AEmotionStudio/ComfyUI-FFMPEGA>.
-2. Instala sus dependencias y reinicia ComfyUI en el puerto 8188.
-3. En `.env.mvp` cambia:
+Comandos útiles:
+
+```bash
+./bin/kamal-mvp details
+./bin/kamal-mvp app logs
+./bin/kamal-mvp rollback
+```
+
+Si cambias `KAMAL_HTTP_PORT` o `KAMAL_HTTPS_PORT` después del primer setup,
+ejecuta `./bin/kamal-mvp proxy reboot` para recrear el proxy con esos puertos.
+
+## 5. Entra con la clave y usa la API
+
+Abre la URL, pega `OPENSTORYLINE_WEB_TOKEN`, sube el video y escribe el prompt.
+La página permite ver progreso y descargar cada artefacto o un ZIP.
+
+Los clientes de API pueden usar cualquiera de estos encabezados:
+
+```http
+X-API-Key: tu-clave
+Authorization: Bearer tu-clave
+```
+
+Las cuotas predeterminadas son persistentes:
+
+| Ámbito | RPM | RPD | Para qué sirve |
+| --- | ---: | ---: | --- |
+| Intentos inválidos por IP | 20 | 200 | Frenar fuerza bruta |
+| Intentos inválidos globales | 600 | 50.000 | Frenar abuso distribuido |
+| API con clave válida | 120 | 10.000 | Proteger consultas y descargas |
+| Nuevos trabajos | 4 | 50 | Proteger CPU, disco y proveedores |
+
+Un exceso devuelve HTTP 429, `Retry-After` y encabezados `X-RateLimit-*`. Una
+clave incorrecta devuelve 401. Puedes ajustar todos los valores en
+`.env.kamal`; la cuota de 50 trabajos/día está por encima de la capacidad
+teórica diaria de Whisper gratis para fuentes de 30 minutos.
+
+## 6. Activa ComfyUI-FFMPEGA, si lo deseas
+
+El despliegue base ya incluye todos los componentes obligatorios. FFMPEGA es un
+servicio opcional separado: instala ComfyUI y
+<https://github.com/AEmotionStudio/ComfyUI-FFMPEGA> en el mismo VPS, hazlo
+escuchar en el puerto 8188 y dale acceso de lectura/escritura a
+`/var/lib/openstoryline/outputs`.
+
+Después cambia:
 
 ```dotenv
 OPENSTORYLINE_FFMPEGA_ENABLED=true
 FFMPEGA_URL=http://host.docker.internal:8188
-FFMPEGA_LOCAL_OUTPUT_ROOT=/app/outputs
-FFMPEGA_REMOTE_OUTPUT_ROOT=/ruta/absoluta/FireRed-OpenStoryline/outputs
+FFMPEGA_REMOTE_OUTPUT_ROOT=/var/lib/openstoryline/outputs
 ```
 
-`FFMPEGA_REMOTE_OUTPUT_ROOT` es la ruta del mismo directorio `outputs` vista
-desde el proceso de ComfyUI. Si ejecutas ambos servicios directamente en el
-mismo host, deja ambas variables `*_OUTPUT_ROOT` vacías.
+Y ejecuta `./bin/kamal-mvp deploy`. La configuración Kamal crea el alias
+`host.docker.internal` dentro del contenedor. El adaptador sólo permite una
+lista blanca de efectos FFmpeg deterministas, usa el modo manual sin LLM,
+prohíbe descargas de modelos y falla todo el trabajo si FFMPEGA falla.
 
-El adaptador usa el modo manual sin LLM de FFMPEGA, desactiva descargas de
-modelos y sólo permite efectos FFmpeg de una lista blanca. Si FFMPEGA está
-activado y falla, el trabajo falla: no se aplica un fallback silencioso.
+En un VPS sin GPU esta ruta determinista puede correr en CPU. Los efectos que
+requieran modelos de ComfyUI quedan fuera de este MVP remoto-only.
 
-## 6. Ejecuta sin Docker (opcional)
+## 7. Diagnóstico rápido
 
 ```bash
-python -m venv .venv
-source .venv/bin/activate
-pip install -r requirements-remote.txt
-set -a && source .env.mvp && set +a
-uvicorn mvp_fastapi:app --host 127.0.0.1 --port 8000
+curl -fsS https://video.example.com/up
+./bin/kamal-mvp app logs --lines 200
+./bin/kamal-mvp proxy logs --lines 200
 ```
 
-Debes tener `ffmpeg` y `ffprobe` disponibles en `PATH`.
+- `STT_ALL_PROVIDERS_FAILED`: revisa `failure.json`, el catálogo de 9Router y
+  las cuotas del proveedor.
+- `RATE_LIMIT_EXCEEDED`: espera el valor de `Retry-After` o ajusta la cuota.
+- `RATE_LIMITER_UNAVAILABLE`: revisa permisos y espacio libre del volumen de
+  outputs.
+- Timeout al subir: confirma el puerto/firewall y espacio en disco; el proxy y
+  la aplicación aceptan hasta `OPENSTORYLINE_MAX_UPLOAD_BYTES`.

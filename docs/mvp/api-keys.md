@@ -2,7 +2,8 @@
 
 The MVP needs one 9Router endpoint key plus credentials for at least two remote
 STT providers. Free allocations are provider-controlled, rate-limited, and can
-change; they are not an unlimited service guarantee.
+change; they are not an unlimited service guarantee. See the [verified RPM/RPD
+and audio capacity](limites-gratis.md).
 
 ## 1. Create a free Groq key
 
@@ -33,11 +34,14 @@ huggingface/openai/whisper-small
 
 ## 3. Configure the application
 
-Copy `.env.mvp.example` to `.env.mvp`. The effective values are:
+For production, copy `.env.kamal.example` to `.env.kamal`. The effective values
+include:
 
 ```dotenv
-NINEROUTER_URL=http://127.0.0.1:20128
+KAMAL_HOST=203.0.113.10
+NINEROUTER_URL=https://your-9router.example.com
 NINEROUTER_KEY=replace-with-your-9router-endpoint-key
+OPENSTORYLINE_WEB_TOKEN=replace-with-a-long-random-token
 OPENSTORYLINE_LLM_MODEL=cx/gpt-5.6-sol
 OPENSTORYLINE_REASONING_EFFORT=medium
 OPENSTORYLINE_STT_MODELS=groq/whisper-large-v3-turbo,groq/whisper-large-v3,huggingface/openai/whisper-large-v3,huggingface/openai/whisper-small
@@ -70,4 +74,4 @@ curl -fsS -X POST \
 ```
 
 A successful response contains `text`. Keep the real keys only in 9Router and
-your local `.env.mvp`; never paste them into `config.toml` or commit them.
+your local `.env.kamal`; never paste them into `config.toml` or commit them.

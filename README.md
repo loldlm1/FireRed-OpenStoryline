@@ -50,8 +50,11 @@ multiple validated 18–25 second vertical clips. All model inference is remote
 through 9Router; local work is restricted to deterministic FFmpeg processing
 on CPU. It includes durable jobs, browser upload/download, a remote Whisper
 cascade, GPT‑5.6 Sol planning, and an optional no-model ComfyUI-FFMPEGA pass.
+Production deployment uses Kamal with automatic server bootstrap, IP:port or
+domain/HTTPS routing, a private API key, and persistent rate limits.
 
 Start with the [Spanish quick guide](docs/mvp/guia-es.md), or review the
+[free-provider capacity](docs/mvp/limites-gratis.md),
 [architecture](docs/mvp/architecture.md) and [atomic sprint plan](docs/mvp/sprints.md).
 
 ## ✨ Key Features
