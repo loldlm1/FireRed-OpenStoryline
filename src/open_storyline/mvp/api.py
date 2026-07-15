@@ -95,4 +95,12 @@ def create_mvp_router(
         media_type = mimetypes.guess_type(path.name)[0] or "application/octet-stream"
         return FileResponse(path, filename=path.name, media_type=media_type)
 
+    @router.get("/jobs/{job_id}/bundle")
+    async def download_bundle(job_id: str):
+        try:
+            path = get_store().build_bundle(job_id)
+        except JobStoreError as exc:
+            raise _http_error(exc) from exc
+        return FileResponse(path, filename=path.name, media_type="application/zip")
+
     return router
