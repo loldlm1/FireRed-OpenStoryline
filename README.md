@@ -43,6 +43,17 @@
 **FireRed-OpenStoryline** turns complex video creation into natural, intuitive conversations. Designed with both accessibility and enterprise-grade reliability in mind, FireRed-OpenStoryline makes video creation easy and friendly to beginners and creative enthusiasts alike.
 > Deriving from the saying "A single spark can start a prairie fire", the name FireRed represents our vision: to spread our SOTA capabilities—honed in real-world scenarios—like sparks across the wilderness, igniting the imagination of developers worldwide to reshape the future of AI together.
 
+## Remote-only social clips MVP (fork)
+
+This fork includes an isolated web service that turns a long source video into
+multiple validated 18–25 second vertical clips. All model inference is remote
+through 9Router; local work is restricted to deterministic FFmpeg processing
+on CPU. It includes durable jobs, browser upload/download, a remote Whisper
+cascade, GPT‑5.6 Sol planning, and an optional no-model ComfyUI-FFMPEGA pass.
+
+Start with the [Spanish quick guide](docs/mvp/guia-es.md), or review the
+[architecture](docs/mvp/architecture.md) and [atomic sprint plan](docs/mvp/sprints.md).
+
 ## ✨ Key Features
 - 🌐 **Smart Media Search & Organization**: Automatically searches online and downloads images and video clips that match your requirements. Performs clip segmentation and content understanding based on your thematic media.
 - ✍️ **Intelligent Script Generation**: Combines user themes, visual understanding, and emotion recognition to automatically construct storylines and context-aware narration. Features built-in Few-shot style transfer capabilities, allowing users to define specific copy styles (e.g., product reviews, casual vlogs) via reference text, achieving precise replication of tone, rhythm, and sentence structure.

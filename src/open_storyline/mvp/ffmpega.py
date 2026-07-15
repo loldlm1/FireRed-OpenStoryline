@@ -156,12 +156,16 @@ class FFMPEGAClient:
         timeout: float = 1800.0,
         poll_interval: float = 1.0,
         quality_preset: str = "high",
+        shared_local_root: str = "",
+        shared_remote_root: str = "",
         transport: Optional[httpx.AsyncBaseTransport] = None,
     ) -> None:
         self.base_url = str(base_url or "").rstrip("/")
         self.timeout = float(timeout)
         self.poll_interval = float(poll_interval)
         self.quality_preset = str(quality_preset or "high")
+        self.shared_local_root = Path(shared_local_root).expanduser().resolve() if shared_local_root else None
+        self.shared_remote_root = Path(shared_remote_root).expanduser() if shared_remote_root else None
         self.transport = transport
         if not self.base_url.startswith(("http://", "https://")):
             raise FFMPEGAError("FFMPEGA_CONFIG_INVALID", "FFMPEGA_URL must be an HTTP URL")
@@ -173,8 +177,33 @@ class FFMPEGAClient:
             timeout=float(getattr(config, "timeout", 1800.0)),
             poll_interval=float(getattr(config, "poll_interval", 1.0)),
             quality_preset=getattr(config, "quality_preset", "high"),
+            shared_local_root=(
+                os.getenv("FFMPEGA_LOCAL_OUTPUT_ROOT")
+                or getattr(config, "shared_local_root", "")
+            ),
+            shared_remote_root=(
+                os.getenv("FFMPEGA_REMOTE_OUTPUT_ROOT")
+                or getattr(config, "shared_remote_root", "")
+            ),
             **kwargs,
         )
+
+    def _comfy_path(self, path: Path) -> Path:
+        if self.shared_local_root is None and self.shared_remote_root is None:
+            return path
+        if self.shared_local_root is None or self.shared_remote_root is None:
+            raise FFMPEGAError(
+                "FFMPEGA_CONFIG_INVALID",
+                "both FFMPEGA_LOCAL_OUTPUT_ROOT and FFMPEGA_REMOTE_OUTPUT_ROOT are required",
+            )
+        try:
+            relative = path.relative_to(self.shared_local_root)
+        except ValueError as exc:
+            raise FFMPEGAError(
+                "FFMPEGA_PATH_NOT_SHARED",
+                f"path is outside the configured shared root: {path.name}",
+            ) from exc
+        return self.shared_remote_root / relative
 
     async def apply(
         self,
@@ -191,6 +220,8 @@ class FFMPEGAClient:
             raise FFMPEGAError("FFMPEGA_PLAN_EMPTY", "no effects were selected")
         destination_path.parent.mkdir(parents=True, exist_ok=True)
         destination_path.unlink(missing_ok=True)
+        comfy_source = self._comfy_path(source_path)
+        comfy_destination = self._comfy_path(destination_path)
 
         pipeline_json = json.dumps(plan.to_ffmpega_pipeline(), ensure_ascii=False)
         workflow = {
@@ -198,7 +229,7 @@ class FFMPEGAClient:
                 "class_type": "FFMPEGAgent",
                 "inputs": {
                     "prompt": "",
-                    "video_path": str(source_path),
+                    "video_path": str(comfy_source),
                     "llm_model": "none",
                     "no_llm_mode": "manual",
                     "quality_preset": self.quality_preset,
@@ -206,7 +237,7 @@ class FFMPEGAClient:
                     "pipeline_json": pipeline_json,
                     "advanced_options": True,
                     "save_output": True,
-                    "output_path": str(destination_path),
+                    "output_path": str(comfy_destination),
                     "use_vision": False,
                     "verify_output": False,
                     "allow_model_downloads": False,

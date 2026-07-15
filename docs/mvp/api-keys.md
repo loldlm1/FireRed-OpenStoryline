@@ -33,8 +33,7 @@ huggingface/openai/whisper-small
 
 ## 3. Configure the application
 
-Copy `.env.mvp.example` to `.env.mvp` when that file is introduced in Sprint 8.
-The effective values are:
+Copy `.env.mvp.example` to `.env.mvp`. The effective values are:
 
 ```dotenv
 NINEROUTER_URL=http://127.0.0.1:20128
