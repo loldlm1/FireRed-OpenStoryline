@@ -175,6 +175,14 @@ class MVPConfig(ConfigBaseModel):
     render_crf: int = Field(default=23, ge=0, le=51)
 
 
+class FFMPEGAConfig(ConfigBaseModel):
+    enabled: bool = False
+    base_url: str = "http://127.0.0.1:8188"
+    timeout: float = Field(default=1800.0, gt=0)
+    poll_interval: float = Field(default=1.0, gt=0, le=30)
+    quality_preset: Literal["draft", "standard", "high", "lossless"] = "high"
+
+
 class GroupClipsConfig(ConfigBaseModel):
     base_max_tokens: int = Field(default=4096, ge=256, description="Base max output token budget for group_clips")
     tokens_per_clip: int = Field(default=48, ge=0, description="Additional output token budget per selected clip")
@@ -287,6 +295,7 @@ class Settings(ConfigBaseModel):
     remote_asr: RemoteASRConfig = Field(default_factory=RemoteASRConfig)
     ninerouter: NineRouterConfig = Field(default_factory=NineRouterConfig)
     mvp: MVPConfig = Field(default_factory=MVPConfig)
+    ffmpega: FFMPEGAConfig = Field(default_factory=FFMPEGAConfig)
     group_clips: GroupClipsConfig = Field(default_factory=GroupClipsConfig)
     script_template: RecommendScriptTemplateConfig
     generate_voiceover: GenerateVoiceoverConfig

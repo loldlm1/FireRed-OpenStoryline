@@ -6,6 +6,7 @@ import asyncio
 import json
 
 from open_storyline.config import Settings
+from open_storyline.mvp.ffmpega import EffectsPlanner, FFMPEGAClient, ffmpega_enabled
 from open_storyline.mvp.jobs import JobStore
 from open_storyline.mvp.ninerouter import NineRouterClient
 from open_storyline.mvp.render import (
@@ -81,10 +82,34 @@ class MVPJobProcessor:
             transcript_segments=transcript.segments,
             destination_dir=output_dir,
         )
+        effects_plan = None
+        final_outputs = []
+        ffmpega = None
+        if ffmpega_enabled(self.config.ffmpega):
+            store.update(job_id, progress=0.88, stage="planning_effects")
+            effects_plan = await EffectsPlanner(
+                NineRouterClient.from_config(self.config.ninerouter)
+            ).plan(state["prompt"])
+            if effects_plan.effects:
+                ffmpega = FFMPEGAClient.from_config(self.config.ffmpega)
         for item in rendered:
-            store.register_artifact(job_id, item.video_path, kind="video")
+            final_video = item.video_path
+            if ffmpega is not None and effects_plan is not None:
+                enhanced = item.video_path.with_name(f"{item.video_path.stem}-effects.mp4")
+                final_video = await ffmpega.apply(
+                    source=item.video_path,
+                    destination=enhanced,
+                    plan=effects_plan,
+                )
+                item.video_path.unlink(missing_ok=True)
+            store.register_artifact(job_id, final_video, kind="video")
             if item.subtitle_path is not None:
                 store.register_artifact(job_id, item.subtitle_path, kind="subtitles")
+            final_outputs.append({
+                "video": final_video.name,
+                "subtitles": item.subtitle_path.name if item.subtitle_path else None,
+                "clip": item.clip.to_dict(),
+            })
 
         manifest_path = output_dir / "manifest.json"
         manifest_path.write_text(json.dumps({
@@ -100,7 +125,8 @@ class MVPJobProcessor:
                 "attempts": [attempt.to_dict() for attempt in transcript.attempts],
             },
             "plan": plan.to_dict(),
-            "outputs": [item.to_dict() for item in rendered],
+            "effects": effects_plan.to_dict() if effects_plan is not None else {"effects": []},
+            "outputs": final_outputs,
         }, ensure_ascii=False, indent=2), encoding="utf-8")
         store.register_artifact(job_id, manifest_path, kind="manifest")
         return {
