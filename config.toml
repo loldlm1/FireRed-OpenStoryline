@@ -100,6 +100,14 @@ render_fps = 30
 render_preset = "veryfast"
 render_crf = 23
 
+# ============= Optional ComfyUI-FFMPEGA tool ===================
+[ffmpega]
+enabled = false # OPENSTORYLINE_FFMPEGA_ENABLED overrides this value
+base_url = "http://127.0.0.1:8188" # FFMPEGA_URL overrides this value
+timeout = 1800.0
+poll_interval = 1.0
+quality_preset = "high"
+
 # ============= 镜头分组 / Clip Grouping =============
 [group_clips]
 base_max_tokens = 4096           # group_clips 基础输出 token 预算 / Base output token budget for group_clips
