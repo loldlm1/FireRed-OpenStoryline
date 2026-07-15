@@ -13,6 +13,9 @@ Each sprint is validated before its single, short commit is created.
 | 6 | FFMPEGA tool adapter with capability policy | Reject local-model effects; accept deterministic effects | `feat: add FFMPEGA tool adapter` |
 | 7 | Failure manifest and user-visible reasons | No secrets in persisted errors; all attempts retained | `feat: expose job failure reasons` |
 | 8 | Remote-only container, setup docs and full smoke test | Clean configuration and end-to-end test suite | `chore: package CPU MVP` |
+| 9 | Kamal production deployment for IP:port or automatic-HTTPS domain | Render both ERB modes as valid YAML; shell syntax check | `feat: deploy MVP with Kamal` |
+| 10 | Persistent API key, brute-force protection and RPM/RPD quotas | Restart, UTC rollover, concurrency and HTTP 429 tests | `feat: enforce persistent API limits` |
+| 11 | Kamal operating guide and verified free-provider capacity | Documentation links, clean diff and complete remote-only suite | `docs: align production guide with Kamal` |
 
 The pull request targets `main` in `loldlm1/FireRed-OpenStoryline`. It remains a
 draft until the owner completes a real-provider test and chooses to merge it.

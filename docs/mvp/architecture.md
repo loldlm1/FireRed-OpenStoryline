@@ -55,6 +55,11 @@ and one Hugging Face token.
 - Interrupted queued or running jobs are recovered when the process restarts.
 - Failed jobs expose a sanitized `failure.json` with the stage and provider
   attempts; all artifacts can also be downloaded as one ZIP bundle.
+- The single web key is accepted as Bearer or `X-API-Key`; invalid clients,
+  authenticated API traffic and job creation have separate persistent
+  SQLite-backed RPM/RPD limits.
+- Kamal deploys the remote-only image, proxy and persistent output volume to a
+  fresh server; Docker Compose is not part of the production workflow.
 
 ## MVP completion bar
 
