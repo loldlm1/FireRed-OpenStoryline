@@ -82,6 +82,15 @@ timeout = 180.0
 language = "es"
 response_format = "verbose_json"
 
+# ============= 9Router planning and vision =====================
+[ninerouter]
+base_url = "" # Prefer NINEROUTER_URL
+api_key = ""  # Prefer NINEROUTER_KEY
+model = "cx/gpt-5.6-sol"
+reasoning_effort = "medium"
+timeout = 180.0
+max_retries = 2
+
 # ============= 镜头分组 / Clip Grouping =============
 [group_clips]
 base_max_tokens = 4096           # group_clips 基础输出 token 预算 / Base output token budget for group_clips

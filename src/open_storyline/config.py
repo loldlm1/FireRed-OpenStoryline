@@ -157,6 +157,15 @@ class RemoteASRConfig(ConfigBaseModel):
     response_format: Literal["json", "text", "verbose_json", "srt", "vtt"] = "verbose_json"
 
 
+class NineRouterConfig(ConfigBaseModel):
+    base_url: str = ""
+    api_key: str = ""
+    model: str = "cx/gpt-5.6-sol"
+    reasoning_effort: Literal["low", "medium", "high"] = "medium"
+    timeout: float = Field(default=180.0, gt=0)
+    max_retries: int = Field(default=2, ge=0, le=5)
+
+
 class GroupClipsConfig(ConfigBaseModel):
     base_max_tokens: int = Field(default=4096, ge=256, description="Base max output token budget for group_clips")
     tokens_per_clip: int = Field(default=48, ge=0, description="Additional output token budget per selected clip")
@@ -267,6 +276,7 @@ class Settings(ConfigBaseModel):
     split_shots: SplitShotsConfig
     understand_clips: UnderstandClipsConfig
     remote_asr: RemoteASRConfig = Field(default_factory=RemoteASRConfig)
+    ninerouter: NineRouterConfig = Field(default_factory=NineRouterConfig)
     group_clips: GroupClipsConfig = Field(default_factory=GroupClipsConfig)
     script_template: RecommendScriptTemplateConfig
     generate_voiceover: GenerateVoiceoverConfig
