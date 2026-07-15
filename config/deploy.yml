@@ -1,0 +1,76 @@
+service: openstoryline-mvp
+image: openstoryline-mvp
+minimum_version: 2.12.0
+
+servers:
+  web:
+    hosts:
+      - <%= ENV.fetch("KAMAL_HOST") %>
+    options:
+      add-host: host.docker.internal:host-gateway
+
+proxy:
+  app_port: 8000
+  forward_headers: true
+  response_timeout: 3600
+  healthcheck:
+    path: /up
+    interval: 3
+    timeout: 10
+  buffering:
+    requests: true
+    responses: true
+    max_request_body: <%= ENV.fetch("OPENSTORYLINE_MAX_UPLOAD_BYTES", "8589934592") %>
+    max_response_body: 0
+    memory: 1048576
+  run:
+    http_port: <%= ENV.fetch("KAMAL_HTTP_PORT", "80") %>
+    https_port: <%= ENV.fetch("KAMAL_HTTPS_PORT", "443") %>
+<% unless ENV.fetch("KAMAL_DOMAIN", "").strip.empty? %>
+  host: <%= ENV.fetch("KAMAL_DOMAIN") %>
+  ssl: true
+<% end %>
+
+registry:
+  server: localhost:5555
+
+builder:
+  arch: amd64
+  dockerfile: Dockerfile.remote
+  context: .
+
+ssh:
+  user: <%= ENV.fetch("KAMAL_SSH_USER", "root") %>
+  port: <%= ENV.fetch("KAMAL_SSH_PORT", "22") %>
+
+env:
+  clear:
+    OPENSTORYLINE_CONFIG: /app/config.toml
+    NINEROUTER_URL: <%= ENV.fetch("NINEROUTER_URL") %>
+    OPENSTORYLINE_LLM_MODEL: <%= ENV.fetch("OPENSTORYLINE_LLM_MODEL", "cx/gpt-5.6-sol") %>
+    OPENSTORYLINE_REASONING_EFFORT: <%= ENV.fetch("OPENSTORYLINE_REASONING_EFFORT", "medium") %>
+    OPENSTORYLINE_LLM_TIMEOUT: <%= ENV.fetch("OPENSTORYLINE_LLM_TIMEOUT", "180") %>
+    OPENSTORYLINE_STT_MODELS: <%= ENV.fetch("OPENSTORYLINE_STT_MODELS", "groq/whisper-large-v3-turbo,groq/whisper-large-v3,huggingface/openai/whisper-large-v3,huggingface/openai/whisper-small") %>
+    OPENSTORYLINE_STT_TIMEOUT: <%= ENV.fetch("OPENSTORYLINE_STT_TIMEOUT", "180") %>
+    OPENSTORYLINE_MAX_UPLOAD_BYTES: <%= ENV.fetch("OPENSTORYLINE_MAX_UPLOAD_BYTES", "8589934592") %>
+    OPENSTORYLINE_FFMPEGA_ENABLED: <%= ENV.fetch("OPENSTORYLINE_FFMPEGA_ENABLED", "false") %>
+    FFMPEGA_URL: <%= ENV.fetch("FFMPEGA_URL", "http://host.docker.internal:8188") %>
+    FFMPEGA_LOCAL_OUTPUT_ROOT: /app/outputs
+    FFMPEGA_REMOTE_OUTPUT_ROOT: "<%= ENV.fetch("FFMPEGA_REMOTE_OUTPUT_ROOT", "") %>"
+  secret:
+    - OPENSTORYLINE_WEB_TOKEN
+    - NINEROUTER_KEY
+
+volumes:
+  - <%= ENV.fetch("KAMAL_OUTPUTS_DIR", "/var/lib/openstoryline/outputs") %>:/app/outputs
+
+logging:
+  driver: local
+  options:
+    max-size: 20m
+    max-file: "5"
+
+retain_containers: 3
+deploy_timeout: 180
+drain_timeout: 30
+stop_timeout: 30

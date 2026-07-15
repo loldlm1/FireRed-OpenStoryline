@@ -72,6 +72,10 @@ def create_app() -> FastAPI:
     async def health():
         return {"status": "ok", "inference": "remote-only", "renderer": "ffmpeg-cpu"}
 
+    @app.get("/up", include_in_schema=False)
+    async def kamal_healthcheck():
+        return {"status": "ok"}
+
     app.include_router(create_mvp_router(
         lambda: app.state.mvp_jobs,
         lambda: app.state.mvp_manager,
