@@ -107,6 +107,8 @@ base_url = "http://127.0.0.1:8188" # FFMPEGA_URL overrides this value
 timeout = 1800.0
 poll_interval = 1.0
 quality_preset = "high"
+shared_local_root = ""  # e.g. /app/outputs inside this container
+shared_remote_root = "" # same volume path as seen by ComfyUI
 
 # ============= 镜头分组 / Clip Grouping =============
 [group_clips]

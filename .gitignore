@@ -66,6 +66,8 @@ project/
 # 环境/配置的敏感信息（你如果用 .env 管 secret）
 .env.local
 .env.*.local
+.env.mvp
+!.env.mvp.example
 
 data/**
 !data/elements_v2/

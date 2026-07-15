@@ -181,6 +181,8 @@ class FFMPEGAConfig(ConfigBaseModel):
     timeout: float = Field(default=1800.0, gt=0)
     poll_interval: float = Field(default=1.0, gt=0, le=30)
     quality_preset: Literal["draft", "standard", "high", "lossless"] = "high"
+    shared_local_root: str = ""
+    shared_remote_root: str = ""
 
 
 class GroupClipsConfig(ConfigBaseModel):

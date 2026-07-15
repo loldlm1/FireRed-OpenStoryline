@@ -98,6 +98,40 @@ class FFMPEGAClientTests(unittest.IsolatedAsyncioTestCase):
             self.assertFalse(inputs["allow_model_downloads"])
             self.assertEqual(pipeline["pipeline"][0]["skill"], "vignette")
 
+    async def test_maps_shared_paths_for_host_comfyui(self):
+        with TemporaryDirectory() as tmpdir:
+            local_root = Path(tmpdir) / "container-outputs"
+            remote_root = Path("/home/user/openstoryline/outputs")
+            source = local_root / "job" / "source.mp4"
+            destination = local_root / "job" / "result.mp4"
+            source.parent.mkdir(parents=True)
+            source.write_bytes(b"source")
+            captured = {}
+
+            def handler(request: httpx.Request) -> httpx.Response:
+                if request.url.path == "/prompt":
+                    captured.update(json.loads(request.content))
+                    return httpx.Response(200, json={"prompt_id": "mapped"})
+                destination.write_bytes(b"result")
+                return httpx.Response(200, json={
+                    "mapped": {"status": {"status_str": "success", "completed": True}},
+                })
+
+            client = FFMPEGAClient(
+                base_url="http://comfy.test",
+                shared_local_root=str(local_root),
+                shared_remote_root=str(remote_root),
+                transport=httpx.MockTransport(handler),
+            )
+            await client.apply(
+                source=source,
+                destination=destination,
+                plan=validate_effects({"effects": [{"skill": "vignette", "params": {}}]}),
+            )
+            inputs = captured["prompt"]["1"]["inputs"]
+            self.assertEqual(inputs["video_path"], str(remote_root / "job" / "source.mp4"))
+            self.assertEqual(inputs["output_path"], str(remote_root / "job" / "result.mp4"))
+
 
 if __name__ == "__main__":
     unittest.main()

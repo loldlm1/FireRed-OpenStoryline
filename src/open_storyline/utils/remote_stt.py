@@ -79,12 +79,21 @@ def _milliseconds(value: Any) -> int:
 
 def normalize_segments(payload: dict[str, Any]) -> list[dict[str, Any]]:
     normalized: list[dict[str, Any]] = []
-    for index, item in enumerate(payload.get("segments") or []):
+    raw_segments = payload.get("segments") or payload.get("words") or []
+    for index, item in enumerate(raw_segments):
         if not isinstance(item, dict):
             continue
         text = str(item.get("text") or "").strip()
-        start = _milliseconds(item.get("start"))
-        end = max(start, _milliseconds(item.get("end")))
+        if not text:
+            text = str(item.get("word") or "").strip()
+        start_value = item.get("start")
+        end_value = item.get("end")
+        timestamp = item.get("timestamp")
+        if isinstance(timestamp, (list, tuple)) and len(timestamp) >= 2:
+            start_value = timestamp[0] if start_value is None else start_value
+            end_value = timestamp[1] if end_value is None else end_value
+        start = _milliseconds(start_value)
+        end = max(start, _milliseconds(end_value))
         if not text or end <= start:
             continue
         normalized.append({
@@ -141,6 +150,12 @@ class RemoteSttCascade:
             **kwargs,
         )
 
+    @property
+    def endpoint(self) -> str:
+        if self.base_url.endswith("/v1"):
+            return f"{self.base_url}/audio/transcriptions"
+        return f"{self.base_url}/v1/audio/transcriptions"
+
     async def transcribe(self, audio_path: str | Path, *, language: str = "") -> STTResult:
         path = Path(audio_path)
         if not path.is_file():
@@ -153,7 +168,7 @@ class RemoteSttCascade:
                 try:
                     with path.open("rb") as stream:
                         response = await client.post(
-                            f"{self.base_url}/v1/audio/transcriptions",
+                            self.endpoint,
                             headers=headers,
                             data={
                                 "model": model,
@@ -179,11 +194,20 @@ class RemoteSttCascade:
                     if not text:
                         attempts.append(STTAttempt(model, False, response.status_code, "empty transcript"))
                         continue
+                    segments = normalize_segments(payload)
+                    if self.response_format == "verbose_json" and not segments:
+                        attempts.append(STTAttempt(
+                            model,
+                            False,
+                            response.status_code,
+                            "transcript has no timestamped segments",
+                        ))
+                        continue
                     attempts.append(STTAttempt(model, True, response.status_code, "ok"))
                     return STTResult(
                         model=model,
                         text=text,
-                        segments=normalize_segments(payload),
+                        segments=segments,
                         attempts=attempts,
                     )
                 except (httpx.HTTPError, OSError) as exc:
