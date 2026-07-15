@@ -1,7 +1,11 @@
 from pathlib import Path
 from tempfile import TemporaryDirectory
 import asyncio
+import json
+import os
 import unittest
+from unittest.mock import patch
+import zipfile
 
 import httpx
 from fastapi import FastAPI
@@ -56,6 +60,50 @@ class JobManagerTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(restored["recovery_count"], 1)
             self.assertEqual(restored["processor"], "test")
 
+    async def test_failure_persists_all_attempts_without_secrets(self):
+        class ProviderFailure(RuntimeError):
+            code = "STT_ALL_PROVIDERS_FAILED"
+
+            def to_dict(self):
+                return {
+                    "attempts": [
+                        {"model": "one", "reason": "Bearer super-secret failed"},
+                        {"model": "two", "reason": "api_key=super-secret quota"},
+                    ],
+                    "api_key": "super-secret",
+                }
+
+        with TemporaryDirectory() as tmpdir, patch.dict(
+            os.environ, {"NINEROUTER_KEY": "super-secret"}, clear=False
+        ):
+            store = JobStore(tmpdir)
+            state = store.create(prompt="fail closed", filename="talk.mp4")
+            source = store.input_path(state["id"], "talk.mp4")
+            source.write_bytes(b"video")
+            store.mark_uploaded(state["id"], source, 5)
+
+            async def processor(job_id: str, current_store: JobStore):
+                current_store.update(job_id, stage="remote_transcription")
+                raise ProviderFailure("Bearer super-secret unavailable")
+
+            manager = JobManager(store, processor)
+            await manager.start()
+            await asyncio.wait_for(manager.queue.join(), timeout=2)
+            await manager.stop()
+
+            failed = store.load(state["id"])
+            failure_path = store.resolve_artifact(state["id"], "failure.json")
+            serialized = json.dumps({
+                "state": failed,
+                "manifest": json.loads(failure_path.read_text(encoding="utf-8")),
+            })
+            self.assertEqual(failed["state"], "failed")
+            self.assertEqual(failed["error"]["code"], "STT_ALL_PROVIDERS_FAILED")
+            self.assertEqual(len(failed["error"]["details"]["attempts"]), 2)
+            self.assertEqual(failed["error"]["details"]["api_key"], "***")
+            self.assertNotIn("super-secret", serialized)
+            self.assertIn("remote_transcription", serialized)
+
 
 class JobAPITests(unittest.IsolatedAsyncioTestCase):
     async def test_upload_status_and_download(self):
@@ -87,6 +135,13 @@ class JobAPITests(unittest.IsolatedAsyncioTestCase):
                 )
                 self.assertEqual(download.status_code, 200)
                 self.assertEqual(download.content, b"{}")
+
+                bundle = await client.get(f"/api/mvp/jobs/{job['id']}/bundle")
+                self.assertEqual(bundle.status_code, 200)
+                bundle_path = Path(tmpdir) / "download.zip"
+                bundle_path.write_bytes(bundle.content)
+                with zipfile.ZipFile(bundle_path) as archive:
+                    self.assertIn("manifest.json", archive.namelist())
 
                 traversal = await client.get(
                     f"/api/mvp/jobs/{job['id']}/artifacts/%2E%2E%2Fmanifest.json"

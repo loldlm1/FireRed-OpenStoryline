@@ -9,6 +9,9 @@ import os
 import re
 import threading
 import uuid
+import zipfile
+
+from open_storyline.mvp.security import sanitize_for_persistence, sanitize_text
 
 
 JOB_ID_PATTERN = re.compile(r"^[a-f0-9]{32}$")
@@ -129,10 +132,25 @@ class JobStore:
         return self.update(job_id, input=input_info, state="queued", progress=0.05, error=None)
 
     def fail(self, job_id: str, *, code: str, message: str, details: Any = None) -> dict[str, Any]:
-        error = {"code": str(code), "message": str(message)[:1200]}
+        error = {
+            "code": sanitize_text(code, limit=200),
+            "message": sanitize_text(message, limit=1200),
+        }
         if details is not None:
-            error["details"] = details
-        return self.update(job_id, state="failed", error=error)
+            error["details"] = sanitize_for_persistence(details)
+        state = self.update(job_id, state="failed", error=error)
+        failure_path = self.output_dir(job_id) / "failure.json"
+        failure = sanitize_for_persistence({
+            "job_id": job_id,
+            "state": "failed",
+            "stage": state.get("stage"),
+            "error": error,
+            "created_at": state.get("created_at"),
+            "failed_at": state.get("updated_at"),
+        })
+        with self._lock:
+            self._write_atomic(failure_path, failure)
+        return self.register_artifact(job_id, failure_path, kind="failure")
 
     def output_dir(self, job_id: str) -> Path:
         path = self._job_dir(job_id) / "output"
@@ -179,6 +197,25 @@ class JobStore:
         if self.output_dir(job_id).resolve() not in path.parents or not path.is_file():
             raise JobStoreError("ARTIFACT_NOT_FOUND", "artifact not found")
         return path
+
+    def build_bundle(self, job_id: str) -> Path:
+        state = self.load(job_id)
+        destination = self.work_dir(job_id) / f"{job_id}-artifacts.zip"
+        temporary = destination.with_suffix(".tmp")
+        temporary.unlink(missing_ok=True)
+        try:
+            with zipfile.ZipFile(temporary, "w", compression=zipfile.ZIP_DEFLATED) as bundle:
+                for artifact in state.get("artifacts", []):
+                    name = str(artifact.get("name") or "")
+                    try:
+                        path = self.resolve_artifact(job_id, name)
+                    except JobStoreError:
+                        continue
+                    bundle.write(path, arcname=name)
+            os.replace(temporary, destination)
+        finally:
+            temporary.unlink(missing_ok=True)
+        return destination
 
     def recover_pending(self) -> list[str]:
         recovered: list[str] = []

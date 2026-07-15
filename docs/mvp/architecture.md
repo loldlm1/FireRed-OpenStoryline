@@ -53,6 +53,8 @@ and one Hugging Face token.
   state, logs, manifests, or Git.
 - Error bodies are truncated and sanitized before persistence.
 - Interrupted queued or running jobs are recovered when the process restarts.
+- Failed jobs expose a sanitized `failure.json` with the stage and provider
+  attempts; all artifacts can also be downloaded as one ZIP bundle.
 
 ## MVP completion bar
 
