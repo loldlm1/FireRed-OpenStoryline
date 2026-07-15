@@ -166,6 +166,15 @@ class NineRouterConfig(ConfigBaseModel):
     max_retries: int = Field(default=2, ge=0, le=5)
 
 
+class MVPConfig(ConfigBaseModel):
+    frame_count: int = Field(default=6, ge=0, le=24)
+    render_width: int = Field(default=1080, ge=128, le=4320)
+    render_height: int = Field(default=1920, ge=128, le=4320)
+    render_fps: int = Field(default=30, ge=12, le=60)
+    render_preset: str = "veryfast"
+    render_crf: int = Field(default=23, ge=0, le=51)
+
+
 class GroupClipsConfig(ConfigBaseModel):
     base_max_tokens: int = Field(default=4096, ge=256, description="Base max output token budget for group_clips")
     tokens_per_clip: int = Field(default=48, ge=0, description="Additional output token budget per selected clip")
@@ -277,6 +286,7 @@ class Settings(ConfigBaseModel):
     understand_clips: UnderstandClipsConfig
     remote_asr: RemoteASRConfig = Field(default_factory=RemoteASRConfig)
     ninerouter: NineRouterConfig = Field(default_factory=NineRouterConfig)
+    mvp: MVPConfig = Field(default_factory=MVPConfig)
     group_clips: GroupClipsConfig = Field(default_factory=GroupClipsConfig)
     script_template: RecommendScriptTemplateConfig
     generate_voiceover: GenerateVoiceoverConfig
