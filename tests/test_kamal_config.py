@@ -43,6 +43,12 @@ def render_sample(*, domain: str = "") -> str:
 
 
 class KamalConfigTests(unittest.TestCase):
+    def test_wrapper_pins_supported_kamal_without_auto_install(self):
+        wrapper = (ROOT / "bin" / "kamal-mvp").read_text(encoding="utf-8")
+        self.assertIn('MINIMUM_KAMAL_VERSION="2.12.0"', wrapper)
+        self.assertIn('kamal "_${KAMAL_VERSION}_"', wrapper)
+        self.assertNotIn("gem install kamal --no-document", wrapper)
+
     def test_ip_mode_is_valid_yaml_without_host_or_ssl(self):
         config = yaml.safe_load(render_sample())
         self.assertEqual(config["servers"]["web"]["hosts"], ["203.0.113.10"])

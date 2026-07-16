@@ -25,8 +25,8 @@ Each implementation increment was validated before its short commit.
 | 12 | 9Router image catalog, binary generation and fail-closed model cascade | Discovery, binary/base64, fallback, SSRF and secret-sanitization tests | `feat: add 9router image cascade` |
 | 13 | Agent-planned generated-image source for `SearchMedia` | Pexels compatibility, schema, provenance and transactional cleanup tests | `feat: generate search media via 9router` |
 | 14 | Kamal variables, provider/copyright guide and complete regression pass | ERB/YAML, config parse, documentation checks and clean-tree suite | `docs: configure remote image generation` |
+| 15 | Sprint 1: pinned Kamal toolchain and redacted 9Router/VPS connectivity preflight | Kamal `2.12.0` config, old-version rejection, auth/catalog/SSH/Docker probes and focused tests | `build: align kamal release toolchain` |
 
 The original pull request targeted `main` in
 `loldlm1/FireRed-OpenStoryline`. Merge and release state belongs in the hosting
 platform, not in this historical implementation checklist.
-
