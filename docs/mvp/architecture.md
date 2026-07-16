@@ -16,9 +16,20 @@ clips. The MVP is deliberately CPU-first and does not run local AI models.
   `STT_ALL_PROVIDERS_FAILED` and persists the reason for every attempt.
 - ComfyUI-FFMPEGA integration is restricted to deterministic FFmpeg operations
   unless a remote inference backend is configured explicitly.
+- Generated search images use 9Router's `/v1/images/generations` endpoint and
+  only models confirmed by `/v1/models/image`; there is no local model or
+  silent Pexels fallback for this source.
 
 The original OpenStoryline workflow remains available. The new MVP path is
 isolated so upstream behavior can continue to be merged into this fork.
+
+The generated-image source belongs to that original full-agent workflow:
+`SearchMedia` can return the generated files through the same `{"path": ...}`
+contract used by Pexels, so downstream media understanding and timeline nodes
+can place them in a video. The isolated social-clips web MVP does not currently
+search Pexels or insert generated B-roll; it extracts moments from the uploaded
+source video. This boundary avoids presenting downloaded support assets as if
+they were already composited into a short.
 
 ## Data flow
 
@@ -38,6 +49,7 @@ isolated so upstream behavior can continue to be merged into this fork.
 | --- | --- | --- |
 | Planning and vision | `cx/gpt-5.6-sol` | none in the MVP |
 | Speech-to-text | `groq/whisper-large-v3-turbo` | Groq large-v3, Hugging Face large-v3, Hugging Face small |
+| Full-agent generated images | First configured model exposed by 9Router | Remaining exposed image candidates |
 | Rendering | FFmpeg on CPU | none |
 
 Multiple models on one provider do not protect against a provider outage or a

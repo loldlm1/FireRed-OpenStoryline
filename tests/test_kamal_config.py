@@ -64,6 +64,11 @@ class KamalConfigTests(unittest.TestCase):
             config["env"]["secret"],
             ["OPENSTORYLINE_WEB_TOKEN", "NINEROUTER_KEY"],
         )
+        self.assertEqual(
+            config["env"]["clear"]["OPENSTORYLINE_IMAGE_MODELS"],
+            "gemini/gemini-3-pro-image-preview,xai/grok-imagine-image",
+        )
+        self.assertEqual(config["env"]["clear"]["OPENSTORYLINE_IMAGE_SIZE"], "1024x1024")
         secrets = (ROOT / ".kamal" / "secrets.example").read_text(encoding="utf-8")
         self.assertIn("$OPENSTORYLINE_WEB_TOKEN", secrets)
         self.assertNotIn("replace-with", secrets)

@@ -16,6 +16,9 @@ Each sprint is validated before its single, short commit is created.
 | 9 | Kamal production deployment for IP:port or automatic-HTTPS domain | Render both ERB modes as valid YAML; shell syntax check | `feat: deploy MVP with Kamal` |
 | 10 | Persistent API key, brute-force protection and RPM/RPD quotas | Restart, UTC rollover, concurrency and HTTP 429 tests | `feat: enforce persistent API limits` |
 | 11 | Kamal operating guide and verified free-provider capacity | Documentation links, clean diff and complete remote-only suite | `docs: align production guide with Kamal` |
+| 12 | 9Router image catalog, binary generation and fail-closed model cascade | Discovery, binary/base64, fallback, SSRF and secret-sanitization tests | `feat: add 9router image cascade` |
+| 13 | Agent-planned generated-image source for `SearchMedia` | Pexels compatibility, schema, provenance and transactional cleanup tests | `feat: generate search media via 9router` |
+| 14 | Kamal variables, provider/copyright guide and complete regression pass | ERB/YAML, config parse, documentation checks and clean-tree suite | `docs: configure remote image generation` |
 
 The pull request targets `main` in `loldlm1/FireRed-OpenStoryline`. It remains a
 draft until the owner completes a real-provider test and chooses to merge it.

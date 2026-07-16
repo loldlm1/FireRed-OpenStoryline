@@ -55,10 +55,11 @@ domain/HTTPS routing, a private API key, and persistent rate limits.
 
 Start with the [Spanish quick guide](docs/mvp/guia-es.md), or review the
 [free-provider capacity](docs/mvp/limites-gratis.md),
+[remote image generation](docs/mvp/imagenes-generadas.md),
 [architecture](docs/mvp/architecture.md) and [atomic sprint plan](docs/mvp/sprints.md).
 
 ## ✨ Key Features
-- 🌐 **Smart Media Search & Organization**: Automatically searches online and downloads images and video clips that match your requirements. Performs clip segmentation and content understanding based on your thematic media.
+- 🌐 **Smart Media Search & Organization**: Automatically searches and downloads Pexels media or generates original image assets through a fail-closed 9Router image cascade. Performs clip segmentation and content understanding based on your thematic media.
 - ✍️ **Intelligent Script Generation**: Combines user themes, visual understanding, and emotion recognition to automatically construct storylines and context-aware narration. Features built-in Few-shot style transfer capabilities, allowing users to define specific copy styles (e.g., product reviews, casual vlogs) via reference text, achieving precise replication of tone, rhythm, and sentence structure.
 - 🎵 **Intelligent Music, Voiceover & Font Recommendations**: Supports personal playlist imports and auto-recommends BGM based on content and mood, featuring smart beat-syncing. Simply describe the desired tone—e.g., "Restrained," "Emotional," or "Documentary-style"—and the system matches suitable voiceovers and fonts to ensure a cohesive aesthetic.
 - 💬 **Conversational Refinement**: Rapidly cut, swap, or resequence clips. Edit scripts and fine-tune visual details—including color, font, stroke, and position. All edits are performed exclusively via natural language prompts with immediate results.
@@ -345,7 +346,8 @@ FireRed-OpenStoryline/
 - [ ] Add the function of **voiceover type video editing**.
 - [ ] Add support for **voice cloning**
 - [ ] Add more **transition/filter/effects** effects functions.
-- [ ] Add **image/video generation and editing** capabilities.
+- [x] Add remote **text-to-image generation** to the media-search workflow.
+- [ ] Add **image editing and video generation** capabilities.
 - [ ] **GPU-accelerated** rendering and highlight selection.
 
 ## Acknowledgements

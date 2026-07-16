@@ -187,7 +187,7 @@ class SearchMediaInput(BaseInput):
         description="auto: Obtain media from the selected remote source; skip: skip search; default: skip search"
     )
     photo_number: Annotated[int, Field(default=0, description="The number of images the user wants to obtain")]
-    video_number: Annotated[int, Field(default=5, description="The number of videos the user wants to obtain")]
+    video_number: Annotated[int, Field(default=5, description="The number of Pexels videos to obtain. Set this to zero for a generated-images-only request that does not require Pexels.")]
     search_keyword: Annotated[str, Field(default="scenery", description="Keyword of the media the user wants to obtain. Only one keyword is allowed; multiple keywords are not permitted.")]
     photo_source: Literal["pexels", "generated"] = Field(
         default="pexels",

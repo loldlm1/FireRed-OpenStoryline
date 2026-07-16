@@ -50,6 +50,11 @@ OPENSTORYLINE_STT_MODELS=groq/whisper-large-v3-turbo,groq/whisper-large-v3,huggi
 `NINEROUTER_KEY` authenticates this application to your router. Groq and
 Hugging Face credentials remain stored inside 9Router.
 
+Image generation uses the same endpoint key. Add an image-capable account in
+9Router (for example the Antigravity/Gemini route documented by 9Router) and
+configure only models that its image catalog actually exposes. Provider keys
+and subscription sessions remain inside 9Router.
+
 ## 4. Verify discovery
 
 ```bash
@@ -60,6 +65,18 @@ curl -fsS \
 
 Confirm that at least one `groq/whisper-*` model and one
 `huggingface/openai/whisper-*` model appear.
+
+Discover image models separately:
+
+```bash
+curl -fsS \
+  -H "Authorization: Bearer $NINEROUTER_KEY" \
+  "$NINEROUTER_URL/v1/models/image"
+```
+
+Chat and image catalogs are different. Do not put `cx/gpt-5.6-sol` in
+`OPENSTORYLINE_IMAGE_MODELS` unless that exact ID is returned by the image
+catalog.
 
 ## 5. Verify transcription
 
