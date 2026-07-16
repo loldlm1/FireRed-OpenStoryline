@@ -7,6 +7,11 @@ description: Install, configure, and start FireRed-OpenStoryline from source on 
 
 Use this skill when the task is to install or repair a local source checkout of FireRed-OpenStoryline.
 
+Use this skill only for the original full local agent profile. For repository
+code changes, follow `AGENTS.md` and `docs/agent-engineering.md`. For the
+isolated remote-only social-clips MVP, follow `docs/mvp/guia-es.md` and
+`docs/mvp/architecture.md` instead of mixing the two install paths.
+
 Keep the workflow deterministic:
 
 1. Confirm the repo path and read the current README.md and config.toml.
@@ -72,7 +77,7 @@ Validate candidate interpreters before using them:
 /path/to/python -c "import ssl, sqlite3, venv; print('stdlib_ok')"
 ```
 
-If no supported interpreter already exists, peferr conda fallback:
+If no supported interpreter already exists, prefer the conda fallback:
 
 ```bash
 conda create -y -n openstoryline-py311 python=3.11
@@ -103,6 +108,9 @@ Notes:
 ## Configuration
 
 Before starting the app, update config.toml.
+
+Treat `config.toml` as secret-bearing local configuration: never print, upload,
+or include real API keys in a patch, log excerpt, or response.
 
 You can use scripts/update_config.py.
 
@@ -198,3 +206,7 @@ When reporting status to the user, separate:
 - what address the service is listening on
 
 Do not say "installation complete" if only the Python packages are installed but the resource bundle is still missing.
+
+Do not run `hf_space.sh`, Kamal deployment commands, or provider-backed media
+work as installation verification unless the user explicitly requests those
+external or destructive actions.

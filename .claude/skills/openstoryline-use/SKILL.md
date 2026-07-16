@@ -5,6 +5,11 @@ description: Use this skill when OpenStoryline is already installed and the user
 
 # OpenStoryline Usage Skill
 
+Use this skill only for the original full local editing agent, not the isolated
+remote-only social-clips MVP. For repository code changes, follow `AGENTS.md`
+and `docs/agent-engineering.md`; for the remote MVP, follow
+`docs/mvp/guia-es.md` and `docs/mvp/architecture.md`.
+
 你负责在“已安装完成”的前提下，执行 OpenStoryline 的实际剪辑流程。
 OpenStoryline 是一个剪辑 Agent，用户可使用自己的素材，通过自然语言对话的方式剪辑视频。内置素材搜索、内容理解、生成字幕、文字转语音等功能，用户可以多次提出具体的剪辑/修改意见。
 
@@ -49,6 +54,7 @@ OpenStoryline 是一个剪辑 Agent，用户可使用自己的素材，通过自
     - 如有二次编辑，还要说明是否生成了新的输出文件
 10. 下面的示例命令都使用`source .venv/bin/activate`作为示例，你需要根据用户实际使用的环境，替换成正确的命令（例如`conda activate `）。
 11. 遇到端口被占用的情况，优先换一个端口。
+12. `config.toml` 可能包含真实密钥。不要在日志、回复、补丁或上传文件中输出这些值。
 
 ## OpenClaw Execution Strategy (Important)
 

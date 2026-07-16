@@ -56,7 +56,8 @@ domain/HTTPS routing, a private API key, and persistent rate limits.
 Start with the [Spanish quick guide](docs/mvp/guia-es.md), or review the
 [free-provider capacity](docs/mvp/limites-gratis.md),
 [remote image generation](docs/mvp/imagenes-generadas.md),
-[architecture](docs/mvp/architecture.md) and [atomic sprint plan](docs/mvp/sprints.md).
+[architecture](docs/mvp/architecture.md) and
+[implementation history](docs/mvp/implementation-history.md).
 
 ## ✨ Key Features
 - 🌐 **Smart Media Search & Organization**: Automatically searches and downloads Pexels media or generates original image assets through a fail-closed 9Router image cascade. Performs clip segmentation and content understanding based on your thematic media.
@@ -125,6 +126,14 @@ We provide two Skills:
 
 * `openstoryline-install`: for installation, configuration, and first-run verification.
 * `openstoryline-use`: for starting the service and running the actual video editing workflow.
+
+### Codex and repository engineering
+
+Coding agents working on this repository should start with
+[`AGENTS.md`](AGENTS.md) and the deeper
+[`Agent Engineering Guide`](docs/agent-engineering.md). The install/use Skills
+below automate product operation; they do not override repository engineering,
+security, testing, or deployment rules.
 
 ### OpenClaw
 
@@ -340,6 +349,9 @@ FireRed-OpenStoryline/
 - [API Key Configuration](docs/source/en/api-key.md) - How to configure and manage API keys
 - [Usage Tutorial](docs/source/en/guide.md) - Common use cases and basic operations
 - [FAQ](docs/source/en/faq.md) - Frequently asked questions
+- [Agent Engineering Guide](docs/agent-engineering.md) - Architecture, contracts, and validation rules for coding agents
+- [Remote MVP Architecture](docs/mvp/architecture.md) - Current remote-only runtime policy
+- [Remote MVP Implementation History](docs/mvp/implementation-history.md) - Completed implementation record
 
 ## TODO
 
