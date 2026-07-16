@@ -11,7 +11,9 @@ from pathlib import Path
 from open_storyline.nodes.core_nodes.base_node import NodeMeta, BaseNode
 from open_storyline.nodes.node_schema import SearchMediaInput
 from open_storyline.nodes.node_state import NodeState
+from open_storyline.utils.generated_media import generate_remote_media
 from open_storyline.utils.register import NODE_REGISTRY
+from open_storyline.utils.remote_image import RemoteImageCascade
 
 logger = logging.getLogger(__name__)
 
@@ -53,14 +55,6 @@ class SearchMediaNode(BaseNode):
         pexels_api_key = inputs.get("pexels_api_key", "")
         video_saved_paths = []
         image_saved_paths = []
-
-        if pexels_api_key == "":
-            pexels_api_key = self.server_cfg.search_media.pexels_api_key
-        if not pexels_api_key or pexels_api_key == "":
-            pexels_api_key = os.getenv("PEXELS_API_KEY")
-        if not pexels_api_key or pexels_api_key == "":
-            node_state.node_summary.info_for_llm("If the user has not entered their Pexels API key, please remind them to enter it in the sidebar of the webpage.")
-            raise RuntimeError("Pexels api key not detected. If you use your own pexels key, please fill in the api key in the sidebar or config.toml")
         
         root_dir = os.path.abspath(os.path.expanduser(self.server_cache_dir))
         media_dir = Path(os.path.join(root_dir, node_state.session_id, "media"))
@@ -68,9 +62,21 @@ class SearchMediaNode(BaseNode):
         search_keyword = inputs.get("search_keyword", "")
         photo_number = min(inputs.get("photo_number", MAX_PHOTO_NUMBER), MAX_PHOTO_NUMBER)
         video_number = min(inputs.get("video_number", MAX_VIDEO_NUMBER), MAX_VIDEO_NUMBER)
+        photo_source = inputs.get("photo_source", "pexels")
+        image_prompt = inputs.get("image_prompt", "") or search_keyword
         orientation = inputs.get("orientation", "")
         min_video_duration = min(max(inputs.get("min_video_duration", MIN_VIDEO_DURATION), MIN_VIDEO_DURATION), MAX_VIDEO_DURATION)
         max_video_duration = max(min(inputs.get("max_video_duration", MAX_VIDEO_DURATION), MAX_VIDEO_DURATION), MIN_VIDEO_DURATION)
+
+        needs_pexels = video_number > 0 or (photo_number > 0 and photo_source == "pexels")
+        if needs_pexels:
+            if pexels_api_key == "":
+                pexels_api_key = self.server_cfg.search_media.pexels_api_key
+            if not pexels_api_key:
+                pexels_api_key = os.getenv("PEXELS_API_KEY")
+            if not pexels_api_key:
+                node_state.node_summary.info_for_llm("Pexels is required for requested stock photos or videos. Ask the user to configure its API key or request generated photos with zero Pexels videos.")
+                raise RuntimeError("Pexels api key not detected. Configure it in the sidebar, PEXELS_API_KEY, or config.toml")
 
         if video_number > 0:
             video_preview_urls, video_saved_paths = get_video_media_from_pexels(
@@ -84,7 +90,7 @@ class SearchMediaNode(BaseNode):
             )
             node_state.node_summary.info_for_user(f"search media successfully, found {len(video_preview_urls)} videos", preview_urls=video_preview_urls)
 
-        if photo_number > 0:
+        if photo_number > 0 and photo_source == "pexels":
             image_preview_urls, image_saved_paths = get_photo_media_from_pexels(
                 pexels_api_key=pexels_api_key,
                 query=search_keyword,
@@ -93,6 +99,25 @@ class SearchMediaNode(BaseNode):
                 orientation=orientation,
             )
             node_state.node_summary.info_for_user(f"search media successfully, found {len(image_preview_urls)} photos", preview_urls=image_preview_urls)
+        elif photo_number > 0 and photo_source == "generated":
+            cascade = RemoteImageCascade.from_config(self.server_cfg.remote_image)
+            generated = await generate_remote_media(
+                cascade,
+                media_dir=media_dir,
+                prompt=image_prompt,
+                count=photo_number,
+                orientation=orientation,
+                size=self.server_cfg.remote_image.size,
+            )
+            image_saved_paths = [{"path": str(path)} for path in generated.paths]
+            node_state.node_summary.info_for_user(
+                f"generated {len(generated.paths)} original image assets through 9Router"
+            )
+            node_state.node_summary.info_for_llm(
+                "Generated images include a provenance manifest but are not automatically rights-cleared; review them before publishing.",
+                models=generated.models,
+                manifest=generated.manifest_path.name,
+            )
         return {"search_media": video_saved_paths + image_saved_paths}
 
 

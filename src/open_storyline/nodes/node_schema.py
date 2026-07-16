@@ -184,11 +184,20 @@ class LoadMediaInput(BaseInput):
 class SearchMediaInput(BaseInput):
     mode: Literal["auto", "skip", "default"] = Field(
         default="auto",
-        description="auto: Automatically search media from pexels; skip: skip search; default: skip search"
+        description="auto: Obtain media from the selected remote source; skip: skip search; default: skip search"
     )
     photo_number: Annotated[int, Field(default=0, description="The number of images the user wants to obtain")]
     video_number: Annotated[int, Field(default=5, description="The number of videos the user wants to obtain")]
     search_keyword: Annotated[str, Field(default="scenery", description="Keyword of the media the user wants to obtain. Only one keyword is allowed; multiple keywords are not permitted.")]
+    photo_source: Literal["pexels", "generated"] = Field(
+        default="pexels",
+        description="pexels: download stock photos with a Pexels key; generated: create new images with the configured 9Router image-model cascade. Generated output still requires human rights review."
+    )
+    image_prompt: Annotated[str, Field(
+        default="",
+        max_length=8000,
+        description="Complete visual prompt derived from the video plan when photo_source is generated. Describe subject, composition, lighting, palette, camera and mood; avoid named artists, brands, copyrighted characters and public figures. search_keyword is used when this is empty."
+    )]
     orientation: Literal["landscape", "portrait"] = Field(
         default="landscape",
         description="landscape: The screen is wider horizontally and narrower vertically, making it suitable for computer screens, landscape images, etc;portrait: The screen is higher vertically and narrower horizontally, making it suitable for mobile browsing and close-up shots of people."

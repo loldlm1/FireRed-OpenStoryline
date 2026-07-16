@@ -166,6 +166,18 @@ class NineRouterConfig(ConfigBaseModel):
     max_retries: int = Field(default=2, ge=0, le=5)
 
 
+class RemoteImageConfig(ConfigBaseModel):
+    base_url: str = ""
+    api_key: str = ""
+    models: List[str] = Field(default_factory=lambda: [
+        "gemini/gemini-3-pro-image-preview",
+        "xai/grok-imagine-image",
+    ])
+    timeout: float = Field(default=180.0, gt=0)
+    max_bytes: int = Field(default=25 * 1024 * 1024, gt=0)
+    size: str = "1024x1024"
+
+
 class MVPConfig(ConfigBaseModel):
     frame_count: int = Field(default=6, ge=0, le=24)
     render_width: int = Field(default=1080, ge=128, le=4320)
@@ -296,6 +308,7 @@ class Settings(ConfigBaseModel):
     understand_clips: UnderstandClipsConfig
     remote_asr: RemoteASRConfig = Field(default_factory=RemoteASRConfig)
     ninerouter: NineRouterConfig = Field(default_factory=NineRouterConfig)
+    remote_image: RemoteImageConfig = Field(default_factory=RemoteImageConfig)
     mvp: MVPConfig = Field(default_factory=MVPConfig)
     ffmpega: FFMPEGAConfig = Field(default_factory=FFMPEGAConfig)
     group_clips: GroupClipsConfig = Field(default_factory=GroupClipsConfig)
