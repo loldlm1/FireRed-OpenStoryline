@@ -39,7 +39,7 @@ RETRY_BACKOFF_FACTOR = 2.0
 class SearchMediaNode(BaseNode):
     meta = NodeMeta(
         name="search_media",
-        description="search",
+        description="Search Pexels media or generate original image assets through 9Router",
         node_id="search_media",
         node_kind="search_media",
         require_prior_kind=[],
@@ -107,7 +107,7 @@ class SearchMediaNode(BaseNode):
                 prompt=image_prompt,
                 count=photo_number,
                 orientation=orientation,
-                size=self.server_cfg.remote_image.size,
+                size=os.getenv("OPENSTORYLINE_IMAGE_SIZE") or self.server_cfg.remote_image.size,
             )
             image_saved_paths = [{"path": str(path)} for path in generated.paths]
             node_state.node_summary.info_for_user(

@@ -91,6 +91,19 @@ reasoning_effort = "medium"
 timeout = 180.0
 max_retries = 2
 
+# ============= Remote-only image generation ===================
+[remote_image]
+base_url = "" # Prefer NINEROUTER_URL
+api_key = ""  # Prefer NINEROUTER_KEY
+# Candidates must appear in GET /v1/models/image on your 9Router instance.
+models = [
+    "gemini/gemini-3-pro-image-preview",
+    "xai/grok-imagine-image",
+]
+timeout = 180.0
+max_bytes = 26214400
+size = "1024x1024"
+
 # ============= Remote-only video MVP ===========================
 [mvp]
 frame_count = 6

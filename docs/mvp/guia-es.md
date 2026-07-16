@@ -22,7 +22,9 @@ mano en el VPS.
 
 Las keys de Groq y Hugging Face quedan en 9Router. Este repositorio sólo recibe
 la URL y la endpoint key de 9Router. Revisa la [guía de keys](api-keys.md) y los
-[límites gratuitos verificados](limites-gratis.md).
+[límites gratuitos verificados](limites-gratis.md). Para imágenes revisa la
+[guía de generación remota y derechos](imagenes-generadas.md); una cuota
+incluida por un proveedor no equivale a gratuidad garantizada.
 
 ## 2. Prepara la máquina desde la que desplegarás
 
@@ -98,6 +100,18 @@ curl -fsS \
 
 Confirma los identificadores exactos que 9Router expone y corrige
 `OPENSTORYLINE_STT_MODELS` si difieren. Después ejecuta:
+
+```bash
+curl -fsS \
+  -H "Authorization: Bearer $NINEROUTER_KEY" \
+  "$NINEROUTER_URL/v1/models/image"
+```
+
+Conserva en `OPENSTORYLINE_IMAGE_MODELS` únicamente IDs devueltos por ese
+catálogo. Puedes consultar tamaños y opciones de un modelo con
+`/v1/models/info?id=ID`. La aplicación usa `1024x1024` por compatibilidad; si
+tu modelo no lo acepta, cambia `OPENSTORYLINE_IMAGE_SIZE` por un valor anunciado
+en ese endpoint.
 
 ```bash
 ./bin/kamal-mvp setup
@@ -190,3 +204,10 @@ curl -fsS https://video.example.com/up
   outputs.
 - Timeout al subir: confirma el puerto/firewall y espacio en disco; el proxy y
   la aplicación aceptan hasta `OPENSTORYLINE_MAX_UPLOAD_BYTES`.
+- `IMAGE_DISCOVERY_FAILED`: actualiza 9Router (la generación nativa requiere un
+  catálogo de imágenes) y revisa la endpoint key.
+- `IMAGE_MODELS_UNAVAILABLE`: los IDs configurados no aparecen en el catálogo;
+  actualiza `OPENSTORYLINE_IMAGE_MODELS` y vuelve a desplegar.
+- `IMAGE_ALL_PROVIDERS_FAILED`: todos los candidatos remotos fallaron; el lote
+  parcial se elimina y no se sustituye silenciosamente con Pexels o un modelo
+  local.
