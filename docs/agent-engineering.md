@@ -1,0 +1,184 @@
+# Agent Engineering Guide
+
+This guide gives coding agents and maintainers the context behind the
+repository rules in [`AGENTS.md`](../AGENTS.md). `AGENTS.md` is the enforceable
+instruction source; this document explains the architecture, ownership, and
+verification choices in more depth.
+
+## Runtime Profiles
+
+The repository contains two applications that share selected configuration and
+media helpers but serve different product goals.
+
+### Full local editing agent
+
+```text
+CLI or web client
+    -> LangChain agent (`src/open_storyline/agent.py`)
+    -> MCP client with session header
+    -> MCP server (`src/open_storyline/mcp/server.py`)
+    -> registered editing nodes (`src/open_storyline/nodes/`)
+    -> artifact/session stores + FFmpeg/resources/provider APIs
+```
+
+The full agent loads prompt templates from `prompts/tasks/` and runtime editing
+skills from `.storyline/skills/`. MCP tools are generated from node metadata and
+Pydantic input schemas. Tool and node names are therefore public contracts, not
+internal implementation details.
+
+### Remote-only social-clips MVP
+
+```text
+Browser/API client
+    -> `mvp_fastapi.py` authentication and persistent rate limits
+    -> durable job store and queue
+    -> remote STT cascade
+    -> 9Router clip planning from transcript + sampled frames
+    -> validated short candidates
+    -> deterministic CPU FFmpeg rendering
+    -> job-scoped artifacts, manifest, failure report, and ZIP bundle
+```
+
+The remote MVP intentionally excludes the full local model/resource stack.
+`Dockerfile.remote` and `requirements-remote.txt` enforce that boundary for
+production. The original `Dockerfile`, `run.sh`, MCP server, and full agent
+remain available independently.
+
+## Source Of Truth By Concern
+
+| Concern | Primary source | Regression evidence |
+| --- | --- | --- |
+| Runtime configuration | `src/open_storyline/config.py`, `config.toml` | Config load command and affected tests |
+| MCP tool exposure | `src/open_storyline/mcp/register_tools.py`, node metadata/schemas | Tool/schema tests and node tests |
+| Agent construction | `src/open_storyline/agent.py` | Focused mocked provider/tool tests |
+| Prompt behavior | `prompts/tasks/`, prompt loader and consuming node | Schema/argument regression tests; bilingual parity review |
+| Runtime editing skills | `.storyline/skills/`, `src/open_storyline/skills/skills_io.py` | Skill metadata/tool-name review and workflow test |
+| Session/artifact state | `src/open_storyline/storage/` | Corruption, isolation, restore, and path-safety tests |
+| Remote MVP policy | `docs/mvp/architecture.md`, `src/open_storyline/mvp/` | Remote profile, provider, API, job, render, and security tests |
+| Deployment | `Dockerfile.remote`, `config/deploy.yml`, env examples, `bin/kamal-mvp` | `tests/test_kamal_config.py`, image build/config checks |
+| Operator automation | `.claude/skills/` and their scripts | Front matter review and safe local dry runs |
+
+## Contract Boundaries
+
+### Model and provider boundaries
+
+- The full agent uses OpenAI-compatible LLM/VLM configuration through LangChain.
+- The remote MVP uses the small 9Router client and remote STT/image cascades.
+- Provider output is untrusted. Parse and validate it before filesystem, render,
+  job-state, or tool actions.
+- Preserve explicit timeouts, bounded retries, typed error codes, sanitization,
+  and fail-closed behavior.
+- A provider or model migration is a separate behavior change. Do not combine it
+  with unrelated refactoring or documentation cleanup.
+
+### State and filesystem boundaries
+
+- Full-agent sessions and artifacts are scoped by `session_id`.
+- Remote MVP state is scoped by validated job IDs and job-owned directories.
+- Resolved paths must stay under their expected session/job root.
+- Job state is durable and written atomically; queued/running jobs recover after
+  restart.
+- Runtime outputs, downloaded models, and resources are ignored because they can
+  be large or private. Tests should use temporary directories and synthetic data.
+
+### API and UI boundaries
+
+- The remote MVP protects `/api/mvp/**` with a single configured token plus
+  separate persistent quotas for unauthorized clients, authenticated API calls,
+  and job creation.
+- `/health` describes the runtime profile; `/up` is the Kamal proxy health check.
+- The original web application uses session and WebSocket message contracts that
+  are consumed by `.claude/skills/openstoryline-use/scripts/bridge_openstoryline.py`.
+- Preserve status codes, error codes, response shapes, WebSocket event names,
+  artifact filenames, and DOM hooks unless the requested change includes a
+  coordinated migration.
+
+## Prompt And Runtime Skill Changes
+
+Prompts and `.storyline/skills/` are executable product configuration. Treat a
+wording-only edit as a behavior change.
+
+Before changing one:
+
+1. Identify the consuming node/tool and its Pydantic schema.
+2. Identify required history/artifact lookups and downstream consumers.
+3. Preserve system/user prompt keys and language routing.
+4. Add deterministic cases for output shape, tool arguments, invalid output,
+   and safety failures.
+5. Compare both English and Chinese variants when both exist.
+
+Avoid assertions against exact creative prose. Test required fields, bounds,
+evidence use, tool selection, parsing, and failure handling instead.
+
+## Validation Matrix
+
+| Change area | Minimum focused validation |
+| --- | --- |
+| Pure Python/domain logic | Relevant `tests/test_*.py` file |
+| Config model or `config.toml` | Config load command plus affected tests |
+| MCP node/tool schema | Node/schema test and invalid-input case |
+| Prompt/runtime skill | Consumer test, structured-output failure case, language parity review |
+| Provider client | Success, fallback/retry, invalid response, timeout/error, secret-redaction tests |
+| Remote MVP API | Auth, rate limit, status/error shape, traversal and upload-boundary tests |
+| Job/storage code | Atomicity, restart recovery, isolation, corruption, path-safety tests |
+| FFmpeg/rendering | Unit validation plus `tests/test_mvp_render.py` when FFmpeg is installed |
+| Docker/Kamal/env | `tests/test_remote_profile.py`, `tests/test_kamal_config.py`, shell syntax, image/config check |
+| Web UI | Focused browser smoke on desktop/mobile plus API/WebSocket contract checks |
+| Documentation only | Link/path search, command syntax review, bilingual navigation parity |
+
+The complete deterministic suite is:
+
+```bash
+PYTHONPATH=src python -m unittest discover -s tests -p 'test_*.py' -v
+```
+
+This project currently has no checked-in formatter, linter, type checker,
+coverage threshold, or CI workflow. Adding one should be an explicit tooling
+change with dependency and contributor-workflow discussion, not an incidental
+part of a feature.
+
+## Deployment And Operations
+
+- Production uses Kamal and `Dockerfile.remote`; Docker Compose is not part of
+  the documented production path.
+- `.env.kamal.example` documents deploy-machine variables. `.kamal/secrets`
+  stores references and is ignored. Never commit resolved secret values.
+- `outputs/` is mounted persistently in production because it contains job
+  state, rate-limit state, inputs, and generated artifacts.
+- A release is not verified by a successful build alone. It also needs working
+  `/up` and `/health` checks, container/log review, persistent volume checks,
+  and a known rollback command.
+- Code rollback can still be unsafe when persistent state formats change. Keep
+  job and manifest formats backward compatible or document migration/rollback.
+
+Agents may validate configuration and build artifacts, but they must not deploy
+or modify live servers without explicit authorization.
+
+## Documentation Lifecycle
+
+- `AGENTS.md`: concise enforceable engineering rules.
+- `docs/agent-engineering.md`: architecture and validation rationale for agents.
+- `docs/mvp/architecture.md`: current remote MVP product/runtime policy.
+- `docs/mvp/implementation-history.md`: completed implementation record, not an active plan.
+- `.claude/skills/`: operator automation for installation and use.
+- `.storyline/skills/`: runtime editing behavior loaded by the product.
+- `README.md` and `README_zh.md`: user-facing navigation and quick starts.
+
+Delete stale documentation only after moving any still-useful historical
+context and updating every inbound link. Do not preserve an obsolete plan in a
+location that coding agents may interpret as current instructions.
+
+## Known Repository Constraints
+
+- `agent_fastapi.py` is an opaque tracked binary artifact with a `.py`
+  extension. It is not a normal editable Python source file.
+- `hf_space.sh` performs destructive branch recreation and a force push. It is
+  a publishing script, never a normal verification command.
+- `download.sh` retrieves large model/resource archives and should run only for
+  an explicitly requested full local installation.
+- Full-agent startup requires configured external providers and downloaded
+  resources; deterministic unit tests should not require either.
+- Real provider checks can incur cost, expose private media, and fail because of
+  quota or service state. Run them only with explicit authorization and report
+  them separately from the deterministic suite.
+

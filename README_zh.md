@@ -114,6 +114,12 @@ FireRed-OpenStoryline 支持通过 Agent Skills 使用。
 - `openstoryline-install`：用于安装、配置与首跑验证。
 - `openstoryline-use`：用于启动服务并执行实际视频剪辑流程。
 
+### Codex 与仓库工程
+
+在本仓库中进行代码修改的 Agent 应先阅读 [`AGENTS.md`](AGENTS.md) 和
+[`Agent Engineering Guide`](docs/agent-engineering.md)。下方安装/使用 Skills
+用于操作产品，不会覆盖仓库中的工程、安全、测试或部署规则。
+
 ### OpenClaw
 
 直接告诉OpenClaw：“我想体验 openstoryline，帮我安装相关 Skills”，即可自动触发安装。
@@ -330,6 +336,9 @@ FireRed-OpenStoryline/
 - [API申请与配置](docs/source/zh/api-key.md) - 如何申请和配置 API 密钥
 - [使用教程](docs/source/zh/guide.md) - 常见用例和基本操作
 - [常见问题](docs/source/zh/faq.md) - 常见问题解答
+- [Agent 工程指南](docs/agent-engineering.md) - 面向代码 Agent 的架构、契约与验证规则
+- [远程 MVP 架构](docs/mvp/architecture.md) - 当前远程推理运行策略
+- [远程 MVP 实现历史](docs/mvp/implementation-history.md) - 已完成的实现记录
 
 ## TODO
 
