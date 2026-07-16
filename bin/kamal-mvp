@@ -3,6 +3,7 @@ set -Eeuo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 ENV_FILE="${KAMAL_ENV_FILE:-$ROOT_DIR/.env.kamal}"
+MINIMUM_KAMAL_VERSION="2.12.0"
 KAMAL_VERSION="${KAMAL_VERSION:-2.12.0}"
 
 fail() {
@@ -40,12 +41,19 @@ if [[ -n "${KAMAL_DOMAIN:-}" ]]; then
 fi
 
 command -v docker >/dev/null 2>&1 || fail "Docker is required on the deploy machine to build the image"
+command -v gem >/dev/null 2>&1 || fail "RubyGems is required; install Ruby, then run: gem install kamal -v $KAMAL_VERSION"
+command -v kamal >/dev/null 2>&1 || fail "Kamal is required; run: gem install kamal -v $KAMAL_VERSION"
 
-if ! command -v kamal >/dev/null 2>&1; then
-  command -v gem >/dev/null 2>&1 || fail "install Ruby, then run: gem install kamal -v $KAMAL_VERSION"
-  printf 'Installing Kamal %s on the deploy machine...\n' "$KAMAL_VERSION"
-  gem install kamal --no-document --version "$KAMAL_VERSION"
-fi
+oldest="$(printf '%s\n%s\n' "$MINIMUM_KAMAL_VERSION" "$KAMAL_VERSION" | sort -V | head -n 1)"
+[[ "$oldest" == "$MINIMUM_KAMAL_VERSION" ]] \
+  || fail "Kamal $KAMAL_VERSION is too old; run: gem install kamal -v $MINIMUM_KAMAL_VERSION"
+
+gem list --installed --exact kamal --version "$KAMAL_VERSION" >/dev/null 2>&1 \
+  || fail "Kamal $KAMAL_VERSION is not installed; run: gem install kamal -v $KAMAL_VERSION"
+
+reported_version="$(kamal "_${KAMAL_VERSION}_" version 2>/dev/null | tail -n 1 | tr -d '[:space:]')"
+[[ "$reported_version" == "$KAMAL_VERSION" ]] \
+  || fail "Kamal $KAMAL_VERSION could not be selected (reported ${reported_version:-unknown})"
 
 mkdir -p "$ROOT_DIR/.kamal"
 if [[ ! -f "$ROOT_DIR/.kamal/secrets" ]]; then
@@ -54,4 +62,4 @@ if [[ ! -f "$ROOT_DIR/.kamal/secrets" ]]; then
 fi
 
 cd "$ROOT_DIR"
-exec kamal "$@"
+exec kamal "_${KAMAL_VERSION}_" "$@"

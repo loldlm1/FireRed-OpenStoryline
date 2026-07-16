@@ -57,6 +57,21 @@ and subscription sessions remain inside 9Router.
 
 ## 4. Verify discovery
 
+Run the redacted connectivity preflight before making provider inference calls:
+
+```bash
+set -a
+source .env.kamal
+set +a
+python scripts/qa_ninerouter.py
+```
+
+The command checks public health, missing/invalid/valid endpoint-key behavior,
+the text/image/STT catalogs, SSH, and remote Docker. It reports model counts and
+configured IDs but never prints provider or endpoint credentials. Add
+`--strict-models` only after the configured model policy has been reconciled
+with the live catalogs.
+
 ```bash
 curl -fsS \
   -H "Authorization: Bearer $NINEROUTER_KEY" \
