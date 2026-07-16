@@ -1,8 +1,14 @@
-# Atomic MVP sprints
+# Remote MVP Implementation History
 
-Each sprint is validated before its single, short commit is created.
+This is a historical record of the completed atomic implementation sequence.
+It is not an active sprint plan. Current engineering work should start from
+[`AGENTS.md`](../../AGENTS.md), the
+[`Agent Engineering Guide`](../agent-engineering.md), and the current
+[`Remote MVP Architecture`](architecture.md).
 
-| Sprint | Scope | Required validation | Commit |
+Each implementation increment was validated before its short commit.
+
+| Increment | Scope | Required validation | Commit |
 | --- | --- | --- | --- |
 | 0 | Architecture, remote-only policy, key guide | Config examples parse; docs links checked | `docs: define MVP architecture` |
 | 1 | Remote STT cascade and compatible ASR node | Unit tests for success, fallback, sanitization, and total failure | `feat: add remote STT cascade` |
@@ -20,5 +26,7 @@ Each sprint is validated before its single, short commit is created.
 | 13 | Agent-planned generated-image source for `SearchMedia` | Pexels compatibility, schema, provenance and transactional cleanup tests | `feat: generate search media via 9router` |
 | 14 | Kamal variables, provider/copyright guide and complete regression pass | ERB/YAML, config parse, documentation checks and clean-tree suite | `docs: configure remote image generation` |
 
-The pull request targets `main` in `loldlm1/FireRed-OpenStoryline`. It remains a
-draft until the owner completes a real-provider test and chooses to merge it.
+The original pull request targeted `main` in
+`loldlm1/FireRed-OpenStoryline`. Merge and release state belongs in the hosting
+platform, not in this historical implementation checklist.
+

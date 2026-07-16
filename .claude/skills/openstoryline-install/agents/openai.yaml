@@ -1,0 +1,4 @@
+interface:
+  display_name: "OpenStoryline Install"
+  short_description: "Install and verify OpenStoryline locally"
+  default_prompt: "Use $openstoryline-install to install and verify this FireRed-OpenStoryline checkout."
