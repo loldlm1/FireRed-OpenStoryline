@@ -38,7 +38,9 @@ isolated so upstream behavior can continue to be merged into this fork.
    9Router and returns a structured clip plan.
 6. The server validates duration, bounds, overlap, and output count.
 7. FFmpeg renders vertical clips and subtitles on CPU.
-8. The browser downloads individual clips, the manifest, or a ZIP bundle.
+8. PostgreSQL ingests the sanitized JSON/SRT evidence and records deterministic
+   FFprobe/subtitle structural checks without storing media bytes.
+9. The browser downloads individual clips, the manifest, or a ZIP bundle.
 
 ## Default remote services
 
@@ -93,6 +95,13 @@ and the development venv never enter the remote-image build context.
   sanitized ordered event in the same transaction. A derived atomic `job.json`
   snapshot remains during the rollback window; snapshot failure is recorded as
   an event and never makes the file authoritative again.
+- Registered JSON/SRT artifacts and terminal `job.json` snapshots are ingested
+  as versioned, hashed audit documents with bounded size and sanitized raw text.
+  Binary media is excluded. Audit/QC failure is recorded separately and never
+  rewrites an already completed render as failed.
+- Deterministic QC checks output count, FFprobe structure/duration, and subtitle
+  ordering against the validated manifest. Its system verdict is explicitly
+  structural and does not represent creative or semantic quality.
 - Inputs and outputs are served only through validated job-scoped paths.
 - The 9Router endpoint key and direct `MISTRAL_API_KEYS` key ring are delivered
   through Kamal secrets and never written to job state, logs, manifests, or Git.
@@ -141,3 +150,9 @@ The importer uses one `Imported legacy jobs` session by default, re-sanitizes
 state, validates every job/artifact path, hashes existing artifacts, records
 missing evidence, and skips corrupt or unsafe snapshots. It never imports the
 retired SQLite limiter.
+
+Agents and operators inspect persistent evidence through bounded commands such
+as `./bin/kamal-mvp audit list --since 24h --format json`, `audit show`,
+`audit events`, `audit documents`, and `audit verify`. Reviews enter through a
+JSON file or stdin, not command arguments. Rotating `kamal app logs` contain
+only recent correlation/lifecycle summaries and are not the audit source.

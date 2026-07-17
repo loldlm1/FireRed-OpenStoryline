@@ -108,6 +108,10 @@ class KamalConfigTests(unittest.TestCase):
         )
         self.assertNotIn("OPENSTORYLINE_STT_MODELS", config["env"]["clear"])
         self.assertEqual(config["env"]["clear"]["MISTRAL_STT_TIMEOUT"], 180)
+        self.assertEqual(
+            config["env"]["clear"]["OPENSTORYLINE_AUDIT_MAX_DOCUMENT_BYTES"],
+            2097152,
+        )
         self.assertEqual(config["env"]["clear"]["OPENSTORYLINE_IMAGE_SIZE"], "1024x1024")
         secrets = (ROOT / ".kamal" / "secrets.example").read_text(encoding="utf-8")
         kamal_env = (ROOT / ".env.kamal.example").read_text(encoding="utf-8")
@@ -168,6 +172,17 @@ class KamalConfigTests(unittest.TestCase):
 
         self.assertLess(dispatch, env_loading)
         self.assertIn("open_storyline.mvp.auth hash-password", wrapper)
+
+    def test_audit_commands_use_the_primary_container_without_provider_gates(self):
+        wrapper = (ROOT / "bin" / "kamal-mvp").read_text(encoding="utf-8")
+        dispatch = wrapper.index('if [[ "${1:-}" == "audit" ]]')
+        provider_requirements = wrapper.index("require_value NINEROUTER_URL")
+        release_scan = wrapper.index('for arg in "$@"')
+
+        self.assertLess(dispatch, provider_requirements)
+        self.assertLess(dispatch, release_scan)
+        self.assertIn("app exec --primary --reuse", wrapper)
+        self.assertIn("open_storyline.mvp.admin audit", wrapper)
 
 
 if __name__ == "__main__":

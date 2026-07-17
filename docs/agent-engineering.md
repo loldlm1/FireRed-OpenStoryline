@@ -33,6 +33,7 @@ Browser/API client
     -> `mvp_fastapi.py` password login, PostgreSQL sessions, and CSRF
     -> failed-password-only PostgreSQL throttling
     -> PostgreSQL editing sessions, jobs, artifacts, and ordered events
+    -> sanitized JSON/SRT audit documents and deterministic structural reviews
     -> one advisory-locked and execution-fenced in-process worker
     -> job-scoped filesystem media and rollback snapshots
     -> direct Mistral Voxtral STT
@@ -134,6 +135,7 @@ evidence use, tool selection, parsing, and failure handling instead.
 | Provider client | Success, bounded same-model/key failover, invalid response, timeout/error, secret-redaction tests |
 | Remote MVP API | Password/session/CSRF auth, failed-login limits, status/error shape, traversal and upload-boundary tests |
 | Job/storage code | Atomicity, restart recovery, isolation, corruption, path-safety tests |
+| Audit/observability | Document versioning/redaction, bounded CLI, deterministic QC, correlated log tests |
 | FFmpeg/rendering | Unit validation plus `tests/test_mvp_render.py` when FFmpeg is installed |
 | Docker/Kamal/env | `tests/test_remote_profile.py`, `tests/test_kamal_config.py`, shell syntax, image/config check |
 | Web UI | Focused browser smoke on desktop/mobile plus API/WebSocket contract checks |
@@ -159,6 +161,9 @@ part of a feature.
 - `outputs/` is mounted persistently in production because it contains inputs,
   work files, generated artifacts, and rollback snapshots. PostgreSQL is
   authoritative for authentication, editing sessions, jobs, and audit metadata.
+- `src/open_storyline/mvp/audit.py` owns bounded JSON/SRT ingestion, structural
+  QC, reviews, filters, and backfill. `kamal app logs` is recent diagnostic
+  context only; agents should query the PostgreSQL audit CLI for durable history.
 - A release is not verified by a successful build alone. It also needs working
   `/up` and `/health` checks, container/log review, persistent volume checks,
   and a known rollback command.

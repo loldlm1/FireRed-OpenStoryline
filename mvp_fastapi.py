@@ -4,6 +4,7 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 import hmac
 import sys
+import time
 
 from fastapi import FastAPI, Request
 from fastapi.responses import FileResponse, JSONResponse
@@ -15,6 +16,7 @@ if str(SRC_DIR) not in sys.path:
 
 from open_storyline.config import default_config_path, load_settings
 from open_storyline.mvp.api import create_mvp_router
+from open_storyline.mvp.audit import AuditService
 from open_storyline.mvp.auth import (
     CSRF_COOKIE,
     SAFE_METHODS,
@@ -26,6 +28,7 @@ from open_storyline.mvp.auth import (
 )
 from open_storyline.mvp.database import Database
 from open_storyline.mvp.jobs import JobManager, JobStore
+from open_storyline.mvp.observability import emit_event, finish_request, start_request
 from open_storyline.mvp.pipeline import MVPJobProcessor
 
 
@@ -36,12 +39,15 @@ def create_app() -> FastAPI:
         database = Database.from_env()
         auth_service = AuthService(database, AuthSettings.from_env())
         store = JobStore(Path(config.project.outputs_dir) / "mvp_jobs", database)
+        audit_service = AuditService(store)
+        store.attach_audit(audit_service)
         manager = JobManager(store, MVPJobProcessor(config))
         app.state.config = config
         app.state.database = database
         app.state.auth_service = auth_service
         app.state.mvp_jobs = store
         app.state.mvp_manager = manager
+        app.state.audit_service = audit_service
         try:
             await manager.start()
             yield
@@ -56,6 +62,33 @@ def create_app() -> FastAPI:
     )
     app.state.database = None
     app.state.auth_service = None
+
+    @app.middleware("http")
+    async def request_observability(request: Request, call_next):
+        request_id, token = start_request(request.headers.get("x-request-id"))
+        started = time.monotonic()
+        try:
+            response = await call_next(request)
+        except Exception:
+            emit_event(
+                "http_request",
+                duration_ms=int((time.monotonic() - started) * 1000),
+                outcome="error",
+                error_code="UNHANDLED_REQUEST_ERROR",
+                method=request.method,
+            )
+            raise
+        else:
+            response.headers["X-Request-ID"] = request_id
+            emit_event(
+                "http_request",
+                duration_ms=int((time.monotonic() - started) * 1000),
+                outcome=str(response.status_code),
+                method=request.method,
+            )
+            return response
+        finally:
+            finish_request(token)
 
     @app.middleware("http")
     async def require_browser_session(request: Request, call_next):
