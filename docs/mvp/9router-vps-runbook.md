@@ -21,6 +21,17 @@ Any future systemd or supervisor migration requires a separate maintenance
 window. Never add provider keys, bearer tokens, prompts, or transcripts to
 process arguments or captured logs.
 
+## Provider Ownership
+
+| Layer | Model | Connection |
+| --- | --- | --- |
+| Text and vision | `cx/gpt-5.6-sol` | Codex OAuth |
+| Image generation | `cx/gpt-5.5-image` | Codex OAuth |
+| Speech-to-text | `mistral/voxtral-mini-2602` | Mistral API key |
+
+There are no fallbacks. FireRed stores only the 9Router endpoint URL/key.
+Provider access/refresh tokens and the Mistral key remain in 9Router.
+
 ## Database Backup And Restore
 
 Backups are root-only under `/var/backups/9router/`. Create a consistent SQLite
@@ -57,6 +68,24 @@ NINEROUTER_URL=http://127.0.0.1:32028 python scripts/qa_ninerouter.py
 The `/v1` endpoints still require `NINEROUTER_KEY`. The dashboard/API port is
 not intended to be a public unauthenticated service.
 
+Run the strict redacted gate from the repository:
+
+```bash
+set -a
+source .env.kamal
+set +a
+python scripts/qa_ninerouter.py --strict-models
+```
+
+Use `--live-inference --stt-audio /tmp/non-private-speech.wav --timeout 240`
+only for an authorized synthetic canary. The command keeps image bytes in
+memory and reports no raw model response.
+
+For the container route, set `NINEROUTER_PROBE_IMAGE` to an image already on
+the VPS that contains `curl` or `wget`, then add `--container-host-probe`.
+The script uses `docker run --rm --pull=never`; it does not pull an image,
+restart 9Router, or change networking.
+
 ## Firewall And Health
 
 Review before and after UFW changes:
@@ -71,6 +100,36 @@ The current public HTTP workflow and UFW rules are intentionally preserved for
 the active inference session. Keep the UFW snapshot with the evidence; any
 future restriction requires an explicit maintenance window and a tested
 replacement access path.
+
+## Incident Triage
+
+- `auth`: verify the FireRed endpoint key reference and the router's endpoint
+  key policy. Rotate the endpoint key only in a planned window, update the
+  Kamal secret source, and rerun missing/invalid/valid auth probes.
+- `catalog_mismatch`: do not substitute another model. For Codex, verify the
+  exact text/image catalog and reconnect OAuth interactively only if the
+  selected connection has expired. For Mistral, confirm the key record is
+  active and that the pinned STT adapter is installed.
+- `rate_limited`: stop new QA jobs and wait for the provider reset. Mistral
+  Free-mode capacity is not an SLA and a dash in the monthly field is not
+  treated as unlimited usage.
+- `contract_invalid`: preserve only the summary JSON. Text/vision must return a
+  JSON object, image must decode as PNG/JPEG/WebP, and STT must contain
+  non-empty finite segments with `end > start`.
+- `transport`: compare host health, authenticated catalogs, SSH, remote Docker,
+  and the disposable container route. Do not change port `20128`, UFW, the
+  `admin` owner, or the manual launch command during active inference.
+
+The current `0.5.35` package has no Mistral STT registry entry. The offline
+patch is pinned to upstream commit `bc252ea80298d4879dc6b3c69585af1610d2c76f`
+under `patches/9router/`. Applying it requires a separate maintenance window,
+a source build, the root-only database backup, a recorded original package,
+and an approved restart. Never hand-edit the compiled global package.
+
+Because the service currently writes to its launch terminal, inspect only
+sanitized recent terminal output while it is running. If a future maintenance
+window introduces systemd, use `journalctl` with output redaction and preserve
+the manual launch command as the rollback until the new supervisor is proven.
 
 ## Incident Rollback
 

@@ -1,8 +1,9 @@
 # Plan: 9Router And Kamal VPS QA Readiness
 
 **Generated**: 2026-07-16
-**Status**: Execution in progress; Sprints 1-2 complete, Sprint 3 repository
-work complete with live Mistral activation blocked by the no-restart constraint
+**Status**: Execution in progress; Sprints 1-4 repository work complete, with
+live Mistral activation and the Sprint 5 canary blocked by the no-restart
+constraint
 **Estimated Complexity**: High
 
 ## Overview
@@ -602,12 +603,13 @@ runtime application behavior remains unchanged.
 
 ### Sprint 4 Gate
 
-- [ ] Focused and complete deterministic tests pass in the project environment.
-- [ ] Live preflight output is redacted and release-blocking failures are clear.
-- [ ] Provider and restore runbooks are usable by a second operator.
-- [ ] Exactly one Sprint 4 commit is created with the proposed message.
-- [ ] The rollback point is recorded.
-- [ ] Sprint 5 has not started before this gate completes.
+- [x] Focused and complete deterministic tests pass in the project environment.
+- [x] Live preflight output is redacted and release-blocking failures are clear.
+- [x] Provider and restore runbooks are usable by a second operator.
+- [x] Exactly one Sprint 4 commit is created with the proposed message.
+- [x] The rollback point is the QA script/tests/runbook commit; runtime provider
+  behavior remains unchanged.
+- [x] Sprint 5 has not started before this gate completes.
 
 ## Sprint 5: Canary Deployment And End-To-End QA
 

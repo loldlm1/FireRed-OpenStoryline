@@ -66,6 +66,30 @@ For an explicitly authorized synthetic provider canary, add
 `--stt-audio /path/to/sample.wav`. Image output is held in memory and is not
 written to the repository.
 
+```bash
+python scripts/qa_ninerouter.py \
+  --strict-models \
+  --live-inference \
+  --stt-audio /tmp/openstoryline-qa-speech.wav \
+  --timeout 240
+```
+
+To prove the VPS container-to-host route, select an existing disposable image
+that contains `curl` or `wget`. The preflight uses `--pull=never`, does not
+restart 9Router, and removes the probe container when it exits:
+
+```bash
+NINEROUTER_PROBE_IMAGE=your-existing-python-or-curl-image \
+python scripts/qa_ninerouter.py \
+  --strict-models \
+  --container-host-probe
+```
+
+Important categories are `auth`, `catalog_mismatch`, `rate_limited`,
+`upstream`, `contract_invalid`, `missing_fixture`, and `transport`. A skipped
+provider call is not itself green evidence; the corresponding strict catalog
+check remains release-blocking.
+
 ## 4. Useful read-only checks
 
 ```bash
