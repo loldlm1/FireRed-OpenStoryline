@@ -24,11 +24,16 @@ class RemoteASRNode(BaseNode):
     )
     input_schema = RemoteASRInput
 
+    def __init__(self, server_cfg) -> None:
+        super().__init__(server_cfg)
+        self.stt: MistralSTTClient | None = None
+
     async def default_process(self, node_state: NodeState, inputs: Dict[str, Any]) -> Any:
         return {"asr_infos": []}
 
     async def process(self, node_state: NodeState, inputs: Dict[str, Any]) -> Any:
-        client = MistralSTTClient.from_config(self.server_cfg.remote_asr)
+        if self.stt is None:
+            self.stt = MistralSTTClient.from_config(self.server_cfg.remote_asr)
         language = str(inputs.get("language") or self.server_cfg.remote_asr.language or "")
         asr_infos = []
         for clip in inputs["split_shots"].get("clips", []):
@@ -36,7 +41,7 @@ class RemoteASRNode(BaseNode):
                 continue
             with tempfile.TemporaryDirectory(prefix="openstoryline-stt-") as tmpdir:
                 audio_path = extract_audio_for_stt(clip["path"], Path(tmpdir) / "audio.mp3")
-                result = await client.transcribe(audio_path, language=language)
+                result = await self.stt.transcribe(audio_path, language=language)
             asr_infos.append({
                 "clip_id": clip["clip_id"],
                 "path": clip["path"],

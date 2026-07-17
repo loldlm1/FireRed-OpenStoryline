@@ -25,6 +25,11 @@ package change, adapter, restart, new model entry, or Mistral connection.
 ordered comma-separated keys. Values are trimmed, duplicates are collapsed,
 and the runtime bounds the key count and provider attempts. Multiple keys may
 still share one organization quota, so they are not assumed to add capacity.
+HTTP `429` responses cool only the affected ordinal according to
+`Retry-After`; `401`/`402`/`403` and entitlement `404` disable that ordinal for
+the process. Bad media and invalid timestamp contracts stop immediately
+instead of repeating the same request across every key. Initial deployment
+uses one application container because cooldown state is process-local.
 
 The endpoint and model are fixed in code:
 
