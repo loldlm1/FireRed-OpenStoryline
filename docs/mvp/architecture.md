@@ -26,15 +26,18 @@ isolated so upstream behavior can continue to be merged into this fork.
 
 ## Data flow
 
-1. The browser uploads a source video and an editing prompt.
-2. The server persists a durable job and extracts compressed mono audio with
+1. The browser authenticates with the single project password. The server
+   returns an opaque, revocable session cookie and a separate CSRF cookie;
+   neither the password nor a reusable API token is stored by JavaScript.
+2. The authenticated browser uploads a source video and an editing prompt.
+3. The server persists a durable job and extracts compressed mono audio with
    FFmpeg.
-3. Direct Mistral Voxtral transcribes the audio with segment timestamps.
-4. `cx/gpt-5.6-sol` receives the transcript and sampled frames through
+4. Direct Mistral Voxtral transcribes the audio with segment timestamps.
+5. `cx/gpt-5.6-sol` receives the transcript and sampled frames through
    9Router and returns a structured clip plan.
-5. The server validates duration, bounds, overlap, and output count.
-6. FFmpeg renders vertical clips and subtitles on CPU.
-7. The browser downloads individual clips, the manifest, or a ZIP bundle.
+6. The server validates duration, bounds, overlap, and output count.
+7. FFmpeg renders vertical clips and subtitles on CPU.
+8. The browser downloads individual clips, the manifest, or a ZIP bundle.
 
 ## Default remote services
 
@@ -62,6 +65,23 @@ and the development venv never enter the remote-image build context.
 
 ## Persistence and security
 
+- PostgreSQL 17 runs as a private Kamal accessory on the same VPS. It is the
+  application database for authentication and future durable application
+  state; the existing job directories remain authoritative until their
+  coordinated PostgreSQL migration is complete.
+- `OPENSTORYLINE_WEB_PASSWORD_HASH` contains an Argon2id hash generated with
+  `./bin/kamal-mvp auth hash-password`. The raw password is never configured,
+  persisted, logged, or passed in a command argument.
+- Browser sessions have a 12-hour idle limit and a seven-day absolute limit.
+  Only keyed digests of the session token, CSRF token, client address, and user
+  agent are stored. Logging in rotates an existing browser session; logout and
+  server-side expiry revoke it.
+- State-changing `/api/mvp/**` requests require the session cookie, a matching
+  CSRF header/cookie, and the configured same origin. Bearer and `X-API-Key`
+  authentication are intentionally unsupported.
+- PostgreSQL rate-limit buckets protect failed password submissions only, with
+  per-client and global minute/day bounds. Successful logins and authenticated
+  API/job requests do not consume application quotas.
 - Every job owns a directory under `outputs/mvp_jobs/<job_id>`.
 - State changes are written atomically to `job.json`.
 - Inputs and outputs are served only through validated job-scoped paths.
@@ -72,6 +92,10 @@ and the development venv never enter the remote-image build context.
 - Failed jobs expose a sanitized `failure.json` with the stage and selected
   model attempt; artifacts can also be downloaded as one ZIP bundle.
 - Kamal deploys the remote-only image, proxy, and persistent output volume.
+- Production password login requires the domain/HTTPS path. Direct HTTP mode
+  requires `OPENSTORYLINE_ALLOW_INSECURE_HTTP=true` and is limited to a private
+  network, VPN, or controlled local test because the password is otherwise
+  exposed in transit.
 - In IP/custom-port mode the web container publishes `KAMAL_HTTP_PORT`
   directly and does not mutate a pre-existing shared `kamal-proxy` on the VPS.
   Domain/HTTPS mode keeps the normal Kamal proxy path and requires a separate
@@ -80,3 +104,9 @@ and the development venv never enter the remote-image build context.
   only the current FireRed web container after the candidate image is ready.
   This creates a short application-only maintenance window because two
   containers cannot bind the same host port; 9Router remains untouched.
+
+Password rotation is an application-wide sign-out: generate a new Argon2id
+hash, update the ignored deploy environment, deploy/restart the application,
+and verify that old browser sessions are rejected. For a Sprint 2 rollback,
+revert application and deployment configuration together and use the privately
+retained legacy web token only with the matching older release.
