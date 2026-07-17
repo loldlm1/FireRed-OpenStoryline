@@ -26,16 +26,26 @@ require_exact_value() {
     || fail "$name must be $expected for the approved no-fallback release"
 }
 
+resolve_python() {
+  local candidate="${PYTHON_BIN:-$ROOT_DIR/.venv/bin/python}"
+  if [[ -x "$candidate" ]]; then
+    printf '%s\n' "$candidate"
+    return
+  fi
+  command -v python3 >/dev/null 2>&1 || fail "Python 3 is required for provider release gates"
+  python3 -c 'import httpx' >/dev/null 2>&1 \
+    || fail "httpx is required; install requirements-remote.txt or set PYTHON_BIN"
+  command -v python3
+}
+
 run_ninerouter_release_gate() {
   local command_name="$1"
   local timeout="${NINEROUTER_QA_TIMEOUT:-240}"
-  local python_bin="${PYTHON_BIN:-python3}"
+  local python_bin
+  python_bin="$(resolve_python)"
 
   [[ "$timeout" =~ ^[1-9][0-9]*$ ]] \
     || fail "NINEROUTER_QA_TIMEOUT must be a positive integer"
-  command -v "$python_bin" >/dev/null 2>&1 \
-    || fail "$python_bin is required to run the 9Router release gate"
-
   require_exact_value OPENSTORYLINE_LLM_MODEL "cx/gpt-5.6-sol"
   require_exact_value OPENSTORYLINE_IMAGE_MODELS "cx/gpt-5.5-image"
 
@@ -45,6 +55,28 @@ run_ninerouter_release_gate() {
     --live-inference \
     --timeout "$timeout" \
     || fail "9Router release gate failed; kamal $command_name was not started"
+}
+
+run_mistral_release_gate() {
+  local command_name="$1"
+  local audio="${MISTRAL_QA_STT_AUDIO:-}"
+  local timeout="${MISTRAL_QA_TIMEOUT:-240}"
+  local python_bin
+  python_bin="$(resolve_python)"
+
+  [[ -n "$audio" ]] \
+    || fail "MISTRAL_QA_STT_AUDIO is required before kamal $command_name"
+  [[ -f "$audio" ]] \
+    || fail "MISTRAL_QA_STT_AUDIO must point to a non-private speech fixture"
+  [[ "$timeout" =~ ^[1-9][0-9]*$ ]] \
+    || fail "MISTRAL_QA_TIMEOUT must be a positive integer"
+
+  printf 'Running mandatory redacted direct-Mistral STT gate before kamal %s...\n' "$command_name"
+  "$python_bin" "$ROOT_DIR/scripts/qa_mistral_stt.py" \
+    --audio "$audio" \
+    --timeout "$timeout" \
+    --each-key \
+    || fail "direct-Mistral STT gate failed; kamal $command_name was not started"
 }
 
 [[ -f "$ENV_FILE" ]] || fail "copy .env.kamal.example to .env.kamal and edit it first"
@@ -96,6 +128,7 @@ for arg in "$@"; do
 done
 if [[ -n "$release_command" ]]; then
   run_ninerouter_release_gate "$release_command"
+  run_mistral_release_gate "$release_command"
 fi
 
 mkdir -p "$ROOT_DIR/.kamal"

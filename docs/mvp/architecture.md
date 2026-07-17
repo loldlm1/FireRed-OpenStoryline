@@ -72,3 +72,11 @@ and the development venv never enter the remote-image build context.
 - Failed jobs expose a sanitized `failure.json` with the stage and selected
   model attempt; artifacts can also be downloaded as one ZIP bundle.
 - Kamal deploys the remote-only image, proxy, and persistent output volume.
+- In IP/custom-port mode the web container publishes `KAMAL_HTTP_PORT`
+  directly and does not mutate a pre-existing shared `kamal-proxy` on the VPS.
+  Domain/HTTPS mode keeps the normal Kamal proxy path and requires a separate
+  maintenance review on a host already serving other Kamal applications.
+- Direct-port deploys and rollbacks use a tracked `pre-deploy` hook to stop
+  only the current FireRed web container after the candidate image is ready.
+  This creates a short application-only maintenance window because two
+  containers cannot bind the same host port; 9Router remains untouched.

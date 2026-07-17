@@ -19,6 +19,12 @@ SPEC.loader.exec_module(qa_ninerouter)
 
 
 class NineRouterPreflightTests(unittest.TestCase):
+    def test_script_has_no_mistral_or_stt_boundary(self):
+        source = (ROOT / "scripts" / "qa_ninerouter.py").read_text(encoding="utf-8")
+        self.assertNotIn("MISTRAL_API_KEYS", source)
+        self.assertNotIn("/v1/models/stt", source)
+        self.assertNotIn("stt_contract", source)
+
     def test_normalizes_root_and_v1_urls(self):
         self.assertEqual(
             qa_ninerouter.normalize_base_url("https://router.test/"),

@@ -2,8 +2,9 @@
 
 **Generated**: 2026-07-16
 **Updated**: 2026-07-17
-**Status**: Repository execution is complete through Sprint 7. Sprint 8 will
-split the live release gates and resume the VPS canary.
+**Status**: Repository execution is complete through Sprint 8. The remote MVP
+is healthy on port `20129`; QA from the current Netherlands VPN still requires
+an SSH tunnel or an off-VPN route because that path does not reach the VPS.
 **Estimated Complexity**: High
 
 ## Overview
@@ -1106,14 +1107,27 @@ previous paused image, retain the output volume, and keep 9Router untouched.
 
 ### Sprint 8 Gate
 
-- [ ] 9Router Codex and direct-Mistral gates are independently green.
-- [ ] Every configured Mistral key has a redacted validation result and at
+- [x] 9Router Codex and direct-Mistral gates are independently green.
+- [x] Every configured Mistral key has a redacted validation result and at
   least one key passes the full timestamp contract.
-- [ ] The end-to-end canary, restart recovery, artifact security, and rollback
+- [x] The end-to-end canary, restart recovery, artifact security, and rollback
   checks pass without changing 9Router.
-- [ ] No secret, transcript, or private media appears in evidence.
-- [ ] Exactly one Sprint 8 commit is created with the proposed message.
-- [ ] The personal-server rollout opens only after this gate passes.
+- [x] No secret, transcript, or private media appears in evidence.
+- [x] Exactly one Sprint 8 commit is created with the proposed message.
+- [x] The personal-server rollout opens only after this gate passes.
+
+Execution evidence is intentionally redacted. The live gates returned HTTP
+`200` for `cx/gpt-5.6-sol` text and vision, decodable bytes for
+`cx/gpt-5.5-image`, and timestamped `voxtral-mini-2602` STT through the single
+configured key ordinal. A 30-second synthetic video completed one validated
+18-second clip with transcript, video, subtitles, manifest, bundle download,
+and traversal rejection. The job survived an application restart and a
+rollback to a retained candidate, then the latest candidate was restored.
+Direct-port deploys use a stop-first hook so only the FireRed web container has
+a short maintenance window; the existing 9Router process and port `20128`
+remain unchanged. UFW and the host listener are open on `20129`; the VPS can
+reach its public endpoint, while the current VPN route must be bypassed or
+corrected for browser QA.
 
 ## Testing Strategy
 
