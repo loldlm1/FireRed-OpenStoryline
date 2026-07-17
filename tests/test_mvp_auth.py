@@ -169,10 +169,13 @@ class PasswordAndSessionTests(unittest.IsolatedAsyncioTestCase):
         self.database = Database(self.database_url)
         async with self.database.engine.begin() as connection:
             await connection.execute(
-                text("TRUNCATE auth_sessions, login_attempt_buckets")
+                text(
+                    "TRUNCATE audit_reviews, audit_documents, artifacts, job_events, "
+                    "video_jobs, editing_sessions, auth_sessions, login_attempt_buckets"
+                )
             )
         self.temporary_directory = TemporaryDirectory()
-        self.store = JobStore(self.temporary_directory.name)
+        self.store = JobStore(self.temporary_directory.name, self.database)
         self.manager = JobManager(self.store)
 
     async def asyncTearDown(self):
@@ -274,7 +277,7 @@ class PasswordAndSessionTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(missing.status_code, 403)
         self.assertEqual(wrong_origin.status_code, 403)
-        self.assertEqual(passed_middleware.status_code, 422)
+        self.assertEqual(passed_middleware.status_code, 409)
         self.assertEqual(logout.status_code, 200)
         self.assertEqual(after_logout.status_code, 401)
         self.assertEqual(bearer.status_code, 401)
@@ -371,13 +374,14 @@ class PasswordAndSessionTests(unittest.IsolatedAsyncioTestCase):
         ) as client:
             self.assertEqual((await self._login(client)).status_code, 200)
             csrf_token = client.cookies.get(CSRF_COOKIE)
+            editing_session = await self.store.create_session("quota regression")
             reads = [
                 await client.get(f"/api/mvp/jobs/{index:032x}")
                 for index in range(8)
             ]
             jobs = [
                 await client.post(
-                    "/api/mvp/jobs",
+                    f"/api/mvp/sessions/{editing_session['id']}/jobs",
                     headers={
                         "Origin": "https://test",
                         "X-CSRF-Token": csrf_token,

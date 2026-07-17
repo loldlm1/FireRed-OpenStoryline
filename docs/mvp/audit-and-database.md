@@ -27,6 +27,14 @@ password hashes, session cookies, CSRF values, addresses, and user-agent text
 must not enter application logs or audit documents. Authenticated API and job
 activity has no RPM/RPD quota.
 
+Editing sessions, video jobs, artifacts, and ordered job events are also
+PostgreSQL-authoritative. Media remains under `outputs/mvp_jobs/<job_id>`, while
+artifact rows retain traversal-safe relative paths, hashes, availability, and
+retention timestamps. Each committed job transition writes a compatibility
+`job.json` snapshot after the database transaction. Keep those snapshots while
+Sprint 2 rollback remains possible, but never treat them as the live source of
+truth.
+
 Create or inspect the schema with:
 
 ```bash
@@ -76,6 +84,22 @@ against loss of that VPS or disk.
 A real restore is deliberately not exposed as an automatic wrapper command.
 It must be performed during a maintenance window with an explicit empty-target
 check and operator confirmation. Never overwrite a running database implicitly.
+
+Before the PostgreSQL job cutover, create and verify the single dump and retain
+the current filesystem job tree. Import legacy snapshots in two explicit steps:
+
+```bash
+PYTHONPATH=src python -m open_storyline.mvp.admin import-legacy-jobs \
+  --root outputs/mvp_jobs --dry-run
+PYTHONPATH=src python -m open_storyline.mvp.admin import-legacy-jobs \
+  --root outputs/mvp_jobs --apply
+```
+
+The command reports counts only. Re-running `--apply` is idempotent, does not
+move or rewrite media, and groups jobs under one `Imported legacy jobs` session.
+Corrupt job JSON, invalid IDs, traversal-like artifact names, and missing files
+are skipped or recorded without trusting their content. Sprint 4 parses the
+registered JSON/SRT evidence into complete audit documents.
 
 ## Password and session operations
 

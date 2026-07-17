@@ -32,7 +32,9 @@ internal implementation details.
 Browser/API client
     -> `mvp_fastapi.py` password login, PostgreSQL sessions, and CSRF
     -> failed-password-only PostgreSQL throttling
-    -> durable filesystem job store and queue
+    -> PostgreSQL editing sessions, jobs, artifacts, and ordered events
+    -> one advisory-locked and execution-fenced in-process worker
+    -> job-scoped filesystem media and rollback snapshots
     -> direct Mistral Voxtral STT
     -> 9Router clip planning from transcript + sampled frames
     -> validated short candidates
@@ -77,10 +79,12 @@ remain available independently.
 ### State and filesystem boundaries
 
 - Full-agent sessions and artifacts are scoped by `session_id`.
-- Remote MVP state is scoped by validated job IDs and job-owned directories.
+- Remote MVP application state is scoped by PostgreSQL editing-session and job
+  IDs. Media paths remain job-owned and filesystem-validated.
 - Resolved paths must stay under their expected session/job root.
-- Job state is durable and written atomically; queued/running jobs recover after
-  restart.
+- Job state transitions and events commit transactionally in PostgreSQL.
+  `job.json` is a derived rollback snapshot; queued/running jobs recover only
+  under the advisory worker lock.
 - Runtime outputs, downloaded models, and resources are ignored because they can
   be large or private. Tests should use temporary directories and synthetic data.
 
@@ -92,6 +96,9 @@ remain available independently.
 - Bearer tokens, `X-API-Key`, browser token storage, authenticated API quotas,
   and job-creation quotas are intentionally unsupported. Persistent per-client
   and global counters apply only to failed password submissions.
+- New jobs use `POST /api/mvp/sessions/{session_id}/jobs`. The retired unscoped
+  `POST /api/mvp/jobs` returns `SESSION_REQUIRED`; polling and artifact routes
+  remain job-scoped for compatibility.
 - `/health` describes the runtime profile; `/up` is the Kamal proxy health check.
 - The original web application uses session and WebSocket message contracts that
   are consumed by `.claude/skills/openstoryline-use/scripts/bridge_openstoryline.py`.
@@ -149,9 +156,9 @@ part of a feature.
   the documented production path.
 - `.env.kamal.example` documents deploy-machine variables. `.kamal/secrets`
   stores references and is ignored. Never commit resolved secret values.
-- `outputs/` is mounted persistently in production because it contains current
-  job state, inputs, and generated artifacts. PostgreSQL stores application
-  authentication state and is the migration target for durable job/audit data.
+- `outputs/` is mounted persistently in production because it contains inputs,
+  work files, generated artifacts, and rollback snapshots. PostgreSQL is
+  authoritative for authentication, editing sessions, jobs, and audit metadata.
 - A release is not verified by a successful build alone. It also needs working
   `/up` and `/health` checks, container/log review, persistent volume checks,
   and a known rollback command.

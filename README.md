@@ -48,8 +48,9 @@
 This fork includes an isolated web service that turns a long source video into
 multiple validated 18–25 second vertical clips. All model inference is remote
 through 9Router; local work is restricted to deterministic FFmpeg processing
-on CPU. It includes durable jobs, browser upload/download, direct Voxtral STT,
-GPT‑5.6 Sol planning, and an optional no-model ComfyUI-FFMPEGA pass.
+on CPU. It includes PostgreSQL-backed editing sessions and jobs, browser
+upload/download, direct Voxtral STT, GPT‑5.6 Sol planning, and an optional
+no-model ComfyUI-FFMPEGA pass.
 Production deployment uses Kamal with automatic server bootstrap, IP:port or
 domain/HTTPS routing, password login, PostgreSQL-backed browser sessions, and
 failed-login-only persistent throttling.

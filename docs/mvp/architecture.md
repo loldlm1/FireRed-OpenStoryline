@@ -30,8 +30,9 @@ isolated so upstream behavior can continue to be merged into this fork.
    returns an opaque, revocable session cookie and a separate CSRF cookie;
    neither the password nor a reusable API token is stored by JavaScript.
 2. The authenticated browser uploads a source video and an editing prompt.
-3. The server persists a durable job and extracts compressed mono audio with
-   FFmpeg.
+3. The server creates the job inside a resumable editing session in PostgreSQL,
+   writes a rollback-compatible `job.json` snapshot, and extracts compressed
+   mono audio with FFmpeg.
 4. Direct Mistral Voxtral transcribes the audio with segment timestamps.
 5. `cx/gpt-5.6-sol` receives the transcript and sampled frames through
    9Router and returns a structured clip plan.
@@ -65,10 +66,9 @@ and the development venv never enter the remote-image build context.
 
 ## Persistence and security
 
-- PostgreSQL 17 runs as a private Kamal accessory on the same VPS. It is the
-  application database for authentication and future durable application
-  state; the existing job directories remain authoritative until their
-  coordinated PostgreSQL migration is complete.
+- PostgreSQL 17 runs as a private Kamal accessory on the same VPS. It is
+  authoritative for browser sessions, editing sessions, job state, progress,
+  errors, artifacts, and ordered job events.
 - `OPENSTORYLINE_WEB_PASSWORD_HASH` contains an Argon2id hash generated with
   `./bin/kamal-mvp auth hash-password`. The raw password is never configured,
   persisted, logged, or passed in a command argument.
@@ -82,13 +82,29 @@ and the development venv never enter the remote-image build context.
 - PostgreSQL rate-limit buckets protect failed password submissions only, with
   per-client and global minute/day bounds. Successful logins and authenticated
   API/job requests do not consume application quotas.
-- Every job owns a directory under `outputs/mvp_jobs/<job_id>`.
-- State changes are written atomically to `job.json`.
+- Every job belongs to exactly one lightweight editing session. Session and job
+  lists use bounded cursor pagination; soft-deleted or expired sessions fail
+  closed.
+- Every job still owns a directory under `outputs/mvp_jobs/<job_id>` for input,
+  work files, and generated media. PostgreSQL stores only validated relative
+  artifact paths. It reconstructs current job responses without reading
+  `job.json`.
+- Every committed transition updates the PostgreSQL job row and appends a
+  sanitized ordered event in the same transaction. A derived atomic `job.json`
+  snapshot remains during the rollback window; snapshot failure is recorded as
+  an event and never makes the file authoritative again.
 - Inputs and outputs are served only through validated job-scoped paths.
 - The 9Router endpoint key and direct `MISTRAL_API_KEYS` key ring are delivered
   through Kamal secrets and never written to job state, logs, manifests, or Git.
 - Error bodies are truncated and sanitized before persistence.
-- Interrupted queued or running jobs are recovered when the process restarts.
+- One in-process worker holds PostgreSQL coordinator and execution advisory
+  locks. Overlapping Kamal web containers may serve requests, but only the lock
+  holder polls and processes queued jobs. If coordinator leadership is lost
+  during an active attempt, the execution fence remains held until that attempt
+  drains; a standby cannot intentionally overlap or recover the same job.
+- Interrupted queued or running jobs are recovered in bounded batches with a
+  recovery count and event. `OPENSTORYLINE_MAX_ACTIVE_JOBS` is a queue-capacity
+  bound, not a user or RPM/RPD quota.
 - Failed jobs expose a sanitized `failure.json` with the stage and selected
   model attempt; artifacts can also be downloaded as one ZIP bundle.
 - Kamal deploys the remote-only image, proxy, and persistent output volume.
@@ -110,3 +126,18 @@ hash, update the ignored deploy environment, deploy/restart the application,
 and verify that old browser sessions are rejected. For a Sprint 2 rollback,
 revert application and deployment configuration together and use the privately
 retained legacy web token only with the matching older release.
+
+Existing filesystem jobs can be inspected or imported idempotently without
+moving media:
+
+```bash
+PYTHONPATH=src python -m open_storyline.mvp.admin import-legacy-jobs \
+  --root outputs/mvp_jobs --dry-run
+PYTHONPATH=src python -m open_storyline.mvp.admin import-legacy-jobs \
+  --root outputs/mvp_jobs --apply
+```
+
+The importer uses one `Imported legacy jobs` session by default, re-sanitizes
+state, validates every job/artifact path, hashes existing artifacts, records
+missing evidence, and skips corrupt or unsafe snapshots. It never imports the
+retired SQLite limiter.

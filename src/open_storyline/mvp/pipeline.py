@@ -27,18 +27,18 @@ class MVPJobProcessor:
         self.stt = MistralSTTClient.from_config(config.remote_asr)
 
     async def __call__(self, job_id: str, store: JobStore) -> dict[str, Any]:
-        state = store.load(job_id)
-        source = store.source_path(job_id)
+        state = await store.load(job_id)
+        source = await store.source_path(job_id)
         work_dir = store.work_dir(job_id)
         output_dir = store.output_dir(job_id)
 
         media = await asyncio.to_thread(probe_media, source)
         if not media.has_audio:
             raise RemoteSTTError("MEDIA_HAS_NO_AUDIO", "source video must contain an audio stream")
-        store.update(job_id, progress=0.18, stage="extracting_audio")
+        await store.update(job_id, progress=0.18, stage="extracting_audio")
         audio = await asyncio.to_thread(extract_audio_for_stt, source, work_dir / "audio.mp3")
 
-        store.update(job_id, progress=0.28, stage="remote_transcription")
+        await store.update(job_id, progress=0.28, stage="remote_transcription")
         transcript = await self.stt.transcribe(audio, language=self.config.remote_asr.language)
         transcript_path = output_dir / "transcript.json"
         transcript_path.write_text(json.dumps({
@@ -47,16 +47,16 @@ class MVPJobProcessor:
             "segments": transcript.segments,
             "attempts": [attempt.to_dict() for attempt in transcript.attempts],
         }, ensure_ascii=False, indent=2), encoding="utf-8")
-        store.register_artifact(job_id, transcript_path, kind="transcript")
+        await store.register_artifact(job_id, transcript_path, kind="transcript")
 
-        store.update(job_id, progress=0.48, stage="sampling_frames")
+        await store.update(job_id, progress=0.48, stage="sampling_frames")
         frames = await asyncio.to_thread(
             extract_frame_data_urls,
             source,
             duration_ms=media.duration_ms,
             count=self.config.mvp.frame_count,
         )
-        store.update(job_id, progress=0.58, stage="remote_planning")
+        await store.update(job_id, progress=0.58, stage="remote_planning")
         planner = ShortsPlanner(NineRouterClient.from_config(self.config.ninerouter))
         plan = await planner.plan(
             editing_prompt=state["prompt"],
@@ -67,7 +67,7 @@ class MVPJobProcessor:
             frame_data_urls=frames,
         )
 
-        store.update(job_id, progress=0.68, stage="rendering")
+        await store.update(job_id, progress=0.68, stage="rendering")
         renderer = CPUShortRenderer(RenderSettings(
             width=self.config.mvp.render_width,
             height=self.config.mvp.render_height,
@@ -86,7 +86,7 @@ class MVPJobProcessor:
         final_outputs = []
         ffmpega = None
         if ffmpega_enabled(self.config.ffmpega):
-            store.update(job_id, progress=0.88, stage="planning_effects")
+            await store.update(job_id, progress=0.88, stage="planning_effects")
             effects_plan = await EffectsPlanner(
                 NineRouterClient.from_config(self.config.ninerouter)
             ).plan(state["prompt"])
@@ -102,9 +102,9 @@ class MVPJobProcessor:
                     plan=effects_plan,
                 )
                 item.video_path.unlink(missing_ok=True)
-            store.register_artifact(job_id, final_video, kind="video")
+            await store.register_artifact(job_id, final_video, kind="video")
             if item.subtitle_path is not None:
-                store.register_artifact(job_id, item.subtitle_path, kind="subtitles")
+                await store.register_artifact(job_id, item.subtitle_path, kind="subtitles")
             final_outputs.append({
                 "video": final_video.name,
                 "subtitles": item.subtitle_path.name if item.subtitle_path else None,
@@ -128,7 +128,7 @@ class MVPJobProcessor:
             "effects": effects_plan.to_dict() if effects_plan is not None else {"effects": []},
             "outputs": final_outputs,
         }, ensure_ascii=False, indent=2), encoding="utf-8")
-        store.register_artifact(job_id, manifest_path, kind="manifest")
+        await store.register_artifact(job_id, manifest_path, kind="manifest")
         return {
             "stage": "completed",
             "stt_model": transcript.model,

@@ -162,8 +162,10 @@ construye `Dockerfile.remote`, inicia el accesorio privado PostgreSQL, despliega
 el contenedor, monta `/var/lib/openstoryline/outputs` y arranca el proxy. Las
 migraciones son explícitas: ejecuta `./bin/kamal-mvp db migrate` durante el
 primer rollout y antes de arrancar una versión que requiera una revisión nueva.
-Las sesiones, los límites de login y la base sobreviven a redeploys; los
-trabajos y videos permanecen en el volumen de outputs durante esta etapa.
+Las sesiones de autenticación, las sesiones de edición, los límites de login,
+los trabajos y sus eventos sobreviven a redeploys en PostgreSQL. Los videos y
+los snapshots `job.json` permanecen en el volumen de outputs; PostgreSQL es la
+fuente autoritativa para el estado actual del trabajo.
 
 Los siguientes cambios se publican con:
 
@@ -186,9 +188,12 @@ usa `./bin/kamal-mvp proxy reboot` al cambiar los puertos del proxy.
 ## 5. Entra con la contraseña y usa la aplicación
 
 Abre la URL. La vista inicial muestra sólo el formulario de contraseña; el
-formulario de video aparece después de autenticar. La página permite ver
-progreso y descargar cada artefacto o un ZIP. Cerrar sesión revoca la sesión en
-PostgreSQL y borra las cookies del navegador.
+formulario de video aparece después de autenticar. Crea una sesión de edición o
+retoma una existente desde el selector. Cada sesión agrupa varios trabajos y la
+URL conserva el identificador para restaurarla después de refrescar o volver a
+iniciar sesión. La página permite ver trabajos recientes, progreso y descargar
+cada artefacto o un ZIP. Cerrar sesión revoca la sesión de autenticación en
+PostgreSQL y borra las cookies del navegador; no elimina la sesión de edición.
 
 En dominio/HTTPS, la sesión usa una cookie opaca `HttpOnly`, `Secure` y
 `SameSite`, junto con un token CSRF separado para operaciones que modifican
@@ -212,6 +217,16 @@ Un exceso devuelve HTTP 429 con `Retry-After`; una contraseña incorrecta
 devuelve un 401 genérico. Logins correctos, consultas autenticadas, descargas y
 nuevos trabajos no consumen una cuota RPM/RPD. Ajusta los cuatro valores
 `OPENSTORYLINE_LOGIN_*` en `.env.kamal` si hace falta.
+
+`OPENSTORYLINE_MAX_ACTIVE_JOBS` limita la cantidad total de uploads y trabajos
+pendientes o activos para proteger la capacidad del VPS. Es backpressure
+operacional, no una cuota por usuario ni una ventana RPM/RPD. Un exceso devuelve
+`JOB_QUEUE_FULL`; espera a que termine un trabajo antes de reintentar.
+
+Los trabajos nuevos se crean en
+`POST /api/mvp/sessions/{session_id}/jobs`. El antiguo
+`POST /api/mvp/jobs` devuelve `SESSION_REQUIRED` de forma intencional. Las rutas
+de consulta, artefactos y ZIP continúan usando el identificador del trabajo.
 
 Para rotar la contraseña, genera un hash nuevo, reemplaza
 `OPENSTORYLINE_WEB_PASSWORD_HASH` en el archivo ignorado y despliega/reinicia.
