@@ -1,7 +1,8 @@
 # Plan: 9Router And Kamal VPS QA Readiness
 
 **Generated**: 2026-07-16
-**Status**: Execution in progress; Sprints 1-2 complete
+**Status**: Execution in progress; Sprints 1-2 complete, Sprint 3 repository
+work complete with live Mistral activation blocked by the no-restart constraint
 **Estimated Complexity**: High
 
 ## Overview
@@ -36,9 +37,8 @@ FireRed job state, or logs.
 - **In scope**:
   - Make Kamal configuration parse and provide a network preflight that proves
     the deploy machine, VPS, Docker, and 9Router paths are reachable.
-  - Run 9Router as a supervised service instead of from an XFCE/RDP terminal.
-  - Protect 9Router SQLite data and endpoint access while preserving the
-    personal HTTP workflow.
+  - Protect and observe the existing manually launched 9Router process without
+    changing its user, port, command, firewall, or supervisor.
   - Reconcile the three required model contracts with live 9Router catalogs:
     Codex text/vision, Codex image generation, and Mistral STT.
   - Add a redacted modality preflight and regression coverage for the exact
@@ -371,7 +371,8 @@ service rollback is performed because the live process is not replaced.
 FireRed inference layer and make all three contracts available through 9Router.
 
 **Dependencies**: Sprint 1 and Sprint 2 gates. Remote 9Router package/service
-changes require explicit execution authorization and the Sprint 2 backup.
+changes require a separate maintenance window and the Sprint 2 backup; they
+are not allowed while this process supplies Codex inference.
 
 **Tracked scope**: `config.toml`, `.env.kamal.example`, `.env.mvp.example`,
 `config/deploy.yml`, `src/open_storyline/config.py`, provider docs, and tests.
@@ -453,7 +454,9 @@ and configuration if the Mistral adapter or any Codex contract regresses.
 - **Dependencies**: Sprint 2 backup/supervision and the existing Mistral
   Free-mode connection. A service restart requires explicit authorization.
 - **Acceptance criteria**:
-  - `/v1/models/stt` advertises only the selected Mistral model for FireRed.
+  - The pinned offline adapter publishes only the selected Mistral model for
+    FireRed; live `/v1/models/stt` activation remains blocked until the
+    maintenance window.
   - A synthetic audio request returns HTTP `200`, non-empty text, and finite
     segments with `end > start`.
   - The FireRed remote STT client accepts the response without a code-side
@@ -461,12 +464,13 @@ and configuration if the Mistral adapter or any Codex contract regresses.
   - 9Router logs and FireRed failure state contain no Mistral key or raw private
     transcript.
 - **Validation**:
-  - Authenticated catalog probe before and after the versioned adapter change.
-  - One explicitly authorized synthetic `curl` request through 9Router using
-    the same multipart fields FireRed sends.
+  - Authenticated catalog probe records the current pre-activation mismatch.
+  - Apply the versioned patch to a clean upstream checkout and run its focused
+    multipart/timestamp test without changing the installed package.
   - `PYTHONPATH=src python tests/test_remote_stt.py` with Mistral timestamp and
     missing-segment fixtures.
-  - Restart 9Router and repeat the catalog/STT probe to prove persistence.
+  - After a separately approved maintenance window, restart 9Router and repeat
+    the catalog/STT probe to prove persistence.
 - **Rollback**: Restore the recorded 9Router package/service and SQLite backup,
   remove the Mistral STT model from FireRed's active list, and keep deployment
   paused. Do not substitute a different STT provider automatically.
@@ -496,10 +500,13 @@ and configuration if the Mistral adapter or any Codex contract regresses.
 ### Sprint 3 Gate
 
 - [ ] `cx/gpt-5.6-sol`, `cx/gpt-5.5-image`, and
-  `mistral/voxtral-mini-2602` are catalog- and contract-verified.
-- [ ] No unapproved provider fallback is present in runtime configuration.
-- [ ] OAuth/API-key metadata is reviewed without exposing credential values.
-- [ ] The 9Router Mistral STT package/version and rollback point are recorded.
+  `mistral/voxtral-mini-2602` are all live catalog- and contract-verified;
+  Mistral remains the only red item because the running router lacks its STT
+  adapter.
+- [x] No unapproved provider fallback is present in runtime configuration.
+- [x] OAuth/API-key metadata is reviewed without exposing credential values.
+- [x] The pinned 9Router `0.5.35` Mistral STT patch and rollback boundary are
+  recorded without touching the live package/process.
 - [ ] Exactly one Sprint 3 repository commit is created with the proposed
   message; external 9Router source changes follow their own recorded revision.
 - [ ] Sprint 4 has not started before this gate completes.
@@ -509,7 +516,9 @@ and configuration if the Mistral adapter or any Codex contract regresses.
 **Goal**: Turn the discovery checks into a repeatable, redacted QA gate that
 can be run before every personal-server deployment.
 
-**Dependencies**: Sprint 3 gate and a working timestamped STT provider.
+**Dependencies**: Sprint 3 repository gate. The live gate may remain red while
+the QA tooling is implemented, but no deployment can proceed without a
+working timestamped STT provider.
 
 **Tracked scope**: New `scripts/qa_ninerouter.py`, focused tests under `tests/`,
 `docs/mvp/api-keys.md`, `docs/mvp/architecture.md`, and a short operator
@@ -605,8 +614,9 @@ runtime application behavior remains unchanged.
 **Goal**: Deploy the remote-only FireRed profile only after all gates pass and
 prove one complete synthetic video workflow with rollback evidence.
 
-**Dependencies**: Sprints 1-4 gates; explicit user authorization for deploy,
-service restarts, firewall changes, and provider calls.
+**Dependencies**: Sprints 1-4 repository gates plus a green live preflight.
+The canary deploy remains blocked while Mistral STT is absent; no 9Router
+restart, package change, firewall change, or workaround is permitted.
 
 **Tracked scope**: `Dockerfile.remote`, `config/deploy.yml`, `bin/kamal-mvp`,
   deployment runbook, and release evidence. No full-agent container changes.

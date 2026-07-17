@@ -72,7 +72,11 @@ class KamalConfigTests(unittest.TestCase):
         )
         self.assertEqual(
             config["env"]["clear"]["OPENSTORYLINE_IMAGE_MODELS"],
-            "gemini/gemini-3-pro-image-preview,xai/grok-imagine-image",
+            "cx/gpt-5.5-image",
+        )
+        self.assertEqual(
+            config["env"]["clear"]["OPENSTORYLINE_STT_MODELS"],
+            "mistral/voxtral-mini-2602",
         )
         self.assertEqual(config["env"]["clear"]["OPENSTORYLINE_IMAGE_SIZE"], "1024x1024")
         secrets = (ROOT / ".kamal" / "secrets.example").read_text(encoding="utf-8")

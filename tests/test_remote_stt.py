@@ -28,68 +28,44 @@ class RemoteSttCascadeTests(unittest.IsolatedAsyncioTestCase):
             cascade = RemoteSttCascade(
                 base_url="https://router.test",
                 api_key="secret",
-                models=["groq/whisper-large-v3-turbo"],
+                models=["mistral/voxtral-mini-2602"],
                 transport=httpx.MockTransport(handler),
             )
             result = await cascade.transcribe(self.audio_file(tmpdir), language="es")
 
-        self.assertEqual(result.model, "groq/whisper-large-v3-turbo")
+        self.assertEqual(result.model, "mistral/voxtral-mini-2602")
         self.assertEqual(result.text, "Hola mundo")
         self.assertEqual(result.segments[0]["start"], 1250)
         self.assertEqual(result.timestamps, [[1250, 2500]])
 
-    async def test_uses_next_model_after_provider_failure(self):
-        calls = []
-
-        def handler(request: httpx.Request) -> httpx.Response:
-            body = request.read().decode("utf-8", "ignore")
-            calls.append(body)
-            if "primary/model" in body:
-                return httpx.Response(429, json={"error": "quota"})
-            return httpx.Response(200, json={
-                "text": "fallback",
-                "segments": [{"text": "fallback", "start": 0, "end": 1}],
-            })
-
-        with TemporaryDirectory() as tmpdir:
-            cascade = RemoteSttCascade(
+    def test_rejects_unapproved_or_fallback_models(self):
+        with self.assertRaises(RemoteSTTError) as caught:
+            RemoteSttCascade(
                 base_url="https://router.test",
                 api_key="secret",
-                models=["primary/model", "fallback/model"],
-                transport=httpx.MockTransport(handler),
+                models=["mistral/voxtral-mini-2602", "fallback/model"],
             )
-            result = await cascade.transcribe(self.audio_file(tmpdir))
+        self.assertEqual(caught.exception.code, "STT_CONFIG_INVALID")
 
-        self.assertEqual(result.model, "fallback/model")
-        self.assertEqual(len(result.attempts), 2)
-        self.assertFalse(result.attempts[0].success)
-        self.assertTrue(result.attempts[1].success)
-
-    async def test_missing_timestamps_uses_next_model(self):
-        calls = 0
-
+    async def test_missing_timestamps_fails_closed(self):
         def handler(request: httpx.Request) -> httpx.Response:
-            nonlocal calls
-            calls += 1
-            if calls == 1:
-                return httpx.Response(200, json={"text": "no timestamps"})
-            return httpx.Response(200, json={
-                "text": "word timestamps",
-                "words": [{"word": "hello", "timestamp": [1.0, 1.5]}],
-            })
+            return httpx.Response(200, json={"text": "no timestamps"})
 
         with TemporaryDirectory() as tmpdir:
             cascade = RemoteSttCascade(
                 base_url="https://router.test/v1",
                 api_key="secret",
-                models=["missing-segments", "word-fallback"],
+                models=["mistral/voxtral-mini-2602"],
                 transport=httpx.MockTransport(handler),
             )
-            result = await cascade.transcribe(self.audio_file(tmpdir))
+            with self.assertRaises(RemoteSTTError) as caught:
+                await cascade.transcribe(self.audio_file(tmpdir))
 
-        self.assertEqual(result.model, "word-fallback")
-        self.assertEqual(result.timestamps, [[1000, 1500]])
-        self.assertEqual(result.attempts[0].reason, "transcript has no timestamped segments")
+        self.assertEqual(caught.exception.code, "STT_ALL_PROVIDERS_FAILED")
+        self.assertEqual(
+            caught.exception.attempts[0].reason,
+            "transcript has no timestamped segments",
+        )
 
     def test_from_config_builds_remote_cascade(self):
         config = SimpleNamespace(
@@ -102,12 +78,12 @@ class RemoteSttCascadeTests(unittest.IsolatedAsyncioTestCase):
         with patch.dict(os.environ, {
             "NINEROUTER_URL": "https://router.test/v1",
             "NINEROUTER_KEY": "endpoint-key",
-            "OPENSTORYLINE_STT_MODELS": "primary,fallback",
+            "OPENSTORYLINE_STT_MODELS": "mistral/voxtral-mini-2602",
             "OPENSTORYLINE_STT_TIMEOUT": "45",
         }, clear=False):
             cascade = RemoteSttCascade.from_config(config)
 
-        self.assertEqual(cascade.models, ["primary", "fallback"])
+        self.assertEqual(cascade.models, ["mistral/voxtral-mini-2602"])
         self.assertEqual(cascade.timeout, 45)
         self.assertEqual(cascade.endpoint, "https://router.test/v1/audio/transcriptions")
 
@@ -119,7 +95,7 @@ class RemoteSttCascadeTests(unittest.IsolatedAsyncioTestCase):
             cascade = RemoteSttCascade(
                 base_url="https://router.test",
                 api_key="top-secret",
-                models=["one", "two"],
+                models=["mistral/voxtral-mini-2602"],
                 transport=httpx.MockTransport(handler),
             )
             with self.assertRaises(RemoteSTTError) as caught:
@@ -127,7 +103,7 @@ class RemoteSttCascadeTests(unittest.IsolatedAsyncioTestCase):
 
         error = caught.exception
         self.assertEqual(error.code, "STT_ALL_PROVIDERS_FAILED")
-        self.assertEqual(len(error.attempts), 2)
+        self.assertEqual(len(error.attempts), 1)
         serialized = json.dumps(error.to_dict())
         self.assertNotIn("top-secret", serialized)
         self.assertIn("Bearer ***", serialized)

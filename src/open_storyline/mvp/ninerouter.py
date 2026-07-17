@@ -9,6 +9,9 @@ import re
 import httpx
 
 
+APPROVED_LLM_MODEL = "cx/gpt-5.6-sol"
+
+
 @dataclass(frozen=True)
 class NineRouterAttempt:
     number: int
@@ -87,7 +90,7 @@ class NineRouterClient:
         *,
         base_url: str,
         api_key: str,
-        model: str = "cx/gpt-5.6-sol",
+        model: str = APPROVED_LLM_MODEL,
         reasoning_effort: str = "medium",
         timeout: float = 180.0,
         max_retries: int = 2,
@@ -106,6 +109,11 @@ class NineRouterClient:
             raise NineRouterError("NINEROUTER_CONFIG_INVALID", "NINEROUTER_KEY is required")
         if not self.model:
             raise NineRouterError("NINEROUTER_CONFIG_INVALID", "a remote model is required")
+        if self.model != APPROVED_LLM_MODEL:
+            raise NineRouterError(
+                "NINEROUTER_CONFIG_INVALID",
+                f"remote text and vision must use {APPROVED_LLM_MODEL}",
+            )
         if self.reasoning_effort not in {"low", "medium", "high"}:
             raise NineRouterError("NINEROUTER_CONFIG_INVALID", "reasoning effort must be low, medium, or high")
 
@@ -114,7 +122,7 @@ class NineRouterClient:
         return cls(
             base_url=os.getenv("NINEROUTER_URL") or getattr(config, "base_url", ""),
             api_key=os.getenv("NINEROUTER_KEY") or getattr(config, "api_key", ""),
-            model=os.getenv("OPENSTORYLINE_LLM_MODEL") or getattr(config, "model", "cx/gpt-5.6-sol"),
+            model=os.getenv("OPENSTORYLINE_LLM_MODEL") or getattr(config, "model", APPROVED_LLM_MODEL),
             reasoning_effort=(
                 os.getenv("OPENSTORYLINE_REASONING_EFFORT")
                 or getattr(config, "reasoning_effort", "medium")
