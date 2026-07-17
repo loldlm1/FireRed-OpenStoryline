@@ -4,7 +4,7 @@ set -Eeuo pipefail
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 ENV_FILE="${KAMAL_ENV_FILE:-$ROOT_DIR/.env.kamal}"
 MINIMUM_KAMAL_VERSION="2.12.0"
-KAMAL_VERSION="${KAMAL_VERSION:-2.12.0}"
+KAMAL_CLI_VERSION="${KAMAL_CLI_VERSION:-2.12.0}"
 
 fail() {
   printf 'Error: %s\n' "$*" >&2
@@ -81,22 +81,22 @@ run_mistral_release_gate() {
 
 ensure_kamal() {
   command -v gem >/dev/null 2>&1 \
-    || fail "RubyGems is required; install Ruby, then run: gem install kamal -v $KAMAL_VERSION"
+    || fail "RubyGems is required; install Ruby, then run: gem install kamal -v $KAMAL_CLI_VERSION"
   command -v kamal >/dev/null 2>&1 \
-    || fail "Kamal is required; run: gem install kamal -v $KAMAL_VERSION"
+    || fail "Kamal is required; run: gem install kamal -v $KAMAL_CLI_VERSION"
 
   local oldest
-  oldest="$(printf '%s\n%s\n' "$MINIMUM_KAMAL_VERSION" "$KAMAL_VERSION" | sort -V | head -n 1)"
+  oldest="$(printf '%s\n%s\n' "$MINIMUM_KAMAL_VERSION" "$KAMAL_CLI_VERSION" | sort -V | head -n 1)"
   [[ "$oldest" == "$MINIMUM_KAMAL_VERSION" ]] \
-    || fail "Kamal $KAMAL_VERSION is too old; run: gem install kamal -v $MINIMUM_KAMAL_VERSION"
+    || fail "Kamal $KAMAL_CLI_VERSION is too old; run: gem install kamal -v $MINIMUM_KAMAL_VERSION"
 
-  gem list --installed --exact kamal --version "$KAMAL_VERSION" >/dev/null 2>&1 \
-    || fail "Kamal $KAMAL_VERSION is not installed; run: gem install kamal -v $KAMAL_VERSION"
+  gem list --installed --exact kamal --version "$KAMAL_CLI_VERSION" >/dev/null 2>&1 \
+    || fail "Kamal $KAMAL_CLI_VERSION is not installed; run: gem install kamal -v $KAMAL_CLI_VERSION"
 
   local reported_version
-  reported_version="$(kamal "_${KAMAL_VERSION}_" version 2>/dev/null | tail -n 1 | tr -d '[:space:]')"
-  [[ "$reported_version" == "$KAMAL_VERSION" ]] \
-    || fail "Kamal $KAMAL_VERSION could not be selected (reported ${reported_version:-unknown})"
+  reported_version="$(kamal "_${KAMAL_CLI_VERSION}_" version 2>/dev/null | tail -n 1 | tr -d '[:space:]')"
+  [[ "$reported_version" == "$KAMAL_CLI_VERSION" ]] \
+    || fail "Kamal $KAMAL_CLI_VERSION could not be selected (reported ${reported_version:-unknown})"
 }
 
 ensure_secrets_file() {
@@ -105,6 +105,74 @@ ensure_secrets_file() {
     cp "$ROOT_DIR/.kamal/secrets.example" "$ROOT_DIR/.kamal/secrets"
     chmod 600 "$ROOT_DIR/.kamal/secrets"
   fi
+}
+
+run_remote_database_command() {
+  local action="$1"
+  local app_version="${OPENSTORYLINE_APP_VERSION:-}"
+  local image_repository="localhost:5555/openstoryline-mvp"
+  local image
+  local local_env
+  local remote_env
+  local remote_command
+  local target="${KAMAL_SSH_USER:-root}@${KAMAL_HOST}"
+  local uploaded=false
+  local -a ssh_args=(
+    -o BatchMode=yes
+    -o ConnectTimeout=15
+    -p "${KAMAL_SSH_PORT:-22}"
+  )
+  local -a scp_args=(
+    -q
+    -o BatchMode=yes
+    -o ConnectTimeout=15
+    -P "${KAMAL_SSH_PORT:-22}"
+  )
+
+  if [[ -z "$app_version" ]]; then
+    command -v git >/dev/null 2>&1 || fail "git is required to resolve the application image version"
+    app_version="$(git -C "$ROOT_DIR" rev-parse HEAD)"
+  fi
+  [[ "$app_version" =~ ^[A-Za-z0-9._-]+$ ]] \
+    || fail "OPENSTORYLINE_APP_VERSION contains unsupported characters"
+  [[ "$DATABASE_URL" != *$'\n'* && "$DATABASE_URL" != *$'\r'* ]] \
+    || fail "DATABASE_URL must be a single line"
+
+  image="$image_repository:$app_version"
+  remote_env="/tmp/openstoryline-database-${app_version}-${RANDOM}-$$.env"
+  umask 077
+  local_env="$(mktemp "${TMPDIR:-/tmp}/openstoryline-database.XXXXXX")"
+
+  cleanup_remote_database_env() {
+    rm -f "$local_env"
+    if [[ "$uploaded" == true ]]; then
+      ssh "${ssh_args[@]}" "$target" "rm -f '$remote_env'" >/dev/null 2>&1 || true
+    fi
+  }
+  trap cleanup_remote_database_env EXIT INT TERM
+
+  printf 'DATABASE_URL=%s\n' "$DATABASE_URL" > "$local_env"
+  ssh "${ssh_args[@]}" "$target" "docker image inspect '$image' >/dev/null" \
+    || fail "application image $image is not available on $KAMAL_HOST"
+  scp "${scp_args[@]}" "$local_env" "$target:$remote_env"
+  uploaded=true
+
+  case "$action" in
+    migrate)
+      remote_command="alembic upgrade head"
+      ;;
+    current)
+      remote_command="alembic current"
+      ;;
+    *)
+      fail "unsupported database command: $action"
+      ;;
+  esac
+
+  ssh "${ssh_args[@]}" "$target" \
+    "set -eu; chmod 600 '$remote_env'; docker run --rm --network kamal --env-file '$remote_env' '$image' $remote_command"
+  cleanup_remote_database_env
+  trap - EXIT INT TERM
 }
 
 run_database_command() {
@@ -143,20 +211,12 @@ run_database_command() {
   [[ "$mode" == "kamal" ]] \
     || fail "OPENSTORYLINE_POSTGRES_ADMIN_MODE must be local or kamal"
   require_value KAMAL_HOST
-  require_value DATABASE_URL
-  require_value POSTGRES_PASSWORD
-  require_value OPENSTORYLINE_DATABASE_PASSWORD
   [[ "${KAMAL_SSH_PORT:-22}" =~ ^[0-9]+$ ]] || fail "KAMAL_SSH_PORT must be numeric"
-  ensure_kamal
-  ensure_secrets_file
-  cd "$ROOT_DIR"
 
   case "$action" in
-    migrate)
-      exec kamal "_${KAMAL_VERSION}_" app exec --primary alembic upgrade head
-      ;;
-    current)
-      exec kamal "_${KAMAL_VERSION}_" app exec --primary --reuse alembic current
+    migrate|current)
+      require_value DATABASE_URL
+      run_remote_database_command "$action"
       ;;
     backup)
       exec "$ROOT_DIR/scripts/mvp-postgres-backup.sh"
@@ -185,6 +245,7 @@ fi
 if [[ "${1:-}" == "db" ]]; then
   shift
   run_database_command "${1:-}"
+  exit 0
 fi
 
 if [[ "${1:-}" == "audit" || "${1:-}" == "retention" ]]; then
@@ -194,7 +255,7 @@ if [[ "${1:-}" == "audit" || "${1:-}" == "retention" ]]; then
   ensure_kamal
   ensure_secrets_file
   cd "$ROOT_DIR"
-  exec kamal "_${KAMAL_VERSION}_" app exec --primary --reuse \
+  exec kamal "_${KAMAL_CLI_VERSION}_" app exec --primary --reuse \
     env PYTHONPATH=/app/src python -m open_storyline.mvp.admin "$admin_command" "$@"
 fi
 
@@ -249,4 +310,4 @@ fi
 ensure_secrets_file
 
 cd "$ROOT_DIR"
-exec kamal "_${KAMAL_VERSION}_" "$@"
+exec kamal "_${KAMAL_CLI_VERSION}_" "$@"

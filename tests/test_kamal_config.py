@@ -59,7 +59,8 @@ class KamalConfigTests(unittest.TestCase):
     def test_wrapper_pins_supported_kamal_without_auto_install(self):
         wrapper = (ROOT / "bin" / "kamal-mvp").read_text(encoding="utf-8")
         self.assertIn('MINIMUM_KAMAL_VERSION="2.12.0"', wrapper)
-        self.assertIn('kamal "_${KAMAL_VERSION}_"', wrapper)
+        self.assertIn('KAMAL_CLI_VERSION="${KAMAL_CLI_VERSION:-2.12.0}"', wrapper)
+        self.assertIn('kamal "_${KAMAL_CLI_VERSION}_"', wrapper)
         self.assertNotIn("gem install kamal --no-document", wrapper)
 
     def test_ip_mode_is_valid_yaml_without_host_or_ssl(self):
@@ -172,6 +173,8 @@ class KamalConfigTests(unittest.TestCase):
         self.assertLess(dispatch, provider_requirements)
         self.assertLess(dispatch, release_scan)
         self.assertIn("migrate|current|backup|restore-check", wrapper)
+        self.assertIn("docker run --rm --network kamal", wrapper)
+        self.assertNotIn("app exec --primary alembic", wrapper)
 
     def test_password_hash_command_is_local_and_precedes_env_loading(self):
         wrapper = (ROOT / "bin" / "kamal-mvp").read_text(encoding="utf-8")

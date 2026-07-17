@@ -41,7 +41,20 @@ local_restore_check() {
 }
 
 remote_restore_check() {
+  local container="${OPENSTORYLINE_POSTGRES_CONTAINER:-openstoryline-mvp-db}"
   local command_text
+  local target="${KAMAL_SSH_USER:-root}@${KAMAL_HOST:-}"
+  local -a ssh_args=(
+    -o BatchMode=yes
+    -o ConnectTimeout=15
+    -p "${KAMAL_SSH_PORT:-22}"
+  )
+
+  [[ -n "${KAMAL_HOST:-}" ]] || fail "KAMAL_HOST is required"
+  [[ "${KAMAL_SSH_PORT:-22}" =~ ^[0-9]+$ ]] || fail "KAMAL_SSH_PORT must be numeric"
+  [[ "$container" =~ ^[A-Za-z0-9_.-]+$ ]] \
+    || fail "OPENSTORYLINE_POSTGRES_CONTAINER contains unsupported characters"
+
   command_text="set -eu
 dump=/backups/openstoryline.latest.dump
 database=openstoryline_restore_check_\$\$_\$(date +%s)
@@ -58,8 +71,7 @@ dropdb --username \"\$POSTGRES_USER\" --if-exists --force --maintenance-db \"\$P
 trap - EXIT
 printf 'PostgreSQL restore check passed for schema revision %s\\n' '$EXPECTED_REVISION'"
 
-  exec kamal "_${KAMAL_VERSION:-2.12.0}_" accessory exec db \
-    --primary --reuse --raw -- sh -lc "$command_text"
+  ssh "${ssh_args[@]}" "$target" "docker exec -i '$container' sh" <<< "$command_text"
 }
 
 case "$MODE" in

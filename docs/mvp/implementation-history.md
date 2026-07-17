@@ -38,6 +38,7 @@ Each implementation increment was validated before its short commit.
 | 25 | PostgreSQL Sprint 3: resumable editing sessions and durable jobs | Session/job API tests, bounded legacy import with repeat-apply idempotency, restart recovery, and browser resume coverage | `feat(mvp): persist editing sessions and jobs in postgres` |
 | 26 | PostgreSQL Sprint 4: persistent audit evidence and agent CLI | JSON/SRT/prompt/plan ingestion, deterministic QC, reviews, bounded backfill, redacted event logs, and PostgreSQL-backed CLI tests | `feat(mvp): add persistent video audit and agent cli` |
 | 27 | PostgreSQL Sprint 5: media purge and 30-day audit retention | Bounded retention and holds against PostgreSQL, session-deletion browser QA, complete deterministic suite, FFmpeg smoke, remote image build, and Kamal validation | `feat(mvp): enforce session media and audit retention` |
+| 28 | PostgreSQL release hardening: exact-image migration and verified one-file recovery | No-port candidate migration, atomic production dump, isolated restore verification, shell checks, and focused deployment regression tests | `fix(mvp): harden postgres deployment commands` |
 
 The original pull request targeted `main` in
 `loldlm1/FireRed-OpenStoryline`. Merge and release state belongs in the hosting
