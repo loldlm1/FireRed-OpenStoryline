@@ -5,6 +5,7 @@ from tempfile import TemporaryDirectory
 import asyncio
 import json
 import os
+import shutil
 import subprocess
 import sys
 import unittest
@@ -19,6 +20,7 @@ from sqlalchemy.engine import make_url
 from open_storyline.mvp.api import create_mvp_router
 from open_storyline.mvp.database import Database, normalize_database_url
 from open_storyline.mvp.jobs import JobManager, JobStore, JobStoreError
+from open_storyline.mvp.retention import RetentionService, RetentionSettings
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -135,6 +137,23 @@ class JobStoreTests(PostgresTestCase):
 
 @unittest.skipUnless(os.getenv("TEST_DATABASE_URL"), "TEST_DATABASE_URL is not configured")
 class WorkerCoordinationTests(PostgresTestCase):
+    async def test_missing_job_directory_records_failure_without_crashing_worker(self):
+        _editing_session, state = await self.create_queued_job(prompt="missing directory")
+        shutil.rmtree(self.store._job_dir(state["id"]))
+        manager = JobManager(
+            self.store,
+            lambda job_id, store: store.source_path(job_id),
+        )
+
+        await manager._process(state["id"])
+
+        failed = await self.store.load(state["id"])
+        self.assertEqual(failed["state"], "failed")
+        self.assertEqual(failed["error"]["code"], "JOB_INPUT_MISSING")
+        self.assertTrue(
+            (self.store.output_dir(state["id"]) / "failure.json").is_file()
+        )
+
     async def test_two_managers_process_a_job_only_once(self):
         _editing_session, state = await self.create_queued_job()
         processed: list[str] = []
@@ -439,8 +458,18 @@ class LegacyImportTests(PostgresTestCase):
 class JobAPITests(PostgresTestCase):
     async def test_session_upload_status_and_download_contracts(self):
         manager = JobManager(self.store)
+        retention = RetentionService(
+            self.store,
+            RetentionSettings(False, 7, 30, 3600, 100),
+        )
         app = FastAPI()
-        app.include_router(create_mvp_router(lambda: self.store, lambda: manager))
+        app.include_router(
+            create_mvp_router(
+                lambda: self.store,
+                lambda: manager,
+                lambda: retention,
+            )
+        )
         transport = httpx.ASGITransport(app=app)
         async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
             created_session = await client.post(
@@ -487,6 +516,48 @@ class JobAPITests(PostgresTestCase):
                 f"/api/mvp/jobs/{job['id']}/artifacts/%2E%2E%2Fmanifest.json"
             )
             self.assertIn(traversal.status_code, {404, 400})
+
+    async def test_session_delete_is_idempotent_and_rejects_active_jobs(self):
+        manager = JobManager(self.store)
+        retention = RetentionService(
+            self.store,
+            RetentionSettings(False, 7, 30, 3600, 100),
+        )
+        app = FastAPI()
+        app.include_router(
+            create_mvp_router(
+                lambda: self.store,
+                lambda: manager,
+                lambda: retention,
+            )
+        )
+        transport = httpx.ASGITransport(app=app)
+        async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+            empty = await client.post("/api/mvp/sessions", json={"title": "Delete me"})
+            session_id = empty.json()["id"]
+            deleted = await client.delete(f"/api/mvp/sessions/{session_id}")
+            repeated = await client.delete(f"/api/mvp/sessions/{session_id}")
+            resumed = await client.get(f"/api/mvp/sessions/{session_id}")
+
+            active_session = await client.post(
+                "/api/mvp/sessions",
+                json={"title": "Active"},
+            )
+            active_id = active_session.json()["id"]
+            await self.store.create(
+                editing_session_id=active_id,
+                prompt="active job",
+                filename="active.mp4",
+            )
+            conflict = await client.delete(f"/api/mvp/sessions/{active_id}")
+
+        self.assertEqual(deleted.status_code, 200)
+        self.assertFalse(deleted.json()["already_deleted"])
+        self.assertTrue(repeated.json()["already_deleted"])
+        self.assertEqual(resumed.status_code, 404)
+        self.assertEqual(resumed.json()["detail"]["code"], "SESSION_NOT_FOUND")
+        self.assertEqual(conflict.status_code, 409)
+        self.assertEqual(conflict.json()["detail"]["code"], "SESSION_ACTIVE_JOBS")
 
 
 if __name__ == "__main__":

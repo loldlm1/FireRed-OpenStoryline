@@ -232,8 +232,8 @@ Para rotar la contraseña, genera un hash nuevo, reemplaza
 `OPENSTORYLINE_WEB_PASSWORD_HASH` en el archivo ignorado y despliega/reinicia.
 La rotación se trata como un cierre global de sesiones: verifica que una sesión
 anterior quede rechazada y que el login nuevo funcione. Conserva el antiguo
-`OPENSTORYLINE_WEB_TOKEN` sólo fuera de la configuración activa y únicamente
-durante la ventana de rollback al release anterior.
+secreto web sólo fuera de la configuración activa y únicamente durante la
+ventana de rollback al release anterior.
 
 ## 6. Audita trabajos y calidad estructural
 
@@ -261,6 +261,40 @@ Las notas privadas de una revisión se entregan con `--input archivo.json` o
 sirve para diagnóstico reciente y correlación; sus logs rotan y no sustituyen
 el historial PostgreSQL. Los logs no incluyen prompts, transcripciones, SRT,
 bodies de proveedores, cookies ni secretos.
+
+Los videos de entrada, clips y ZIP se conservan siete días después de terminar
+el trabajo. Al eliminar una sesión de edición desde la web, sus videos se
+eliminan de forma irreversible y la sesión desaparece de la vista normal; los
+prompts, planes, JSON/SRT, eventos, controles de calidad y revisiones siguen
+consultables durante 30 días por la CLI de auditoría.
+
+La retención automática comienza desactivada. Primero revisa los comandos de
+sólo lectura:
+
+```bash
+./bin/kamal-mvp retention status --format json
+./bin/kamal-mvp retention preview --limit 100 --format json
+```
+
+`retention run` también hace preview salvo que pases `--apply`. Los holds de
+auditoría se crean o eliminan sólo por CLI, con el motivo por stdin/archivo; un
+hold conserva la evidencia de PostgreSQL después del día 30, pero nunca conserva
+los videos:
+
+```bash
+printf '%s' '{"reason":"revisión manual de calidad"}' | \
+  ./bin/kamal-mvp audit hold SESSION_ID --set --input - --format json
+./bin/kamal-mvp audit hold SESSION_ID --clear --format json
+./bin/kamal-mvp retention run --apply --limit 100 --format json
+```
+
+Para el primer corte: verifica el accesorio PostgreSQL, aplica migraciones,
+crea y prueba el dump, despliega con retención desactivada, importa los trabajos
+legados con dry-run/aplicación/idempotencia, completa el backfill de auditoría y
+revisa el preview de retención dos veces. Activa
+`OPENSTORYLINE_RETENTION_ENABLED=true` sólo con aprobación explícita. Si debes
+detener la limpieza, vuelve a `false` antes de considerar un rollback. El dump
+restaura metadatos y texto, no medios ya eliminados.
 
 ## 7. Activa ComfyUI-FFMPEGA, si lo deseas
 

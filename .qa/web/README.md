@@ -24,8 +24,9 @@ npm run test:compact
 
 The focused suite covers the fresh login state, generic invalid-password
 feedback, cookie/CSRF behavior, browser-storage absence, logout, keyboard
-focus, and desktop/mobile layout. `tests/smoke.spec.ts` provides the generic
-page-error check.
+focus, resumable editing sessions, destructive session-deletion confirmation,
+post-delete media unavailability, audit-retention messaging, and desktop/mobile
+layout. `tests/smoke.spec.ts` provides the generic page-error check.
 
 Multiple paths can be added to the generic smoke test:
 

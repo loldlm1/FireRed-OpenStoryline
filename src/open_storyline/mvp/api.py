@@ -11,6 +11,7 @@ from fastapi.responses import FileResponse, JSONResponse
 from pydantic import BaseModel, Field
 
 from open_storyline.mvp.jobs import JobManager, JobStore, JobStoreError
+from open_storyline.mvp.retention import RetentionService
 
 
 ALLOWED_VIDEO_SUFFIXES = {".mp4", ".mov", ".mkv", ".webm", ".avi", ".m4v"}
@@ -27,8 +28,11 @@ def _http_error(exc: JobStoreError) -> HTTPException:
         "DATABASE_UNAVAILABLE",
         "JOB_STATE_UNAVAILABLE",
         "JOB_QUEUE_FULL",
+        "RETENTION_BUSY",
     }:
         status = 503
+    elif exc.code == "SESSION_ACTIVE_JOBS":
+        status = 409
     else:
         status = 400
     return HTTPException(
@@ -40,6 +44,7 @@ def _http_error(exc: JobStoreError) -> HTTPException:
 def create_mvp_router(
     get_store: Callable[[], JobStore],
     get_manager: Callable[[], JobManager],
+    get_retention: Callable[[], RetentionService | None] | None = None,
 ) -> APIRouter:
     router = APIRouter(prefix="/api/mvp", tags=["video-mvp"])
 
@@ -72,6 +77,19 @@ def create_mvp_router(
                 cursor=job_cursor,
             )
             return {**current, "jobs": jobs["items"], "next_job_cursor": jobs["next_cursor"]}
+        except JobStoreError as exc:
+            raise _http_error(exc) from exc
+
+    @router.delete("/sessions/{session_id}")
+    async def delete_session(session_id: str):
+        service = get_retention() if get_retention is not None else None
+        if service is None:
+            raise HTTPException(
+                status_code=503,
+                detail={"code": "RETENTION_UNAVAILABLE"},
+            )
+        try:
+            return await service.delete_session(session_id)
         except JobStoreError as exc:
             raise _http_error(exc) from exc
 

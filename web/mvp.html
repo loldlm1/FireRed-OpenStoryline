@@ -14,6 +14,7 @@
       --line: #c8c0b2;
       --signal: #d65337;
       --signal-dark: #9f321f;
+      --danger: #8f2619;
       --mint: #b7d5c7;
       --night: #1c2824;
       --white: #fffdf8;
@@ -172,6 +173,8 @@
     .button.full { width: 100%; margin-top: 22px; }
     .button.secondary { color: var(--ink); border-color: var(--line); background: transparent; }
     .button.secondary:hover { background: var(--paper-deep); }
+    .button.danger { color: var(--white); background: var(--danger); }
+    .button.danger:hover { background: #681a11; }
     .button.compact { min-height: 40px; padding: 8px 14px; font-size: .9rem; }
 
     .form-error {
@@ -205,6 +208,23 @@
     .session-deck h2 { font-size: clamp(2rem, 4vw, 3rem); }
     .session-deck form .button { width: 100%; margin-top: 12px; }
     .session-summary { margin: 10px 0 0; color: var(--muted); font-size: .92rem; }
+    .session-actions { display: flex; justify-content: flex-end; margin-top: 16px; }
+    .session-notice { min-height: 24px; margin: 14px 0 0; color: #315c4b; font-weight: 750; }
+
+    .confirm-dialog {
+      width: min(520px, calc(100% - 32px));
+      padding: 0;
+      border: 1px solid rgb(83 77 68 / 35%);
+      border-radius: var(--radius);
+      color: var(--ink);
+      background: var(--white);
+      box-shadow: var(--shadow);
+    }
+    .confirm-dialog::backdrop { background: rgb(23 32 29 / 58%); backdrop-filter: blur(4px); }
+    .confirm-dialog form { padding: clamp(24px, 5vw, 36px); }
+    .confirm-dialog h2 { font-size: clamp(2rem, 8vw, 3rem); }
+    .confirm-dialog p { color: #4c5751; }
+    .dialog-actions { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 10px; margin-top: 24px; }
 
     .recent-jobs { display: grid; gap: 8px; margin-top: 10px; }
     .recent-job {
@@ -362,8 +382,14 @@
             </select>
             <p id="session-summary" class="session-summary" aria-live="polite">No hay una sesión seleccionada.</p>
             <div id="recent-jobs" class="recent-jobs" aria-label="Trabajos recientes"></div>
+            <div class="session-actions">
+              <button id="session-delete" class="button danger compact" type="button" aria-describedby="session-delete-help" disabled>Eliminar sesión</button>
+            </div>
+            <p id="session-delete-help" class="session-summary">La eliminación sólo está disponible cuando no hay trabajos activos.</p>
           </div>
         </section>
+
+        <p id="session-notice" class="session-notice" role="status" aria-live="polite"></p>
 
         <div class="workspace">
           <form id="job-form" class="card job-card">
@@ -397,6 +423,19 @@
 
         <button id="logout" class="button secondary compact" type="button">Cerrar sesión</button>
       </section>
+
+      <dialog id="session-delete-dialog" class="confirm-dialog" aria-labelledby="session-delete-title" aria-describedby="session-delete-description">
+        <form method="dialog">
+          <p class="eyebrow">Acción irreversible</p>
+          <h2 id="session-delete-title">¿Eliminar esta sesión?</h2>
+          <p id="session-delete-description"><strong id="session-delete-name"></strong> dejará de aparecer en la aplicación. Sus videos se eliminarán permanentemente ahora; los prompts, planes, subtítulos y resultados de auditoría se conservarán durante 30 días.</p>
+          <p id="session-delete-error" class="form-error" role="alert" aria-live="assertive"></p>
+          <div class="dialog-actions">
+            <button class="button secondary compact" type="submit" value="cancel">Cancelar</button>
+            <button id="session-delete-confirm" class="button danger compact" type="button">Eliminar videos y sesión</button>
+          </div>
+        </form>
+      </dialog>
     </main>
   </div>
 
@@ -415,6 +454,12 @@
     const sessionError = document.querySelector('#session-error');
     const sessionSelect = document.querySelector('#session-select');
     const sessionSummary = document.querySelector('#session-summary');
+    const sessionNotice = document.querySelector('#session-notice');
+    const sessionDeleteButton = document.querySelector('#session-delete');
+    const sessionDeleteDialog = document.querySelector('#session-delete-dialog');
+    const sessionDeleteName = document.querySelector('#session-delete-name');
+    const sessionDeleteError = document.querySelector('#session-delete-error');
+    const sessionDeleteConfirm = document.querySelector('#session-delete-confirm');
     const recentJobs = document.querySelector('#recent-jobs');
     const form = document.querySelector('#job-form');
     const submit = document.querySelector('#submit');
@@ -566,6 +611,11 @@
       }
     };
 
+    const updateDeleteAvailability = (jobs) => {
+      const hasActiveJob = jobs.some((job) => !['completed', 'failed', 'cancelled'].includes(job.state));
+      sessionDeleteButton.disabled = !currentSession || hasActiveJob;
+    };
+
     const selectSession = async (sessionId) => {
       const session = await (await api(`/api/mvp/sessions/${sessionId}`)).json();
       currentSession = session.id;
@@ -573,6 +623,7 @@
       sessionSummary.textContent = `${session.title} · ${session.jobs.length} trabajo(s) recientes`;
       setSessionUrl(session.id);
       renderRecentJobs(session.jobs);
+      updateDeleteAvailability(session.jobs);
       submit.disabled = false;
       const active = session.jobs.find((job) => !['completed', 'failed', 'cancelled'].includes(job.state));
       const selected = active || session.jobs[0];
@@ -601,6 +652,7 @@
         sessionSelect.append(new Option('Crea una sesión para empezar', ''));
         sessionSummary.textContent = 'No hay una sesión seleccionada.';
         recentJobs.replaceChildren();
+        sessionDeleteButton.disabled = true;
         submit.disabled = true;
         window.requestAnimationFrame(() => sessionTitle.focus());
         return;
@@ -639,6 +691,47 @@
       selectSession(sessionSelect.value).catch((error) => {
         sessionError.textContent = error.message;
       });
+    });
+
+    sessionDeleteButton.addEventListener('click', () => {
+      sessionDeleteError.textContent = '';
+      sessionDeleteName.textContent = sessionSelect.selectedOptions[0]?.textContent || 'Esta sesión';
+      sessionDeleteDialog.showModal();
+      window.requestAnimationFrame(() => sessionDeleteConfirm.focus());
+    });
+
+    sessionDeleteConfirm.addEventListener('click', async () => {
+      sessionDeleteError.textContent = '';
+      sessionDeleteConfirm.disabled = true;
+      sessionDeleteDialog.setAttribute('aria-busy', 'true');
+      const deletedSession = currentSession;
+      try {
+        const result = await (await api(`/api/mvp/sessions/${deletedSession}`, {
+          method: 'DELETE',
+        })).json();
+        window.clearTimeout(pollTimer);
+        currentSession = '';
+        currentJob = '';
+        sessionDeleteDialog.close();
+        progress.value = 0;
+        artifactsBox.replaceChildren();
+        bundleButton.hidden = true;
+        statusBox.textContent = 'La sesión fue eliminada. Sus videos ya no están disponibles.';
+        await loadSessions();
+        const retainedUntil = new Date(result.audit_expires_at).toLocaleDateString('es-ES', {
+          dateStyle: 'long',
+        });
+        sessionNotice.textContent = result.ok
+          ? `Videos eliminados. La auditoría se conserva hasta ${retainedUntil}.`
+          : `La sesión se ocultó, pero algunos archivos no pudieron eliminarse. La retención volverá a intentarlo; la auditoría se conserva hasta ${retainedUntil}.`;
+      } catch (error) {
+        sessionDeleteError.textContent = error.code === 'SESSION_ACTIVE_JOBS'
+          ? 'Espera a que terminen los trabajos activos antes de eliminar la sesión.'
+          : error.message;
+      } finally {
+        sessionDeleteConfirm.disabled = false;
+        sessionDeleteDialog.removeAttribute('aria-busy');
+      }
     });
 
     const saveBlob = async (url, filename) => {
@@ -696,6 +789,7 @@
           if (currentSession) {
             const session = await (await api(`/api/mvp/sessions/${currentSession}`)).json();
             renderRecentJobs(session.jobs);
+            updateDeleteAvailability(session.jobs);
           }
         }
       } catch (error) {
@@ -724,6 +818,7 @@
         renderJob(job);
         const session = await (await api(`/api/mvp/sessions/${currentSession}`)).json();
         renderRecentJobs(session.jobs);
+        updateDeleteAvailability(session.jobs);
         pollTimer = window.setTimeout(poll, 800);
       } catch (error) {
         jobError.textContent = error.code === 'JOB_QUEUE_FULL'

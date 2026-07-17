@@ -353,6 +353,7 @@ FireRed-OpenStoryline/
 - [FAQ](docs/source/en/faq.md) - Frequently asked questions
 - [Agent Engineering Guide](docs/agent-engineering.md) - Architecture, contracts, and validation rules for coding agents
 - [Remote MVP Architecture](docs/mvp/architecture.md) - Current remote-only runtime policy
+- [Remote MVP Database And Audit](docs/mvp/audit-and-database.md) - PostgreSQL, retention, backup, and agent review operations
 - [Remote MVP Implementation History](docs/mvp/implementation-history.md) - Completed implementation record
 
 ## TODO

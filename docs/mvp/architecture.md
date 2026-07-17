@@ -102,6 +102,16 @@ and the development venv never enter the remote-image build context.
 - Deterministic QC checks output count, FFprobe structure/duration, and subtitle
   ordering against the validated manifest. Its system verdict is explicitly
   structural and does not represent creative or semantic quality.
+- Terminal work files are removed immediately. Source/generated video and ZIP
+  media expire after seven days, or immediately when an editing session is
+  deleted. JSON/SRT evidence and database audit rows remain for 30 days.
+- Editing-session deletion is a soft delete followed by an idempotent media
+  purge. Deleted sessions disappear from the normal UI but remain available to
+  the audit CLI until audit expiry.
+- Audit holds are explicit CLI-only operator actions. They delay audit hard
+  deletion but never extend media retention.
+- Automatic retention is bounded, advisory-lock protected, and disabled by
+  default until a production preview is explicitly reviewed.
 - Inputs and outputs are served only through validated job-scoped paths.
 - The 9Router endpoint key and direct `MISTRAL_API_KEYS` key ring are delivered
   through Kamal secrets and never written to job state, logs, manifests, or Git.
@@ -156,3 +166,5 @@ as `./bin/kamal-mvp audit list --since 24h --format json`, `audit show`,
 `audit events`, `audit documents`, and `audit verify`. Reviews enter through a
 JSON file or stdin, not command arguments. Rotating `kamal app logs` contain
 only recent correlation/lifecycle summaries and are not the audit source.
+Retention is inspected with `./bin/kamal-mvp retention status` and
+`retention preview`; `retention run` mutates only when `--apply` is supplied.

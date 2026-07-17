@@ -295,11 +295,14 @@ class AuditService:
             source_name=artifact.name,
             kind=artifact.kind,
             artifact=artifact,
-            path_resolver=lambda: self.store.resolve_artifact(job_id, artifact.name),
+            path_resolver=lambda: self.store.resolve_artifact_for_audit(
+                job_id,
+                artifact.name,
+            ),
         )
 
     async def ingest_job_snapshot(self, job_id: str) -> dict[str, Any]:
-        await self.store.load(job_id)
+        await self.store.load_for_audit(job_id)
 
         async def snapshot_path() -> Path:
             return self.store._state_path(job_id)
@@ -589,7 +592,7 @@ class AuditService:
     async def show_job(self, job_id: str, *, limit: int = 200) -> dict[str, Any]:
         if not 1 <= int(limit) <= 500:
             raise JobStoreError("PAGE_LIMIT_INVALID", "show limit is invalid")
-        job = await self.store.load(job_id)
+        job = await self.store.load_for_audit(job_id)
         try:
             async with self.database.sessions() as session:
                 editing_session = await session.get(EditingSession, job["editing_session_id"])
@@ -643,7 +646,7 @@ class AuditService:
     async def documents(self, job_id: str, *, limit: int = 200) -> list[dict[str, Any]]:
         if not 1 <= int(limit) <= 500:
             raise JobStoreError("PAGE_LIMIT_INVALID", "document limit is invalid")
-        await self.store.load(job_id)
+        await self.store.load_for_audit(job_id)
         try:
             async with self.database.sessions() as session:
                 rows = list(
@@ -661,7 +664,7 @@ class AuditService:
         return [self._document_state(row, include_raw=True) for row in rows]
 
     async def verify_job(self, job_id: str) -> dict[str, Any]:
-        job = await self.store.load(job_id)
+        job = await self.store.load_for_audit(job_id)
         try:
             async with self.database.sessions() as session:
                 manifest = await session.scalar(
@@ -736,7 +739,7 @@ class AuditService:
                 )
                 continue
             try:
-                path = await self.store.resolve_artifact(job_id, video_name)
+                path = await self.store.resolve_artifact_for_audit(job_id, video_name)
                 measured = await asyncio.to_thread(_probe_video, path)
             except JobStoreError as exc:
                 checks.append(

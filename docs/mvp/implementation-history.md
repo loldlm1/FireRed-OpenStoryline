@@ -33,6 +33,11 @@ Each implementation increment was validated before its short commit.
 | 20 | Sprint 6: direct Mistral boundary and legacy STT cleanup | Direct timestamp contract, config/Kamal secret tests, public node compatibility, complete deterministic suite, and removal of the obsolete 9Router STT adapter | `refactor: route remote stt directly to mistral` |
 | 21 | Sprint 7: quota-aware Mistral key failover | Ordered key ring, bounded retries, `Retry-After` cooldowns, invalid-input fail-closed behavior, process-local serialization, redacted metadata, and full deterministic suite | `feat: add quota-aware mistral key failover` |
 | 22 | Sprint 8: split provider release gates and VPS canary | Live Codex text/vision/image and direct Voxtral gates, custom-port stop-first deploy, synthetic end-to-end job, artifact security, restart recovery, and retained-version rollback | `release: gate direct mistral stt` |
+| 23 | PostgreSQL Sprint 1: application database foundation and one-file recovery | Additive migration, disposable PostgreSQL integration tests, custom-format backup, isolated restore check, and Kamal accessory validation | `feat(mvp): add postgres application foundation` |
+| 24 | PostgreSQL Sprint 2: password login and server-side sessions | Argon2 login, cookie/CSRF lifecycle, login-only throttling, generic failure responses, and focused Chromium authentication QA | `feat(mvp): replace web token with password sessions` |
+| 25 | PostgreSQL Sprint 3: resumable editing sessions and durable jobs | Session/job API tests, bounded legacy import with repeat-apply idempotency, restart recovery, and browser resume coverage | `feat(mvp): persist editing sessions and jobs in postgres` |
+| 26 | PostgreSQL Sprint 4: persistent audit evidence and agent CLI | JSON/SRT/prompt/plan ingestion, deterministic QC, reviews, bounded backfill, redacted event logs, and PostgreSQL-backed CLI tests | `feat(mvp): add persistent video audit and agent cli` |
+| 27 | PostgreSQL Sprint 5: media purge and 30-day audit retention | Bounded retention and holds against PostgreSQL, session-deletion browser QA, complete deterministic suite, FFmpeg smoke, remote image build, and Kamal validation | `feat(mvp): enforce session media and audit retention` |
 
 The original pull request targeted `main` in
 `loldlm1/FireRed-OpenStoryline`. Merge and release state belongs in the hosting

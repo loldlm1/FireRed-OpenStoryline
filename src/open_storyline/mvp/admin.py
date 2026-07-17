@@ -11,6 +11,7 @@ from open_storyline.config import default_config_path, load_settings
 from open_storyline.mvp.audit import AuditService, parse_since
 from open_storyline.mvp.database import Database, DatabaseConfigurationError
 from open_storyline.mvp.jobs import JobStore, JobStoreError
+from open_storyline.mvp.retention import RetentionService, RetentionSettings
 
 
 def _format_value(value: Any, output_format: str) -> None:
@@ -49,15 +50,26 @@ def _default_root() -> Path:
     return Path(config.project.outputs_dir) / "mvp_jobs"
 
 
-def _build_services(database: Database, root: str | Path | None = None) -> tuple[JobStore, AuditService]:
-    store = JobStore(root or _default_root(), database)
+def _build_services(
+    database: Database,
+    root: str | Path | None = None,
+) -> tuple[JobStore, AuditService, RetentionService]:
+    settings = RetentionSettings.from_env()
+    store = JobStore(
+        root or _default_root(),
+        database,
+        media_retention_days=settings.media_days,
+        audit_retention_days=settings.audit_days,
+    )
     audit = AuditService(store)
     store.attach_audit(audit)
-    return store, audit
+    retention = RetentionService(store, settings)
+    store.attach_retention(retention)
+    return store, audit, retention
 
 
 async def _import_legacy(arguments: argparse.Namespace, database: Database) -> dict[str, Any]:
-    store, _audit = _build_services(database, arguments.root)
+    store, _audit, _retention = _build_services(database, arguments.root)
     report = await store.import_legacy_jobs(
         arguments.root,
         dry_run=arguments.dry_run,
@@ -96,7 +108,7 @@ async def _audit_command(
     arguments: argparse.Namespace,
     database: Database,
 ) -> Any:
-    store, audit = _build_services(database)
+    store, audit, retention = _build_services(database)
     if arguments.audit_command == "list":
         return await audit.list_jobs(
             since=parse_since(arguments.since),
@@ -125,7 +137,11 @@ async def _audit_command(
     if arguments.audit_command == "show":
         return await audit.show_job(arguments.job_id, limit=arguments.limit)
     if arguments.audit_command == "events":
-        return await store.events(arguments.job_id, limit=arguments.limit)
+        return await store.events(
+            arguments.job_id,
+            limit=arguments.limit,
+            include_deleted=True,
+        )
     if arguments.audit_command == "documents":
         return await audit.documents(arguments.job_id, limit=arguments.limit)
     if arguments.audit_command == "verify":
@@ -142,7 +158,33 @@ async def _audit_command(
         )
     if arguments.audit_command == "backfill":
         return await audit.backfill(dry_run=arguments.dry_run, limit=arguments.limit)
+    if arguments.audit_command == "hold":
+        if arguments.clear:
+            return await retention.clear_audit_hold(arguments.session_id)
+        if not arguments.input:
+            raise JobStoreError("AUDIT_HOLD_INVALID", "--input is required when setting a hold")
+        payload = _review_payload(arguments.input)
+        return await retention.set_audit_hold(
+            arguments.session_id,
+            str(payload.get("reason") or ""),
+        )
     raise JobStoreError("AUDIT_COMMAND_INVALID", "audit command is invalid")
+
+
+async def _retention_command(
+    arguments: argparse.Namespace,
+    database: Database,
+) -> Any:
+    _store, _audit, retention = _build_services(database)
+    if arguments.retention_command == "status":
+        return await retention.status()
+    if arguments.retention_command == "preview":
+        return await retention.preview(limit=arguments.limit)
+    if arguments.retention_command == "run":
+        if arguments.apply:
+            return await retention.run(limit=arguments.limit)
+        return await retention.preview(limit=arguments.limit)
+    raise JobStoreError("RETENTION_COMMAND_INVALID", "retention command is invalid")
 
 
 async def _run(arguments: argparse.Namespace) -> int:
@@ -154,6 +196,9 @@ async def _run(arguments: argparse.Namespace) -> int:
             _format_value(result, "json")
         elif arguments.command == "audit":
             result = await _audit_command(arguments, database)
+            _format_value(result, arguments.format)
+        elif arguments.command == "retention":
+            result = await _retention_command(arguments, database)
             _format_value(result, arguments.format)
         else:
             raise JobStoreError("ADMIN_COMMAND_INVALID", "admin command is invalid")
@@ -233,6 +278,32 @@ def main() -> int:
     backfill_mode.add_argument("--apply", action="store_true")
     backfill.add_argument("--limit", type=int, default=100)
     _add_format(backfill, default="json")
+
+    hold = audit_commands.add_parser("hold", help="set or clear an editing-session audit hold")
+    hold.add_argument("session_id")
+    hold_mode = hold.add_mutually_exclusive_group(required=True)
+    hold_mode.add_argument("--set", action="store_true")
+    hold_mode.add_argument("--clear", action="store_true")
+    hold.add_argument("--input", help="JSON file path or - with a private reason")
+    _add_format(hold, default="json")
+
+    retention = subparsers.add_parser("retention", help="preview and apply bounded retention")
+    retention_commands = retention.add_subparsers(
+        dest="retention_command",
+        required=True,
+    )
+    retention_status = retention_commands.add_parser("status")
+    _add_format(retention_status, default="json")
+    for name in ("preview", "run"):
+        command = retention_commands.add_parser(name)
+        command.add_argument("--limit", type=int, default=100)
+        if name == "run":
+            command.add_argument(
+                "--apply",
+                action="store_true",
+                help="perform deletion; without this flag the command previews only",
+            )
+        _add_format(command, default="json")
 
     return asyncio.run(_run(parser.parse_args()))
 
