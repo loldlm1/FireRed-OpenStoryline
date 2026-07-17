@@ -4,7 +4,6 @@ import importlib.util
 import os
 from pathlib import Path
 import sys
-from tempfile import TemporaryDirectory
 import unittest
 from unittest.mock import patch
 
@@ -44,9 +43,9 @@ class NineRouterPreflightTests(unittest.TestCase):
         self.assertEqual(qa_ninerouter.catalog_ids([{"id": "model"}]), ["model"])
 
     def test_configured_models_uses_csv_without_exposing_other_env(self):
-        with patch.dict(os.environ, {"OPENSTORYLINE_STT_MODELS": "one, two,,"}):
+        with patch.dict(os.environ, {"OPENSTORYLINE_IMAGE_MODELS": "one, two,,"}):
             self.assertEqual(
-                qa_ninerouter.configured_models("OPENSTORYLINE_STT_MODELS"),
+                qa_ninerouter.configured_models("OPENSTORYLINE_IMAGE_MODELS"),
                 ["one", "two"],
             )
 
@@ -104,35 +103,6 @@ class NineRouterPreflightTests(unittest.TestCase):
         self.assertFalse(check.ok)
         self.assertEqual(check.category, "invalid_config")
 
-    def test_requires_non_empty_finite_stt_segments(self):
-        self.assertEqual(
-            qa_ninerouter._timestamped_segments({
-                "text": "Hola",
-                "segments": [{"text": "Hola", "start": 0.1, "end": 0.9}],
-            }),
-            (True, 1),
-        )
-        self.assertEqual(
-            qa_ninerouter._timestamped_segments({
-                "text": "Hola",
-                "segments": [{"text": "Hola", "start": 1, "end": 1}],
-            }),
-            (False, 0),
-        )
-
-    def test_multipart_contains_only_selected_stt_fields(self):
-        with TemporaryDirectory() as tmpdir:
-            audio = Path(tmpdir) / "sample.wav"
-            audio.write_bytes(b"synthetic-audio")
-            body, content_type = qa_ninerouter._multipart({
-                "model": "mistral/voxtral-mini-2602",
-                "response_format": "verbose_json",
-            }, audio)
-
-        self.assertIn("multipart/form-data; boundary=", content_type)
-        self.assertIn(b"mistral/voxtral-mini-2602", body)
-        self.assertNotIn(b"language", body)
-
     def test_live_contracts_skip_models_missing_from_catalog(self):
         mismatch = qa_ninerouter.Check(
             "catalog",
@@ -146,7 +116,6 @@ class NineRouterPreflightTests(unittest.TestCase):
         ) as http_request, patch.dict(os.environ, {
             "OPENSTORYLINE_LLM_MODEL": "cx/gpt-5.6-sol",
             "OPENSTORYLINE_IMAGE_MODELS": "cx/gpt-5.5-image",
-            "OPENSTORYLINE_STT_MODELS": "mistral/voxtral-mini-2602",
         }, clear=False):
             checks = qa_ninerouter.live_contract_checks(
                 "https://router.test",
@@ -155,13 +124,11 @@ class NineRouterPreflightTests(unittest.TestCase):
                 max_image_bytes=1_000_000,
                 text_catalog=mismatch,
                 image_catalog=mismatch,
-                stt_catalog=mismatch,
-                stt_audio="",
             )
 
         self.assertEqual(
             [check.name for check in checks],
-            ["text_contract", "vision_contract", "image_contract", "stt_contract"],
+            ["text_contract", "vision_contract", "image_contract"],
         )
         self.assertTrue(all(check.category == "skipped" for check in checks))
         post_json.assert_not_called()

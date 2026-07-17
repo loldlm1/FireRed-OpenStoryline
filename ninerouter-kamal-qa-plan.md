@@ -1,9 +1,10 @@
 # Plan: 9Router And Kamal VPS QA Readiness
 
 **Generated**: 2026-07-16
-**Status**: Repository execution is complete through the Sprint 5 release
-checkpoint. The live canary is intentionally paused by the Mistral catalog gap
-and the no-restart constraint.
+**Updated**: 2026-07-17
+**Status**: Repository execution is complete through Sprint 6. Sprint 7 will
+add quota-aware multi-key failover, and Sprint 8 will split the live release
+gates and resume the VPS canary.
 **Estimated Complexity**: High
 
 ## Overview
@@ -23,15 +24,49 @@ enabled a Mistral Free-mode API key in 9Router. Mistral exposes the required
 `voxtral-mini-2602` offline transcription model, but the installed 9Router
 `0.5.35` does not yet publish Mistral models through `/v1/models/stt`.
 
-The fixed provider policy is intentionally small: Codex OAuth owns text,
-vision, and image generation; Mistral owns speech-to-text; there are no runtime
-provider fallbacks. A missing, expired, rate-limited, or incompatible selected
-provider is a release-blocking failure rather than permission to route private
-media or prompts to another provider.
+The revised provider policy remains intentionally small: Codex OAuth owns
+text, vision, and image generation through 9Router; FireRed calls Mistral
+Voxtral directly for speech-to-text. The only STT failover allowed is between
+operator-supplied Mistral API keys serving the same fixed Voxtral model. There
+is no cross-provider or cross-model fallback.
 
 The remote MVP must remain remote-inference-only. FFmpeg remains the only local
-media processing dependency. No provider token is written to this repository,
-FireRed job state, or logs.
+media processing dependency. Mistral keys enter the container only through
+Kamal secrets and are never written to this repository, FireRed job state,
+artifacts, responses, or logs.
+
+## Architecture Decision Update: Direct Mistral STT
+
+The July 17 decision supersedes the earlier Sprint 3 requirement to expose
+Mistral STT through 9Router. Sprints 1-5 remain as historical execution
+evidence and must not be rewritten to imply that the blocked 9Router adapter
+was activated.
+
+```text
+Text / vision / image  -> FireRed -> 9Router -> Codex OAuth
+Speech-to-text         -> FireRed -> Mistral API directly
+Media processing       -> FireRed -> local FFmpeg only
+```
+
+- FireRed will use the official Mistral transcription API and the exact model
+  `voxtral-mini-2602`; the provider-prefixed 9Router ID
+  `mistral/voxtral-mini-2602` is retired from active STT configuration.
+- A separate STT microservice is intentionally not added. The existing remote
+  MVP process owns the small provider adapter, validation, retries, and
+  sanitized attempt metadata.
+- `MISTRAL_API_KEYS` is the canonical secret and accepts one or more ordered,
+  comma-separated keys. A single key is a valid one-element key ring.
+- Key failover is for legitimate credential availability and independently
+  scoped quota exhaustion. Multiple keys from the same organization may share
+  RPM, RPD, token, or audio limits and therefore may all receive the same
+  `429`. The implementation must not manufacture accounts, evade provider
+  limits, or ignore Mistral terms.
+- OpenRouter, Gemini, Groq, Hugging Face, and local ASR are not remote-MVP STT
+  fallbacks. The original full-agent `local_asr` profile remains intact and is
+  outside this migration.
+- The version-pinned 9Router Mistral STT patch becomes obsolete and will be
+  removed from active source/docs during Sprint 6, while historical records
+  retain a concise superseded note.
 
 ## Scope
 
@@ -40,8 +75,13 @@ FireRed job state, or logs.
     the deploy machine, VPS, Docker, and 9Router paths are reachable.
   - Protect and observe the existing manually launched 9Router process without
     changing its user, port, command, firewall, or supervisor.
-  - Reconcile the three required model contracts with live 9Router catalogs:
-    Codex text/vision, Codex image generation, and Mistral STT.
+  - Keep Codex text/vision and image generation reconciled with live 9Router
+    catalogs while removing STT from the 9Router contract.
+  - Add a direct Mistral Voxtral client with strict timestamp validation and an
+    ordered, quota-aware API-key ring.
+  - Remove obsolete Groq/Hugging Face remote-STT defaults, generic model
+    cascade configuration, the unused 9Router Mistral patch, and stale
+    runbook/env references without rewriting Git history.
   - Add a redacted modality preflight and regression coverage for the exact
     FireRed contracts: JSON chat, multimodal chat, binary image output, and
     timestamped `verbose_json` STT.
@@ -52,8 +92,9 @@ FireRed job state, or logs.
   - Adding local ASR, embeddings, scene models, or other local inference.
   - Replacing 9Router with a different proxy or changing the product's public
     API/WebSocket/job contracts.
-  - Adding TTS, general audio understanding, or any text, vision, image, or STT
-    fallback provider.
+  - Adding TTS, general audio understanding, or any text, vision, image, or
+    cross-provider/cross-model STT fallback.
+  - Building a standalone STT proxy or exposing a new public STT endpoint.
   - Deploying, rotating, revoking, or publishing credentials during planning.
   - Making OAuth account choices on behalf of the user when a browser login or
     provider-admin action is required.
@@ -63,21 +104,22 @@ FireRed job state, or logs.
   - Use only `cx/gpt-5.5-image` through Codex OAuth for image generation while
     that model remains in `/v1/models/image` and passes the binary image
     contract. Do not configure a second image model.
-  - Use only `mistral/voxtral-mini-2602` for STT. 9Router must request Mistral
+  - Use only direct Mistral `voxtral-mini-2602` for STT. FireRed must request
     segment timestamps and preserve non-empty `text` plus finite `start`/`end`
-    segment fields accepted by `RemoteSttCascade.normalize_segments`.
-  - Do not configure provider fallbacks. Each layer fails closed with a
-    sanitized, actionable error when its selected provider is unavailable.
-  - Keep provider credentials inside 9Router. FireRed receives only the
-    9Router endpoint URL and endpoint key.
+    segment fields accepted by the remote MVP.
+  - Permit ordered failover only among values in `MISTRAL_API_KEYS`; never
+    change the provider or model because one key is unavailable.
+  - Keep Codex credentials inside 9Router. Provide Mistral keys to FireRed only
+    through Kamal secrets, never clear env configuration or committed files.
   - HTTP is acceptable for this personal deployment, but the public 9Router
     port should be restricted where practical; the app container should use a
     host-local route when 9Router runs on the same VPS.
 - **Assumptions**:
   - The 9Router service and FireRed remote MVP will run on the same VPS.
-  - The existing Mistral Free-mode key remains active in 9Router. The agent can
-    configure and verify the connection after execution authorization without
-    copying the provider key into FireRed or command output.
+  - At least one valid Mistral key is available to the deploy environment. If
+    more than one key is supplied, the operator confirms whether their quota
+    scopes are independent; same-organization keys are not assumed to add
+    capacity.
   - The current Codex OAuth sessions remain active. The user is needed only if
     Codex requires interactive browser login/consent or the existing Mistral
     key is invalid, revoked, or expired.
@@ -105,7 +147,6 @@ FireRed job state, or logs.
   `/home/admin/.9router/jwt-secret`, `/home/admin/.9router/auth/cli-secret`,
   and the current `admin`-owned `9router -n -l` process on port `20128`.
 - **Current official references**:
-  - [9Router STT skill](https://github.com/decolua/9router/blob/master/skills/9router-stt/SKILL.md)
   - [9Router image skill](https://github.com/decolua/9router/blob/master/skills/9router-image/SKILL.md)
   - [9Router provider registry](https://github.com/decolua/9router/tree/master/open-sse/providers/registry)
   - [Kamal configuration reference](https://github.com/basecamp/kamal/blob/main/lib/kamal/configuration/docs/configuration.yml)
@@ -117,12 +158,15 @@ FireRed job state, or logs.
 
 - The provider policy is already approved: `cx/gpt-5.6-sol` for text/vision,
   `cx/gpt-5.5-image` for image generation, and
-  `mistral/voxtral-mini-2602` for STT, with no provider fallbacks.
+  direct `voxtral-mini-2602` for STT, with key-only Mistral failover and no
+  provider/model fallbacks.
 - A root-only backup destination exists for the 9Router SQLite database before
   permission or supervision changes.
 - The deploy machine has Docker and can select/install Kamal `2.12.0`.
-- Provider tokens remain in 9Router's dashboard/database; values are never
-  pasted into this plan, Git, command output, or FireRed `.env` files.
+- Codex provider tokens remain in 9Router. Mistral values are supplied through
+  the deploy machine's secret environment and Kamal secret references; values
+  are never pasted into this plan, Git, command output, `.env` templates, or
+  job artifacts.
 - The user separately authorizes any `kamal deploy`, service restart, firewall
   change, OAuth reconnect, provider inference canary, or provider-account
   mutation. Repository-only implementation follows the sprint gates.
@@ -151,10 +195,13 @@ that any sprint validation has passed:
   tokens per minute and 1 request per second. Its organization-wide audio
   limit shows 3,600 audio seconds per minute and no numeric monthly value.
   The dash is not treated as a permanent unlimited-use guarantee.
-- 9Router registers Mistral in its general catalog, but its authenticated
-  `/v1/models/stt` catalog currently contains only Groq Whisper models. This
-  is a 9Router provider-adapter/catalog gap, not a VPN, Kamal, endpoint-key, or
-  FireRed URL problem.
+- Direct Mistral `voxtral-mini-2602` returned HTTP `200`, a non-empty
+  transcript, and valid segment timestamps with the existing synthetic audio
+  fixture. The current 9Router STT route instead returns HTTP `400` with a
+  provider-level unsupported-STT error for Mistral.
+- 9Router Gemini transcription can return text without segments, and its
+  OpenRouter adapter rejects STT and did not deliver audio through the tested
+  chat route. Neither satisfies FireRed's timestamp contract.
 - OpenRouter, Gemini CLI, Groq, Hugging Face, Deepgram, Cloudflare, and
   Nemotron are not selected for any FireRed runtime layer under this plan.
 - The local deploy machine selects Kamal `2.10.1`. `kamal config` fails locally
@@ -174,16 +221,17 @@ that any sprint validation has passed:
 | Read-only SSH/log/database metadata inspection | Yes | None while existing SSH access remains valid |
 | 9Router backup and read-only process/UFW inspection | Yes | None while the live process remains untouched |
 | Codex OAuth model setup and health verification | Yes | Complete interactive provider login/consent only if Codex requests it |
-| Mistral STT model setup and health verification | Yes with the existing 9Router connection | Replace/re-enter the key only if it is invalid, revoked, or expired |
-| 9Router Mistral STT adapter or pinned upgrade | Yes, using a maintained source/package path | Approve the service restart window; no hand-edit of the global package |
-| Add provider keys to FireRed `.env.kamal` | Not needed | Do not add them; FireRed should retain only the 9Router endpoint key |
+| Direct Mistral STT client and redacted QA | Yes | Supply at least one valid key through the deploy secret environment |
+| Mistral key-ring ordering and quota-scope declaration | Yes after key names/count are available; values remain unreadable in output | Confirm whether multiple keys share an organization/quota scope |
+| 9Router Mistral STT adapter or restart | No longer needed | No 9Router mutation is required for direct STT |
+| Add Mistral values to committed or clear env files | Never | Export `MISTRAL_API_KEYS` privately so Kamal can resolve its secret reference |
 | Canary deploy and live provider smoke | Yes after all gates | Explicit deploy/provider-call authorization |
 
-No additional provider key should be added to FireRed environment files. The
-existing Mistral provider key remains inside 9Router. The only FireRed-side
-updates are the 9Router URL/key references, the three approved model IDs,
-timeouts, and application web token already represented by the Kamal
-configuration.
+FireRed will receive `MISTRAL_API_KEYS` as a container secret because STT now
+bypasses 9Router. The value must not live in `.env.kamal.example`,
+`.env.mvp.example`, `config.toml`, the image, job state, or logs. The existing
+9Router endpoint key remains required only for Codex text, vision, and image
+generation.
 
 ## Sprint 1: Release Toolchain And Network Preflight
 
@@ -440,7 +488,11 @@ and configuration if the Mistral adapter or any Codex contract regresses.
 - **Rollback**: Restore the previous configuration only for diagnosis; keep
   deployment paused rather than silently selecting another image provider.
 
-### Task 3.3: Expose Mistral Voxtral Through 9Router STT
+### Task 3.3: Expose Mistral Voxtral Through 9Router STT (Historical, Superseded)
+
+This task records the original Sprint 3 decision and its offline patch boundary.
+It is not an active implementation target; Sprint 6 replaces it with direct
+Mistral STT and removes the unused patch.
 
 - **Location**: Maintained 9Router source/package and provider registry,
   Mistral connection record, `/v1/audio/transcriptions`, and `/v1/models/stt`.
@@ -710,32 +762,390 @@ is skipped because the exact configured model is absent from `/v1/models/stt`.
 No Kamal deploy, 9Router restart, package mutation, port change, user change,
 or firewall change is performed in this sprint.
 
+## Sprint 6: Direct Mistral Boundary And Legacy STT Cleanup
+
+**Goal**: Replace the blocked 9Router STT route with one direct, timestamped
+Mistral Voxtral integration and remove obsolete remote-MVP model/provider
+configuration without changing the original full-agent local ASR profile.
+
+**Dependencies**: Sprint 5 repository checkpoint and the approved July 17
+architecture decision. No 9Router restart or package change is required.
+
+**Tracked scope**: `AGENTS.md`, `docs/agent-engineering.md`,
+`docs/mvp/architecture.md`, `src/open_storyline/utils/remote_stt.py`,
+`src/open_storyline/nodes/core_nodes/remote_asr.py`,
+`src/open_storyline/config.py`, `config.toml`, `.env.mvp.example`,
+`.env.kamal.example`, `.kamal/secrets.example`, `config/deploy.yml`,
+`bin/kamal-mvp`, provider docs/tests, and removal of
+`patches/9router/0.5.35-mistral-stt.patch` after all active references are
+updated.
+
+**Commit**: `refactor: route remote stt directly to mistral`
+
+**Demo/Validation**:
+
+- FireRed sends the synthetic fixture directly to
+  `https://api.mistral.ai/v1/audio/transcriptions` with
+  `model=voxtral-mini-2602` and segment timestamps enabled.
+- The response contains non-empty text and finite, increasing segment bounds
+  accepted by the existing clip-planning/rendering contract.
+- 9Router remains the only path for Codex text, vision, and image generation;
+  its `/v1/models/stt` catalog is no longer a release dependency.
+- No Groq, Hugging Face, Gemini, OpenRouter, provider-prefixed Mistral model ID,
+  or generic STT model cascade remains in active remote-MVP configuration.
+
+**Rollback point**: Revert the Sprint 6 commit and keep deployment paused. The
+previous 9Router STT path was already red, so rollback restores the known
+blocked state rather than claiming a working transcription path.
+
+### Task 6.1: Retire Obsolete Remote-STT Models And Adapter Artifacts
+
+- **Location**: `AGENTS.md`, architecture guidance, STT defaults/config, env
+  examples, deployment gate, tests, provider docs, and
+  `patches/9router/0.5.35-mistral-stt.patch`.
+- **Description**: Remove the early Groq/Hugging Face model-cascade assumptions,
+  the active `OPENSTORYLINE_STT_MODELS` contract, provider-prefixed Mistral STT
+  ID, 9Router STT catalog checks, and the now-unused adapter patch. Preserve
+  concise historical notes where they explain completed commits; do not rewrite
+  Git history. Do not remove or modify the full-agent `local_asr` FunASR node.
+- **Dependencies**: None beyond the architecture decision.
+- **Acceptance criteria**:
+  - Active runtime code, templates, and current operating docs contain no
+    Groq/Hugging Face/OpenRouter/Gemini STT fallback ID.
+  - Repository instructions explicitly permit direct Mistral STT while keeping
+    text, vision, and image generation on 9Router; no implementation step must
+    contradict the old all-inference-through-9Router invariant.
+  - The remote MVP has one model constant: `voxtral-mini-2602`.
+  - `remote_asr` remains a stable public node/schema name even if its internal
+    client is renamed from a generic cascade to a Mistral-specific client.
+  - Historical documentation labels superseded behavior rather than deleting
+    useful audit context.
+- **Validation**:
+  - Focused `rg` searches for retired model IDs, `OPENSTORYLINE_STT_MODELS`,
+    `/v1/models/stt`, and the removed patch path.
+  - Full-agent node/schema discovery tests confirm `local_asr` and `remote_asr`
+    public contracts remain available.
+- **Rollback**: Restore the removed files/references from the Sprint 6 parent
+  commit and keep release blocked.
+
+### Task 6.2: Define The Direct Mistral Secret And Configuration Contract
+
+- **Location**: `src/open_storyline/config.py`, `config.toml`,
+  `.env.mvp.example`, `.env.kamal.example`, `.kamal/secrets.example`,
+  `config/deploy.yml`, and `bin/kamal-mvp`.
+- **Description**: Introduce `MISTRAL_API_KEYS` as the only STT credential
+  source. It accepts one or more ordered comma-separated values; whitespace is
+  trimmed, duplicates are rejected or collapsed deterministically, empty and
+  placeholder values fail startup, and the key-ring size is bounded. Keep the
+  official Mistral base URL fixed in production. Use
+  `MISTRAL_STT_TIMEOUT` for the bounded provider timeout and keep the model
+  fixed rather than user-selectable.
+- **Dependencies**: Task 6.1.
+- **Acceptance criteria**:
+  - One key and multiple keys use the same canonical secret variable.
+  - The secret is listed under Kamal secret env, not `env.clear`, and examples
+    contain only a shell reference or safe placeholder—not a credential.
+  - `NINEROUTER_KEY` remains required only by Codex-backed layers.
+  - Configuration errors report the variable name and safe counts only; no key
+    prefix, suffix, hash, or value appears.
+- **Validation**:
+  - Config/Kamal tests for absent, empty, one-key, duplicate, oversized, and
+    multi-key inputs.
+  - Rendered Kamal config is inspected with secret values unavailable to the
+    test process.
+  - Image history/build context scans confirm no Mistral key enters a layer.
+- **Rollback**: Restore the previous secret/config references and pause release.
+
+### Task 6.3: Implement The Single-Key Direct Voxtral Contract
+
+- **Location**: `src/open_storyline/utils/remote_stt.py`, remote ASR/MVP
+  pipeline consumers, and focused STT tests.
+- **Description**: Replace the 9Router multipart request with the official
+  direct Mistral request. Send the fixed model, the compressed audio file,
+  `timestamp_granularities=["segment"]`, and no diarization unless a later
+  product requirement approves it. Preserve normalized millisecond timestamps,
+  sanitized attempt records, bounded timeout, and fail-closed behavior.
+- **Dependencies**: Task 6.2. Sprint 7 expands this working one-key path into
+  quota-aware multi-key failover.
+- **Acceptance criteria**:
+  - A valid single key returns the same `STTResult` contract consumed by the
+    planner and renderer.
+  - Invalid JSON, empty text, missing segments, non-finite times, or `end <=
+    start` fails closed without persisting provider output.
+  - Audio is uploaded once on a successful attempt and file handles are closed
+    between attempts.
+- **Validation**:
+  - `PYTHONPATH=src python tests/test_remote_stt.py`
+  - Pipeline tests proving transcript segments still feed clip planning and
+    subtitles.
+  - One explicitly authorized synthetic direct-Mistral canary.
+- **Rollback**: Revert the direct client; do not silently invoke local ASR or a
+  second provider.
+
+### Sprint 6 Gate
+
+- [x] Obsolete remote-STT model lists, 9Router STT routing, and the adapter
+  patch are absent from active source/config/docs.
+- [x] Single-key direct Voxtral returns validated timestamped segments.
+- [x] The full local-agent ASR profile and remote-MVP public contracts remain
+  separate and intact.
+- [x] Secret/config scans show no Mistral credential value.
+- [x] Exactly one Sprint 6 commit is created with the proposed message.
+- [x] Sprint 7 does not start before the Sprint 6 gate passes.
+
+## Sprint 7: Quota-Aware Multi-Key Mistral Failover
+
+**Goal**: Allow one or more legitimate Mistral API keys while preventing retry
+storms, secret leakage, duplicate billing, and false assumptions about shared
+organization quotas.
+
+**Dependencies**: Sprint 6 direct single-key contract.
+
+**Tracked scope**: Mistral client/key-ring state, typed attempt metadata,
+focused tests, operator docs, and optional process-local metrics. No database
+schema, provider dashboard, or public API change is required.
+
+**Commit**: `feat: add quota-aware mistral key failover`
+
+**Demo/Validation**:
+
+- One configured key behaves exactly like Sprint 6.
+- In deterministic tests, key 1 returns `429` with `Retry-After`; key 2 returns
+  timestamped `200`; the request succeeds and records only safe key ordinal and
+  status category.
+- If all keys are exhausted, FireRed returns one sanitized terminal rate-limit
+  error and does not spin, sleep unboundedly, or retry the same key immediately.
+- Invalid media/request errors stop without wasting requests against every key.
+
+**Rollback point**: Revert to the Sprint 6 single-key client and deploy with one
+known-good secret while multi-key behavior is corrected.
+
+### Task 7.1: Parse And Protect The Ordered Key Ring
+
+- **Location**: Direct Mistral client configuration and tests.
+- **Description**: Parse `MISTRAL_API_KEYS` into a bounded ordered ring. Use
+  ordinal labels such as `key_1` only inside sanitized attempt metadata. Never
+  log key values, partial values, hashes, authorization headers, provider error
+  bodies containing credentials, or the complete key count on public health
+  endpoints.
+- **Dependencies**: Sprint 6 configuration contract.
+- **Acceptance criteria**:
+  - Input order is stable and defines failover priority.
+  - Empty entries are ignored safely; duplicate values do not create duplicate
+    attempts; a fully empty result fails startup.
+  - The parser has a small documented maximum to bound accidental secret-list
+    expansion and retry cost.
+  - Restart clears process-local cooldown state but not credentials; a renewed
+    `429` re-establishes cooldown without a loop.
+- **Validation**:
+  - Unit tests for whitespace, duplicates, one/many keys, maximum size, and
+    redaction against representative Mistral-style tokens.
+- **Rollback**: Configure one key and revert the key-ring parser.
+
+### Task 7.2: Classify Failover, Retry, And Cooldown Behavior
+
+- **Location**: Mistral request loop, typed error categories, and metrics.
+- **Description**: Apply the following bounded policy. Honor valid
+  `Retry-After` values and skip cooled keys. Serialize selector/cooldown updates
+  inside each process so concurrent jobs do not race the same known-limited
+  credential. The initial Kamal canary remains one application container;
+  horizontal scale requires a later shared limiter because cooldown state is
+  process-local.
+
+| Result | Action |
+| --- | --- |
+| `200` with valid text and segments | Return immediately |
+| `401`, `402`, `403`, or key-specific entitlement `404` | Disable/cool that key and try the next key |
+| `429` | Honor `Retry-After`, cool the key, then try the next eligible key |
+| Transport error, `408`, or `5xx` | At most one bounded retry, then try the next key |
+| `400`, `413`, or `422` input/schema/media error | Stop; do not repeat the bad request across keys |
+| `200` with invalid/missing timestamp contract | Stop with contract error; another key cannot repair the same model contract |
+
+- **Dependencies**: Task 7.1.
+- **Acceptance criteria**:
+  - Total attempts are bounded by key count plus the explicitly allowed single
+    retry for transient failures.
+  - Same-organization keys receiving organization-wide `429` terminate cleanly
+    after one pass; they are not treated as independent capacity.
+  - Attempt metadata contains model, safe key ordinal, status/category, and
+    sanitized reason only.
+  - No fallback changes provider, model, endpoint, timestamp requirements, or
+    local-inference policy.
+- **Validation**:
+  - Deterministic transport tests for every table row, malformed/missing
+    `Retry-After`, all-keys-limited, mixed invalid/valid keys, and concurrent
+    selection.
+  - A test asserts that invalid media generates exactly one provider attempt.
+- **Rollback**: Revert to the one-key Sprint 6 behavior and retain terminal
+  failure rather than broadening fallback conditions.
+
+### Task 7.3: Add Safe Observability And Operator Guidance
+
+- **Location**: failure metadata, logs, health details, and Mistral runbook.
+- **Description**: Record aggregate outcomes needed for QA—success, latency,
+  failover count, terminal category, and safe key ordinal—without transcripts,
+  audio, provider response bodies, or credentials. Document that adding API
+  keys from the same organization may not increase RPM/RPD and that account
+  creation or key rotation must comply with provider terms.
+- **Dependencies**: Task 7.2.
+- **Acceptance criteria**:
+  - Operators can distinguish invalid key, shared quota exhaustion, provider
+    outage, bad input, and response-contract failure.
+  - Public `/health` does not disclose keys, ordinals, quota ownership, or live
+    provider responses.
+  - Job failure artifacts remain sanitized and bounded.
+- **Validation**:
+  - Secret-pattern scans across logs, job state, failure fixtures, and test
+    output.
+  - Runbook dry run using fake keys and deterministic provider responses.
+- **Rollback**: Remove optional metrics fields while preserving safe terminal
+  errors and redaction.
+
+### Sprint 7 Gate
+
+- [ ] One-key and multi-key behavior pass deterministic tests.
+- [ ] `429`, invalid-key, transport, and all-keys-exhausted paths are bounded
+  and honor cooldown policy.
+- [ ] Bad input and invalid timestamp contracts do not fan out across keys.
+- [ ] No provider/model fallback or secret leakage is present.
+- [ ] Exactly one Sprint 7 commit is created with the proposed message.
+- [ ] Sprint 8 does not start before the Sprint 7 gate passes.
+
+## Sprint 8: Split Provider QA And Resume The VPS Canary
+
+**Goal**: Replace the obsolete all-9Router release gate with two explicit
+provider gates—9Router for Codex layers and direct Mistral for STT—then resume
+the synthetic VPS canary without modifying the running 9Router service.
+
+**Dependencies**: Sprints 6 and 7 plus explicit authorization for live
+provider canaries and Kamal deployment.
+
+**Tracked scope**: `scripts/qa_ninerouter.py`, a direct-Mistral QA command,
+`bin/kamal-mvp`, Kamal env/secrets, release docs, tests, and canary evidence.
+
+**Commit**: `release: gate direct mistral stt`
+
+**Demo/Validation**:
+
+- The 9Router gate verifies endpoint authentication, `cx/gpt-5.6-sol` text and
+  vision, and `cx/gpt-5.5-image`; it no longer requests `/v1/models/stt`.
+- The direct-Mistral gate verifies secret parsing and one timestamped synthetic
+  transcription through the real key ring without printing a key or transcript.
+- An explicitly authorized one-by-one diagnostic can verify every configured
+  key with the same non-private fixture, sequentially and within the documented
+  provider rate limit.
+- A Kamal canary completes upload, direct STT, Codex planning/vision, FFmpeg
+  rendering, artifact download, restart recovery, and rollback checks.
+
+**Rollback point**: Roll back the application image/config to Sprint 7 or the
+previous paused image, retain the output volume, and keep 9Router untouched.
+
+### Task 8.1: Split The Release Preflight By Provider Boundary
+
+- **Location**: QA scripts, `bin/kamal-mvp`, tests, and runbooks.
+- **Description**: Remove Mistral/STT checks from the 9Router catalog gate and
+  add a redacted direct-Mistral gate. Both must pass before `setup`, `deploy`,
+  or `redeploy`; read-only diagnostics and rollback remain available when
+  either is red.
+- **Dependencies**: Sprint 7 gate.
+- **Acceptance criteria**:
+  - The 9Router QA script never receives Mistral keys.
+  - The Mistral QA path never receives the 9Router endpoint key unless the
+    wrapper process already has it for the separate Codex check.
+  - QA output contains status/category, latency, model, segment count, and safe
+    attempt count only—not transcript or credentials.
+  - A skipped live call is not treated as green deployment evidence.
+- **Validation**:
+  - Deterministic QA-script tests for success, missing secrets, `429`, invalid
+    segments, redaction, and split exit codes.
+  - `bash -n bin/kamal-mvp` and Kamal config tests.
+- **Rollback**: Revert the split gate and leave deploy disabled rather than
+  restoring the known-red 9Router STT requirement.
+
+### Task 8.2: Validate Secret Delivery And Every Configured Key
+
+- **Location**: Deploy-machine environment, `.kamal/secrets`, rendered Kamal
+  config, candidate container, and direct-Mistral QA command.
+- **Description**: Confirm the secret reference resolves into the container
+  while remaining absent from rendered clear env, image history, Docker build
+  context, logs, and repository files. With explicit provider-call approval,
+  test each configured key sequentially using the synthetic fixture and record
+  only safe ordinal/status results.
+- **Dependencies**: Task 8.1 and user-supplied secret values.
+- **Acceptance criteria**:
+  - At least one key passes timestamped Voxtral transcription.
+  - Keys that are invalid or share exhausted quota are clearly classified and
+    can be removed/reordered without code changes.
+  - No one-by-one check exceeds the documented one-request-per-second limit.
+- **Validation**:
+  - Secret scans of Git diff, build context, image history, container inspect
+    output, and sanitized QA artifacts.
+  - Redacted per-key canary summary reviewed by the operator.
+- **Rollback**: Remove the secret from the candidate deployment and keep the
+  previous application image running/paused.
+
+### Task 8.3: Deploy And Observe One End-To-End Canary
+
+- **Location**: Kamal/VPS application container, persistent job volume, health
+  endpoints, and remote MVP API.
+- **Description**: Deploy one candidate only after both provider gates are
+  green. Use synthetic media, preserve existing 9Router user/port/process, and
+  observe direct Mistral failover metadata plus Codex and rendering stages.
+- **Dependencies**: Task 8.2 and explicit deployment authorization.
+- **Acceptance criteria**:
+  - The job completes with timestamped transcript, validated clip plan,
+    rendered MP4/subtitles, and registered artifacts.
+  - A controlled application restart preserves job/output state; 9Router is not
+    restarted or reconfigured.
+  - Rollback restores `/up` and `/health` without deleting persistent outputs.
+- **Validation**:
+  - Full deterministic suite, Docker build/profile inspection, both live
+    provider gates, authenticated API workflow, restart recovery, and Kamal
+    rollback rehearsal.
+- **Rollback**: Stop new jobs, preserve evidence, restore the previous image and
+  secret/config set, and verify health before reopening the endpoint.
+
+### Sprint 8 Gate
+
+- [ ] 9Router Codex and direct-Mistral gates are independently green.
+- [ ] Every configured Mistral key has a redacted validation result and at
+  least one key passes the full timestamp contract.
+- [ ] The end-to-end canary, restart recovery, artifact security, and rollback
+  checks pass without changing 9Router.
+- [ ] No secret, transcript, or private media appears in evidence.
+- [ ] Exactly one Sprint 8 commit is created with the proposed message.
+- [ ] The personal-server rollout opens only after this gate passes.
+
 ## Testing Strategy
 
-- **Unit**: Provider client parsing, catalog filtering, timestamp normalization,
-  single-provider fail-closed behavior, invalid input, timeout, and secret
-  redaction.
-- **Integration**: Authenticated 9Router `/v1` endpoints, provider-specific
-  response formats, image binary/base64 decoding, STT `verbose_json`, and
-  9Router-to-FireRed endpoint-key behavior.
+- **Unit**: Direct Mistral request/response parsing, key-ring normalization,
+  timestamp normalization, failover classification, cooldowns, invalid input,
+  timeout, concurrency, and secret redaction.
+- **Integration**: Authenticated 9Router `/v1` endpoints for Codex text/vision
+  and image binary/base64 decoding; direct Mistral `verbose_json` transcription
+  with timestamp segments; and 9Router-to-FireRed endpoint-key behavior.
 - **End-to-end/manual**: Synthetic video upload through job completion,
-  subtitle/artifact validation, restart recovery, and dashboard/service restart.
+  direct-Mistral subtitle/artifact validation, restart recovery, and a
+  no-restart 9Router observation check.
 - **Deployment**: Kamal version/config rendering, Docker build/profile boundary,
   proxy `/up`, app `/health`, persistent output volume, and rollback command.
 - **Security/privacy**: `.env.kamal` mode `600`, root/admin ownership review,
-  9Router DB modes, UFW scope, endpoint 401/200 checks, log redaction, and
-  absence of tokens in Git/image layers/test artifacts.
+  9Router DB modes, UFW scope, endpoint 401/200 checks, Mistral secret delivery,
+  log redaction, and absence of tokens in Git/image layers/test artifacts.
 - **Performance/reliability**: Record request latency/TTFT, provider retry and
-  terminal failure counts, Codex account distribution, image byte limits,
-  Mistral audio usage/limits, STT timeout, job queue recovery, and disk
-  headroom.
+  terminal failure counts, safe key-ordinal failover counts, Codex account
+  distribution, image byte limits, Mistral audio usage/limits, STT timeout,
+  job queue recovery, and disk headroom.
 
 ## Risks And Gotchas
 
 | Risk | Impact | Mitigation | Validation signal |
 | --- | --- | --- | --- |
-| Current 9Router omits Mistral from its STT catalog | FireRed cannot reach the approved STT model | Pin a supported release or maintained adapter that preserves Mistral segments | Catalog entry plus STT `200` with segments |
-| Mistral Free-mode limit or availability changes | STT jobs fail closed | Monitor the organization limits page and stop deployment until the approved provider is restored | Redacted 429/availability canary and usage review |
+| Direct Mistral outage or model/API change | STT jobs fail closed | Pin the fixed model contract, keep a bounded key ring, and monitor the direct canary; do not switch providers implicitly | Redacted direct-Mistral canary and contract test |
+| Mistral keys share one organization quota | Multiple keys do not increase RPM/RPD/audio capacity | Record quota ownership, honor `Retry-After`, and treat an all-key `429` as terminal | Per-key status summary plus organization-limit review |
+| Key-ring retry storm | Duplicate inference, extra cost, or provider throttling | One bounded transient retry, per-key cooldown, process-local serialization, and a maximum key count | Attempt-count and cooldown tests |
+| Unauthorized/expired key in the ring | Some requests fail before a healthy key is tried | Disable that ordinal for the process and continue; alert without exposing the value | Redacted 401/403 failover test |
+| Direct Mistral secret delivery error | Container cannot transcribe | Validate Kamal secret references and fail startup with a variable-name-only error | Rendered-config and container secret scan |
 | Codex OAuth expires or loses model entitlement | Text, vision, or image layer fails closed | Use the re-authentication runbook; do not substitute another provider automatically | One-by-one OAuth and exact-model probes |
 | Codex image catalog changes | Image generation fails closed | Require `cx/gpt-5.5-image` catalog parity before deploy and pause on removal | Catalog and binary decode probe |
 | 9Router launched from RDP terminal | Reboot/session loss | Systemd supervision and journal logs | Restart/reboot-equivalent test |
@@ -743,7 +1153,7 @@ or firewall change is performed in this sprint.
 | Older Kamal executable | Deploy fails before SSH | Enforce `2.12.0` before deploy | `kamal config` pass |
 | Public-IP hairpin from container | App cannot reach same-host 9Router | Use host gateway and test from a disposable container | Container `/api/health` probe |
 | `.env.kamal` or SQLite permissions too broad | Credential disclosure | Owner-only modes and redacted audits | `stat`/secret scan |
-| 9Router catalog changes | Stale model IDs fail closed | Catalog-driven preflight and documented replacement process | Catalog parity report |
+| 9Router catalog changes | Codex text/vision/image layers fail closed | Catalog-driven preflight for only those three 9Router contracts | Catalog parity report |
 | Low VPS disk headroom | Build/job failures | Monitor disk and output volume; retain/clean with approval | `df`, job-volume thresholds |
 
 ## Rollback Plan
@@ -761,18 +1171,24 @@ or firewall change is performed in this sprint.
 - **Sprint 5**: Roll back to the previous healthy image/config, preserve the
   persistent job volume, validate `/up`/`/health`, and document any jobs that
   were in flight. Do not perform destructive volume cleanup during rollback.
+- **Sprint 6**: Revert the direct-Mistral boundary and restore the previous
+  paused configuration; do not reactivate the known-red 9Router STT patch.
+- **Sprint 7**: Disable multi-key rotation and deploy one known-good Mistral
+  secret using the Sprint 6 client. Preserve sanitized failure evidence.
+- **Sprint 8**: Roll back the application image, Kamal secret/config set, and
+  QA gate to the previous healthy checkpoint; keep the manually launched
+  9Router process, user, port, and database untouched.
 
 ## Execution Order
 
-1. Implement Sprint 1 only.
-2. Run and record all Sprint 1 validation.
-3. Create exactly one Sprint 1 commit and record its rollback point.
-4. Start Sprint 2 only after the Sprint 1 gate passes.
-5. Repeat the gate and one-commit rule for Sprints 2 through 5.
-6. Stop only if Sprint 3 requires interactive Codex consent, the existing
-   Mistral key is invalid/expired, or the approved model is unavailable.
-7. Request explicit deployment authorization before any canary or remote
-   service/firewall mutation.
+1. Treat Sprints 1-5 and their commits as completed historical checkpoints; do
+   not rerun or rewrite them merely to change the STT architecture.
+2. Implement Sprint 6 and prove one-key direct Mistral transcription.
+3. Implement Sprint 7 and prove deterministic multi-key failover without
+   cross-provider/model fallback or quota-bypass behavior.
+4. Implement Sprint 8, then request explicit live-provider and deployment
+   authorization before the canary. Never restart or mutate the existing
+   9Router process as part of this STT migration.
 
 ## Completion Checklist
 
@@ -781,9 +1197,16 @@ or firewall change is performed in this sprint.
 - [ ] Kamal `2.12.0` config and network preflight pass.
 - [ ] 9Router is supervised, backed up, permission-protected, and observable.
 - [ ] `cx/gpt-5.6-sol`, `cx/gpt-5.5-image`, and
-  `mistral/voxtral-mini-2602` are live and catalog/contract-matched.
-- [ ] No runtime provider fallback is configured.
-- [ ] Codex OAuth and Mistral API-key runbooks are current.
+  direct `voxtral-mini-2602` are live and contract-matched through their
+  respective provider boundaries.
+- [ ] Only ordered Mistral key failover is configured; no cross-provider or
+  cross-model runtime fallback is present.
+- [ ] Obsolete remote-STT model defaults, `OPENSTORYLINE_STT_MODELS`, and the
+  unused 9Router Mistral patch are absent from active source/config/docs.
+- [ ] `MISTRAL_API_KEYS` is delivered only as a Kamal secret and all configured
+  keys have redacted validation evidence.
+- [ ] Codex OAuth, direct-Mistral secret, quota-scope, and key-rotation
+  runbooks are current.
 - [ ] Canary end-to-end job, restart recovery, artifact security, and rollback
   checks pass.
 - [ ] Residual risks, provider quotas, and rollback instructions are recorded.

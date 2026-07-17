@@ -30,6 +30,7 @@ Each implementation increment was validated before its short commit.
 | 17 | Sprint 3: single-model Codex/Mistral contracts and pinned offline 9Router STT adapter | Focused provider tests, config/Kamal validation, live Codex text/vision/image probes, clean patch application, and a recorded red Mistral catalog gate | `fix: lock ninerouter provider contracts` |
 | 18 | Sprint 4: deterministic and live redacted 9Router modality gate | Complete unit suite, local/container catalog checks, live Codex text/vision/image contracts, skipped invalid STT canary, container-to-host route, and incident runbook | `test: add redacted ninerouter qa gate` |
 | 19 | Sprint 5 release checkpoint: allowlisted remote image and mandatory live provider gate | Remote image build/profile inspection, local `/health` and `/up` smoke, Kamal config, complete deterministic suite, and a recorded deployment block while Mistral STT is absent | `release: gate remote mvp on ninerouter qa` |
+| 20 | Sprint 6: direct Mistral boundary and legacy STT cleanup | Direct timestamp contract, config/Kamal secret tests, public node compatibility, complete deterministic suite, and removal of the obsolete 9Router STT adapter | `refactor: route remote stt directly to mistral` |
 
 The original pull request targeted `main` in
 `loldlm1/FireRed-OpenStoryline`. Merge and release state belongs in the hosting

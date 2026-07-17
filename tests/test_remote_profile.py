@@ -76,16 +76,18 @@ class RemoteProfileTests(unittest.TestCase):
         secrets = (ROOT / ".kamal" / "secrets.example").read_text(encoding="utf-8")
 
         self.assertIn(
-            "  secret:\n    - OPENSTORYLINE_WEB_TOKEN\n    - NINEROUTER_KEY",
+            "  secret:\n    - OPENSTORYLINE_WEB_TOKEN\n    - NINEROUTER_KEY\n    - MISTRAL_API_KEYS",
             deploy,
         )
         self.assertNotRegex(deploy, r"(?m)^\s+NINEROUTER_KEY:")
+        self.assertNotRegex(deploy, r"(?m)^\s+MISTRAL_API_KEYS:")
         self.assertNotRegex(deploy, r"(?m)^\s+OPENSTORYLINE_WEB_TOKEN:")
         self.assertEqual(
             secrets.splitlines()[1:],
             [
                 "OPENSTORYLINE_WEB_TOKEN=$OPENSTORYLINE_WEB_TOKEN",
                 "NINEROUTER_KEY=$NINEROUTER_KEY",
+                "MISTRAL_API_KEYS=$MISTRAL_API_KEYS",
             ],
         )
 
@@ -100,13 +102,11 @@ class RemoteProfileTests(unittest.TestCase):
         self.assertIn("setup|deploy|redeploy", wrapper)
         self.assertIn('for arg in "$@"', wrapper)
         self.assertIn('run_ninerouter_release_gate "$release_command"', wrapper)
-        self.assertIn("NINEROUTER_QA_STT_AUDIO", wrapper)
         self.assertIn("--strict-models", wrapper)
         self.assertIn("--live-inference", wrapper)
-        self.assertIn("--stt-audio", wrapper)
         self.assertIn('OPENSTORYLINE_LLM_MODEL "cx/gpt-5.6-sol"', wrapper)
         self.assertIn('OPENSTORYLINE_IMAGE_MODELS "cx/gpt-5.5-image"', wrapper)
-        self.assertIn('OPENSTORYLINE_STT_MODELS "mistral/voxtral-mini-2602"', wrapper)
+        self.assertNotIn("OPENSTORYLINE_STT_MODELS", wrapper)
 
 if __name__ == "__main__":
     unittest.main()
