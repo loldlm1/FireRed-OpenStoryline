@@ -2,9 +2,8 @@
 
 **Generated**: 2026-07-16
 **Updated**: 2026-07-17
-**Status**: Repository execution is complete through Sprint 6. Sprint 7 will
-add quota-aware multi-key failover, and Sprint 8 will split the live release
-gates and resume the VPS canary.
+**Status**: Repository execution is complete through Sprint 7. Sprint 8 will
+split the live release gates and resume the VPS canary.
 **Estimated Complexity**: High
 
 ## Overview
@@ -1003,13 +1002,13 @@ known-good secret while multi-key behavior is corrected.
 
 ### Sprint 7 Gate
 
-- [ ] One-key and multi-key behavior pass deterministic tests.
-- [ ] `429`, invalid-key, transport, and all-keys-exhausted paths are bounded
+- [x] One-key and multi-key behavior pass deterministic tests.
+- [x] `429`, invalid-key, transport, and all-keys-exhausted paths are bounded
   and honor cooldown policy.
-- [ ] Bad input and invalid timestamp contracts do not fan out across keys.
-- [ ] No provider/model fallback or secret leakage is present.
-- [ ] Exactly one Sprint 7 commit is created with the proposed message.
-- [ ] Sprint 8 does not start before the Sprint 7 gate passes.
+- [x] Bad input and invalid timestamp contracts do not fan out across keys.
+- [x] No provider/model fallback or secret leakage is present.
+- [x] Exactly one Sprint 7 commit is created with the proposed message.
+- [x] Sprint 8 does not start before the Sprint 7 gate passes.
 
 ## Sprint 8: Split Provider QA And Resume The VPS Canary
 
