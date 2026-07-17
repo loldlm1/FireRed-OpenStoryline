@@ -117,7 +117,7 @@ class RemoteProfileTests(unittest.TestCase):
         release_scan = wrapper.index('for arg in "$@"')
         ninerouter_gate = wrapper.index('run_ninerouter_release_gate "$release_command"')
         mistral_gate = wrapper.index('run_mistral_release_gate "$release_command"')
-        kamal_exec = wrapper.rindex('exec kamal "_${KAMAL_VERSION}_"')
+        kamal_exec = wrapper.rindex('exec kamal "_${KAMAL_CLI_VERSION}_"')
 
         self.assertLess(release_scan, ninerouter_gate)
         self.assertLess(ninerouter_gate, mistral_gate)
@@ -143,6 +143,9 @@ class RemoteProfileTests(unittest.TestCase):
         self.assertIn("label=service=openstoryline-mvp", hook)
         self.assertIn("label=role=web", hook)
         self.assertIn("docker stop -t 30", hook)
+        self.assertIn('OPENSTORYLINE_APP_VERSION="${KAMAL_VERSION:', hook)
+        self.assertLess(hook.index("db migrate"), hook.index("docker stop -t 30"))
+        self.assertIn('"${KAMAL_COMMAND:-}" != "rollback"', hook)
         self.assertNotIn("20128", hook)
         self.assertNotIn("9router", hook.lower())
 

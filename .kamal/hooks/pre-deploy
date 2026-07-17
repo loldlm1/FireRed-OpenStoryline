@@ -14,6 +14,13 @@ set -a
 source "$ENV_FILE"
 set +a
 
+if [[ "${KAMAL_COMMAND:-}" != "rollback" ]]; then
+  printf 'Migrating the delivered FireRed image before application cutover...\n'
+  KAMAL_ENV_FILE="$ENV_FILE" \
+    OPENSTORYLINE_APP_VERSION="${KAMAL_VERSION:?KAMAL_VERSION is required}" \
+    "$ROOT_DIR/bin/kamal-mvp" db migrate
+fi
+
 # Direct host-port publishing cannot run old and new containers concurrently.
 [[ -n "${KAMAL_DOMAIN:-}" ]] && exit 0
 

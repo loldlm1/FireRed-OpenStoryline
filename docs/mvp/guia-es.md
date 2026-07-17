@@ -153,15 +153,27 @@ autenticación, transporte, cuota o contrato detiene el comando antes de iniciar
 Kamal. Los comandos de diagnóstico y `rollback` siguen disponibles cuando un
 gate está rojo. No reinicies ni reconfigures el proceso manual de 9Router.
 
+El primer rollout con PostgreSQL se prepara por etapas para que la base de
+datos y la copia verificable existan antes de arrancar la nueva aplicación:
+
 ```bash
-./bin/kamal-mvp setup
+./bin/kamal-mvp server bootstrap
+./bin/kamal-mvp registry setup
+./bin/kamal-mvp accessory boot db
+./bin/kamal-mvp build deliver
+./bin/kamal-mvp db migrate
+./bin/kamal-mvp db current
+./bin/kamal-mvp db backup
+./bin/kamal-mvp db restore-check
+./bin/kamal-mvp deploy --skip-push
 ```
 
-Ese comando instala Docker en el VPS, levanta un registro temporal local,
-construye `Dockerfile.remote`, inicia el accesorio privado PostgreSQL, despliega
-el contenedor, monta `/var/lib/openstoryline/outputs` y arranca el proxy. Las
-migraciones son explícitas: ejecuta `./bin/kamal-mvp db migrate` durante el
-primer rollout y antes de arrancar una versión que requiera una revisión nueva.
+`build deliver` construye `Dockerfile.remote` y entrega la imagen candidata.
+Las migraciones usan esa imagen exacta en la red privada, sin publicar el
+puerto web. El hook `pre-deploy` repite la migración idempotente antes de
+detener el contenedor actual; un rollback omite la migración hacia adelante.
+El despliegue monta `/var/lib/openstoryline/outputs` y conserva el accesorio
+PostgreSQL privado.
 Las sesiones de autenticación, las sesiones de edición, los límites de login,
 los trabajos y sus eventos sobreviven a redeploys en PostgreSQL. Los videos y
 los snapshots `job.json` permanecen en el volumen de outputs; PostgreSQL es la

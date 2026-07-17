@@ -32,7 +32,20 @@ local_backup() {
 }
 
 remote_backup() {
+  local container="${OPENSTORYLINE_POSTGRES_CONTAINER:-openstoryline-mvp-db}"
   local command_text
+  local target="${KAMAL_SSH_USER:-root}@${KAMAL_HOST:-}"
+  local -a ssh_args=(
+    -o BatchMode=yes
+    -o ConnectTimeout=15
+    -p "${KAMAL_SSH_PORT:-22}"
+  )
+
+  [[ -n "${KAMAL_HOST:-}" ]] || fail "KAMAL_HOST is required"
+  [[ "${KAMAL_SSH_PORT:-22}" =~ ^[0-9]+$ ]] || fail "KAMAL_SSH_PORT must be numeric"
+  [[ "$container" =~ ^[A-Za-z0-9_.-]+$ ]] \
+    || fail "OPENSTORYLINE_POSTGRES_CONTAINER contains unsupported characters"
+
   command_text='set -eu
 umask 077
 target=/backups/openstoryline.latest.dump
@@ -45,8 +58,7 @@ mv -f "$temporary" "$target"
 trap - EXIT
 printf "PostgreSQL backup replaced atomically: %s\n" "$target"'
 
-  exec kamal "_${KAMAL_VERSION:-2.12.0}_" accessory exec db \
-    --primary --reuse --raw -- sh -lc "$command_text"
+  ssh "${ssh_args[@]}" "$target" "docker exec -i '$container' sh" <<< "$command_text"
 }
 
 case "$MODE" in

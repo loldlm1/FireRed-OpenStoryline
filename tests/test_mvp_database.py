@@ -143,6 +143,103 @@ class DatabaseReadinessTests(unittest.IsolatedAsyncioTestCase):
 
 
 class BackupScriptTests(unittest.TestCase):
+    def test_remote_backup_and_restore_stream_into_the_accessory_container(self):
+        scripts = (
+            (ROOT / "scripts" / "mvp-postgres-backup.sh", b"pg_dump"),
+            (ROOT / "scripts" / "mvp-postgres-restore-check.sh", b"createdb"),
+        )
+        with TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            command_dir = root / "bin"
+            command_dir.mkdir()
+            argument_capture = root / "ssh-arguments"
+            stdin_capture = root / "ssh-stdin"
+            ssh = command_dir / "ssh"
+            ssh.write_text(
+                "#!/bin/sh\n"
+                ": > \"$SSH_ARGUMENT_CAPTURE\"\n"
+                "for argument in \"$@\"; do printf '%s\\0' \"$argument\" >> \"$SSH_ARGUMENT_CAPTURE\"; done\n"
+                "dd of=\"$SSH_STDIN_CAPTURE\" status=none\n",
+                encoding="utf-8",
+            )
+            ssh.chmod(0o755)
+            environment = {
+                **os.environ,
+                "PATH": f"{command_dir}:{os.environ['PATH']}",
+                "OPENSTORYLINE_POSTGRES_ADMIN_MODE": "kamal",
+                "KAMAL_HOST": "203.0.113.10",
+                "SSH_ARGUMENT_CAPTURE": str(argument_capture),
+                "SSH_STDIN_CAPTURE": str(stdin_capture),
+            }
+
+            for script, expected_command in scripts:
+                with self.subTest(script=script.name):
+                    result = subprocess.run(
+                        [str(script)],
+                        cwd=ROOT,
+                        env=environment,
+                        check=False,
+                        capture_output=True,
+                        text=True,
+                    )
+                    self.assertEqual(result.returncode, 0, result.stderr)
+                    arguments = argument_capture.read_bytes()
+                    self.assertIn(
+                        b"docker exec -i 'openstoryline-mvp-db' sh",
+                        arguments,
+                    )
+                    self.assertIn(expected_command, stdin_capture.read_bytes())
+
+    def test_remote_migration_uses_the_exact_image_without_publishing_a_port(self):
+        with TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            command_dir = root / "bin"
+            command_dir.mkdir()
+            ssh_capture = root / "ssh-arguments"
+            env_file = root / "kamal.env"
+            database_url = "postgresql+psycopg://app:test-password@db/openstoryline"
+            env_file.write_text(
+                "KAMAL_HOST=203.0.113.10\n"
+                f"DATABASE_URL={database_url}\n",
+                encoding="utf-8",
+            )
+
+            ssh = command_dir / "ssh"
+            ssh.write_text(
+                "#!/bin/sh\n"
+                "printf '<call>\\0' >> \"$SSH_CAPTURE\"\n"
+                "for argument in \"$@\"; do printf '%s\\0' \"$argument\" >> \"$SSH_CAPTURE\"; done\n",
+                encoding="utf-8",
+            )
+            ssh.chmod(0o755)
+            scp = command_dir / "scp"
+            scp.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+            scp.chmod(0o755)
+
+            environment = {
+                **os.environ,
+                "PATH": f"{command_dir}:{os.environ['PATH']}",
+                "KAMAL_ENV_FILE": str(env_file),
+                "OPENSTORYLINE_APP_VERSION": "release-test",
+                "SSH_CAPTURE": str(ssh_capture),
+            }
+            result = subprocess.run(
+                [str(ROOT / "bin" / "kamal-mvp"), "db", "migrate"],
+                cwd=ROOT,
+                env=environment,
+                check=False,
+                capture_output=True,
+                text=True,
+            )
+
+            self.assertEqual(result.returncode, 0, result.stderr)
+            ssh_arguments = ssh_capture.read_bytes()
+            self.assertIn(b"localhost:5555/openstoryline-mvp:release-test", ssh_arguments)
+            self.assertIn(b"docker run --rm --network kamal", ssh_arguments)
+            self.assertIn(b"alembic upgrade head", ssh_arguments)
+            self.assertNotIn(b"--publish", ssh_arguments)
+            self.assertNotIn(database_url.encode(), ssh_arguments)
+
     def test_failed_dump_keeps_the_previous_backup(self):
         with TemporaryDirectory() as tmpdir:
             root = Path(tmpdir)

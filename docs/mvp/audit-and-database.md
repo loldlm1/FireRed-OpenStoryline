@@ -42,6 +42,12 @@ Create or inspect the schema with:
 ./bin/kamal-mvp db current
 ```
 
+In Kamal mode these commands start a disposable container from the exact
+delivered application image on the private `kamal` network. They do not reuse
+the web container or publish its HTTP port. The tracked `pre-deploy` hook
+repeats `db migrate` for the candidate image before stopping the current
+direct-port container; rollback skips this forward-migration step.
+
 Code rollback after an additive migration leaves the database directory and
 tables in place. Do not use Alembic downgrade as a production rollback method.
 
@@ -63,7 +69,9 @@ Create it and prove that it restores into a separate temporary database:
 Backup creation writes a temporary file, validates its archive, and atomically
 replaces the previous dump only after success. The restore check never writes
 to the application database; it creates an isolated database, restores the
-dump, verifies the required tables and Alembic revision, then removes it.
+dump, verifies the required tables and Alembic revision, then removes it. Both
+commands stream a short maintenance script over SSH into the running private
+PostgreSQL accessory, so database credentials do not enter command arguments.
 
 The dump contains private prompts, transcripts, and audit text once those
 features are enabled. Protect it like production data. A dump stored only on
@@ -207,8 +215,9 @@ example production policy preserves seven and 30 days.
 Use this order for the first PostgreSQL/audit release. Real server commands
 require a separately authorized maintenance window.
 
-1. Boot and verify the private `db` accessory.
-2. Run `./bin/kamal-mvp db migrate` and `./bin/kamal-mvp db current`.
+1. Boot and verify the private `db` accessory, then deliver the candidate image.
+2. Run `./bin/kamal-mvp db migrate` and `./bin/kamal-mvp db current` against
+   that exact image.
 3. Run `./bin/kamal-mvp db backup` and `./bin/kamal-mvp db restore-check`.
 4. Deploy the application with `OPENSTORYLINE_RETENTION_ENABLED=false`.
 5. Run the legacy import dry-run, apply it, then repeat apply to prove
