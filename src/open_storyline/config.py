@@ -147,13 +147,10 @@ class RemoteASRConfig(ConfigBaseModel):
     base_url: str = ""
     api_key: str = ""
     models: List[str] = Field(default_factory=lambda: [
-        "groq/whisper-large-v3-turbo",
-        "groq/whisper-large-v3",
-        "huggingface/openai/whisper-large-v3",
-        "huggingface/openai/whisper-small",
+        "mistral/voxtral-mini-2602",
     ])
     timeout: float = Field(default=180.0, gt=0)
-    language: str = "es"
+    language: str = ""
     response_format: Literal["json", "text", "verbose_json", "srt", "vtt"] = "verbose_json"
 
 
@@ -170,8 +167,7 @@ class RemoteImageConfig(ConfigBaseModel):
     base_url: str = ""
     api_key: str = ""
     models: List[str] = Field(default_factory=lambda: [
-        "gemini/gemini-3-pro-image-preview",
-        "xai/grok-imagine-image",
+        "cx/gpt-5.5-image",
     ])
     timeout: float = Field(default=180.0, gt=0)
     max_bytes: int = Field(default=25 * 1024 * 1024, gt=0)

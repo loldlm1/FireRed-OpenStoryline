@@ -73,13 +73,10 @@ max_frames = 64                  # 单clip抽帧上限兜底，避免长视频�
 base_url = "" # Prefer NINEROUTER_URL
 api_key = ""  # Prefer NINEROUTER_KEY
 models = [
-    "groq/whisper-large-v3-turbo",
-    "groq/whisper-large-v3",
-    "huggingface/openai/whisper-large-v3",
-    "huggingface/openai/whisper-small",
+    "mistral/voxtral-mini-2602",
 ]
 timeout = 180.0
-language = "es"
+language = "" # Mistral timestamps and explicit language cannot be combined.
 response_format = "verbose_json"
 
 # ============= 9Router planning and vision =====================
@@ -95,10 +92,9 @@ max_retries = 2
 [remote_image]
 base_url = "" # Prefer NINEROUTER_URL
 api_key = ""  # Prefer NINEROUTER_KEY
-# Candidates must appear in GET /v1/models/image on your 9Router instance.
+# The approved model must appear in GET /v1/models/image on your 9Router instance.
 models = [
-    "gemini/gemini-3-pro-image-preview",
-    "xai/grok-imagine-image",
+    "cx/gpt-5.5-image",
 ]
 timeout = 180.0
 max_bytes = 26214400

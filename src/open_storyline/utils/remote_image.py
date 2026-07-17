@@ -11,8 +11,7 @@ import httpx
 
 
 DEFAULT_IMAGE_MODELS = (
-    "gemini/gemini-3-pro-image-preview",
-    "xai/grok-imagine-image",
+    "cx/gpt-5.5-image",
 )
 
 _IMAGE_SIGNATURES = (
@@ -110,7 +109,7 @@ def _decode_image_response(response: httpx.Response, max_bytes: int) -> tuple[by
 
 
 class RemoteImageCascade:
-    """9Router image cascade with catalog validation and no local fallback."""
+    """9Router image client locked to the approved Codex OAuth model."""
 
     def __init__(
         self,
@@ -135,6 +134,11 @@ class RemoteImageCascade:
             raise RemoteImageError("IMAGE_CONFIG_INVALID", "NINEROUTER_KEY is required")
         if not self.models:
             raise RemoteImageError("IMAGE_CONFIG_INVALID", "at least one remote image model is required")
+        if self.models != list(DEFAULT_IMAGE_MODELS):
+            raise RemoteImageError(
+                "IMAGE_CONFIG_INVALID",
+                f"remote image generation must use only {DEFAULT_IMAGE_MODELS[0]}",
+            )
         if self.timeout <= 0 or self.max_bytes <= 0:
             raise RemoteImageError("IMAGE_CONFIG_INVALID", "timeout and max_bytes must be positive")
 

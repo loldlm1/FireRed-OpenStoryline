@@ -2,8 +2,9 @@
 
 Este perfil no instala ni ejecuta modelos de IA locales. 9Router realiza toda
 la inferencia; FFmpeg/FFprobe sólo procesan audio y video de forma determinista
-en CPU. Si todos los Whisper remotos fallan, el trabajo falla y guarda las
-razones sanitizadas en `failure.json`.
+en CPU. Texto, visión e imágenes usan Codex OAuth; STT usa Mistral. Si alguno
+de esos contratos falla, el trabajo falla y guarda razones sanitizadas en
+`failure.json`.
 
 Kamal reemplaza el flujo manual con Docker Compose, pero usa Docker
 internamente. `kamal setup` entra al VPS por SSH, instala Docker si falta,
@@ -13,24 +14,22 @@ mano en el VPS.
 
 ## 1. Prepara las credenciales remotas
 
-1. Crea una key en <https://console.groq.com/keys>.
-2. Crea un token fino en <https://huggingface.co/settings/tokens> con acceso a
-   Inference Providers.
-3. En 9Router abre **Providers**, agrega ambas credenciales y prueba las
-   conexiones.
-4. Crea una endpoint key de 9Router sólo para OpenStoryline.
+1. Conserva activas las conexiones Codex OAuth de 9Router.
+2. Agrega la key Free de Mistral en 9Router y prueba la conexión.
+3. Crea una endpoint key de 9Router sólo para OpenStoryline.
 
-Las keys de Groq y Hugging Face quedan en 9Router. Este repositorio sólo recibe
-la URL y la endpoint key de 9Router. Revisa la [guía de keys](api-keys.md) y los
+Las credenciales de Codex y Mistral quedan en 9Router. Este repositorio sólo
+recibe la URL y la endpoint key de 9Router. Revisa la [guía de keys](api-keys.md) y los
 [límites gratuitos verificados](limites-gratis.md). Para imágenes revisa la
 [guía de generación remota y derechos](imagenes-generadas.md); una cuota
 incluida por un proveedor no equivale a gratuidad garantizada.
 
 ## 2. Prepara la máquina desde la que desplegarás
 
-Necesitas Git, Docker en ejecución, acceso SSH por clave al VPS y Ruby con
-`gem`. El script instala Kamal 2.12.0 si Ruby existe y Kamal todavía no está
-instalado. En Windows, ejecuta estos pasos desde WSL2.
+Necesitas Git, Docker en ejecución, acceso SSH por clave al VPS, Ruby con
+`gem` y Kamal 2.12.0 instalado explícitamente. El wrapper rechaza otra versión
+y no instala herramientas durante el despliegue. En Windows, ejecuta estos
+pasos desde WSL2.
 
 El VPS puede ser una instalación nueva de Ubuntu/Debian sin Python ni Docker.
 Para el primer despliegue se recomienda SSH como `root`; abre el puerto SSH y
@@ -98,8 +97,9 @@ curl -fsS \
   "$NINEROUTER_URL/v1/models/stt"
 ```
 
-Confirma los identificadores exactos que 9Router expone y corrige
-`OPENSTORYLINE_STT_MODELS` si difieren. Después ejecuta:
+Confirma que aparece exactamente `mistral/voxtral-mini-2602`. No cambies el ID
+ni agregues fallback si falta; el despliegue debe quedar bloqueado. Después
+ejecuta:
 
 ```bash
 curl -fsS \
@@ -107,11 +107,22 @@ curl -fsS \
   "$NINEROUTER_URL/v1/models/image"
 ```
 
-Conserva en `OPENSTORYLINE_IMAGE_MODELS` únicamente IDs devueltos por ese
-catálogo. Puedes consultar tamaños y opciones de un modelo con
+Confirma que aparece exactamente `cx/gpt-5.5-image`. Puedes consultar tamaños
+y opciones con
 `/v1/models/info?id=ID`. La aplicación usa `1024x1024` por compatibilidad; si
-tu modelo no lo acepta, cambia `OPENSTORYLINE_IMAGE_SIZE` por un valor anunciado
+el modelo no lo acepta, cambia `OPENSTORYLINE_IMAGE_SIZE` por un valor anunciado
 en ese endpoint.
+
+Ejecuta el preflight estricto antes de cualquier despliegue:
+
+```bash
+python scripts/qa_ninerouter.py --strict-models
+```
+
+La instalación actual de 9Router `0.5.35` no expone todavía Mistral STT. El
+adaptador versionado está preparado en `patches/9router/`, pero requiere una
+ventana de mantenimiento separada; no reinicies el proceso manual mientras
+esté sirviendo inferencia Codex.
 
 ```bash
 ./bin/kamal-mvp setup
@@ -197,8 +208,8 @@ curl -fsS https://video.example.com/up
 ./bin/kamal-mvp proxy logs --lines 200
 ```
 
-- `STT_ALL_PROVIDERS_FAILED`: revisa `failure.json`, el catálogo de 9Router y
-  las cuotas del proveedor.
+- `STT_ALL_PROVIDERS_FAILED`: revisa `failure.json`, el catálogo Mistral STT y
+  la cuota de la conexión seleccionada.
 - `RATE_LIMIT_EXCEEDED`: espera el valor de `Retry-After` o ajusta la cuota.
 - `RATE_LIMITER_UNAVAILABLE`: revisa permisos y espacio libre del volumen de
   outputs.
@@ -206,8 +217,8 @@ curl -fsS https://video.example.com/up
   la aplicación aceptan hasta `OPENSTORYLINE_MAX_UPLOAD_BYTES`.
 - `IMAGE_DISCOVERY_FAILED`: actualiza 9Router (la generación nativa requiere un
   catálogo de imágenes) y revisa la endpoint key.
-- `IMAGE_MODELS_UNAVAILABLE`: los IDs configurados no aparecen en el catálogo;
-  actualiza `OPENSTORYLINE_IMAGE_MODELS` y vuelve a desplegar.
-- `IMAGE_ALL_PROVIDERS_FAILED`: todos los candidatos remotos fallaron; el lote
+- `IMAGE_MODELS_UNAVAILABLE`: `cx/gpt-5.5-image` no aparece en el catálogo;
+  pausa el despliegue y corrige la conexión Codex OAuth.
+- `IMAGE_ALL_PROVIDERS_FAILED`: el modelo Codex seleccionado falló; el lote
   parcial se elimina y no se sustituye silenciosamente con Pexels o un modelo
   local.
