@@ -74,6 +74,21 @@ python scripts/qa_ninerouter.py \
   --timeout 240
 ```
 
+`./bin/kamal-mvp setup`, `deploy`, and `redeploy` run that strict live canary
+automatically. Configure the deploy-machine-only fixture and timeout in the
+ignored `.env.kamal` file:
+
+```bash
+NINEROUTER_QA_STT_AUDIO=/absolute/path/to/openstoryline-qa-speech.wav
+NINEROUTER_QA_TIMEOUT=240
+```
+
+The wrapper also rejects model IDs other than `cx/gpt-5.6-sol`,
+`cx/gpt-5.5-image`, and `mistral/voxtral-mini-2602`. A catalog, authentication,
+transport, rate-limit, or response-contract failure exits before Kamal starts.
+Read-only diagnostics and `rollback` remain available when the provider gate
+is red.
+
 To prove the VPS container-to-host route, select an existing disposable image
 that contains `curl` or `wget`. The preflight uses `--pull=never`, does not
 restart 9Router, and removes the probe container when it exits:

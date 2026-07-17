@@ -81,6 +81,13 @@ Use `--live-inference --stt-audio /tmp/non-private-speech.wav --timeout 240`
 only for an authorized synthetic canary. The command keeps image bytes in
 memory and reports no raw model response.
 
+The Kamal wrapper makes this a mandatory release gate for `setup`, `deploy`,
+and `redeploy`. Set `NINEROUTER_QA_STT_AUDIO` in the ignored `.env.kamal` to an
+absolute path on the deploy machine. The fixture must be short, synthetic, and
+non-private. `NINEROUTER_QA_TIMEOUT` defaults to 240 seconds. Do not bypass the
+gate when a catalog or contract is red; use read-only diagnostics or `rollback`
+while the incident is investigated.
+
 For the container route, set `NINEROUTER_PROBE_IMAGE` to an image already on
 the VPS that contains `curl` or `wget`, then add `--container-host-probe`.
 The script uses `docker run --rm --pull=never`; it does not pull an image,

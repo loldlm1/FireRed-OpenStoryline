@@ -55,6 +55,12 @@ endpoint-key behavior, exact catalogs, SSH, and Docker. With
 image bytes, and timestamped STT without persisting provider output. Any red
 catalog or contract keeps the Kamal canary blocked.
 
+`bin/kamal-mvp` enforces the live form of that gate before `setup`, `deploy`,
+or `redeploy` and requires an external non-private fixture through
+`NINEROUTER_QA_STT_AUDIO`. The Docker build context is allowlisted by
+`.dockerignore`, so local env files, Kamal secrets, outputs, model resources,
+and the development venv never enter the remote-image build context.
+
 ## Persistence and security
 
 - Every job owns a directory under `outputs/mvp_jobs/<job_id>`.
