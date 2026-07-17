@@ -131,6 +131,24 @@ class RemoteImageCascadeTests(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn("top-secret", serialized)
         self.assertIn("Bearer ***", serialized)
 
+    async def test_rate_limit_fails_closed_without_another_model(self):
+        def handler(request: httpx.Request) -> httpx.Response:
+            if request.method == "GET":
+                return httpx.Response(200, json=self.catalog(MODEL))
+            return httpx.Response(429, json={"error": "quota"})
+
+        cascade = RemoteImageCascade(
+            base_url="https://router.test",
+            api_key="secret",
+            models=[MODEL],
+            transport=httpx.MockTransport(handler),
+        )
+        with self.assertRaises(RemoteImageError) as caught:
+            await cascade.generate("Original scene")
+
+        self.assertEqual(len(caught.exception.attempts), 1)
+        self.assertEqual(caught.exception.attempts[0].status_code, 429)
+
     def test_from_config_prefers_environment(self):
         config = SimpleNamespace(
             base_url="",

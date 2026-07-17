@@ -49,6 +49,12 @@ catalog. The versioned adapter patch in
 live activation is a maintenance-window operation and is intentionally not
 performed while the current manual 9Router process serves Codex inference.
 
+Before deployment, `scripts/qa_ninerouter.py --strict-models` validates health,
+endpoint-key behavior, exact catalogs, SSH, and Docker. With
+`--live-inference`, it also validates structured text, vision input, decodable
+image bytes, and timestamped STT without persisting provider output. Any red
+catalog or contract keeps the Kamal canary blocked.
+
 ## Persistence and security
 
 - Every job owns a directory under `outputs/mvp_jobs/<job_id>`.

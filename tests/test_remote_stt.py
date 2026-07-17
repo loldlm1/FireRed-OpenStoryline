@@ -108,6 +108,23 @@ class RemoteSttCascadeTests(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn("top-secret", serialized)
         self.assertIn("Bearer ***", serialized)
 
+    async def test_transport_timeout_fails_closed(self):
+        def handler(request: httpx.Request) -> httpx.Response:
+            raise httpx.ConnectTimeout("timed out", request=request)
+
+        with TemporaryDirectory() as tmpdir:
+            cascade = RemoteSttCascade(
+                base_url="https://router.test",
+                api_key="secret",
+                models=["mistral/voxtral-mini-2602"],
+                transport=httpx.MockTransport(handler),
+            )
+            with self.assertRaises(RemoteSTTError) as caught:
+                await cascade.transcribe(self.audio_file(tmpdir))
+
+        self.assertEqual(len(caught.exception.attempts), 1)
+        self.assertIsNone(caught.exception.attempts[0].status_code)
+
     async def test_missing_configuration_fails_closed(self):
         with self.assertRaises(RemoteSTTError) as caught:
             RemoteSttCascade(base_url="", api_key="", models=[])
