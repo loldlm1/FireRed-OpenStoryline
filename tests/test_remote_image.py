@@ -13,6 +13,7 @@ from open_storyline.utils.remote_image import RemoteImageCascade, RemoteImageErr
 PNG = base64.b64decode(
     "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII="
 )
+MODEL = "cx/gpt-5.5-image"
 
 
 class RemoteImageCascadeTests(unittest.IsolatedAsyncioTestCase):
@@ -26,52 +27,36 @@ class RemoteImageCascadeTests(unittest.IsolatedAsyncioTestCase):
         def handler(request: httpx.Request) -> httpx.Response:
             requests.append(request)
             if request.method == "GET":
-                return httpx.Response(200, json=self.catalog("image/primary"))
+                return httpx.Response(200, json=self.catalog(MODEL))
             return httpx.Response(200, content=PNG, headers={"Content-Type": "image/png"})
 
         cascade = RemoteImageCascade(
             base_url="https://router.test/v1",
             api_key="secret",
-            models=["image/primary"],
+            models=[MODEL],
             transport=httpx.MockTransport(handler),
         )
         result = await cascade.generate("An original mountain scene", size="1024x1024")
 
-        self.assertEqual(result.model, "image/primary")
+        self.assertEqual(result.model, MODEL)
         self.assertEqual(result.extension, "png")
         self.assertEqual(result.content, PNG)
         self.assertEqual(requests[0].url.path, "/v1/models/image")
         self.assertEqual(requests[1].url.params["response_format"], "binary")
 
-    async def test_uses_next_available_model_after_quota_failure(self):
-        posted_models = []
-
-        def handler(request: httpx.Request) -> httpx.Response:
-            if request.method == "GET":
-                return httpx.Response(200, json=self.catalog("image/primary", "image/fallback"))
-            model = json.loads(request.content)["model"]
-            posted_models.append(model)
-            if model == "image/primary":
-                return httpx.Response(429, json={"error": "quota"})
-            return httpx.Response(200, content=PNG)
-
-        cascade = RemoteImageCascade(
-            base_url="https://router.test",
-            api_key="secret",
-            models=["image/primary", "image/fallback"],
-            transport=httpx.MockTransport(handler),
-        )
-        result = await cascade.generate("Vertical editorial photograph")
-
-        self.assertEqual(result.model, "image/fallback")
-        self.assertEqual(posted_models, ["image/primary", "image/fallback"])
-        self.assertFalse(result.attempts[0].success)
-        self.assertTrue(result.attempts[1].success)
+    def test_rejects_unapproved_or_fallback_models(self):
+        with self.assertRaises(RemoteImageError) as caught:
+            RemoteImageCascade(
+                base_url="https://router.test",
+                api_key="secret",
+                models=["cx/gpt-5.5-image", "image/fallback"],
+            )
+        self.assertEqual(caught.exception.code, "IMAGE_CONFIG_INVALID")
 
     async def test_accepts_b64_json_when_binary_mode_is_ignored(self):
         def handler(request: httpx.Request) -> httpx.Response:
             if request.method == "GET":
-                return httpx.Response(200, json=self.catalog("image/model"))
+                return httpx.Response(200, json=self.catalog(MODEL))
             return httpx.Response(200, json={
                 "data": [{"b64_json": base64.b64encode(PNG).decode("ascii")}],
             })
@@ -79,7 +64,7 @@ class RemoteImageCascadeTests(unittest.IsolatedAsyncioTestCase):
         cascade = RemoteImageCascade(
             base_url="https://router.test",
             api_key="secret",
-            models=["image/model"],
+            models=[MODEL],
             transport=httpx.MockTransport(handler),
         )
         result = await cascade.generate("Original abstract background")
@@ -90,13 +75,13 @@ class RemoteImageCascadeTests(unittest.IsolatedAsyncioTestCase):
     async def test_does_not_follow_provider_urls(self):
         def handler(request: httpx.Request) -> httpx.Response:
             if request.method == "GET":
-                return httpx.Response(200, json=self.catalog("image/model"))
+                return httpx.Response(200, json=self.catalog(MODEL))
             return httpx.Response(200, json={"data": [{"url": "https://untrusted.test/image.png"}]})
 
         cascade = RemoteImageCascade(
             base_url="https://router.test",
             api_key="secret",
-            models=["image/model"],
+            models=[MODEL],
             transport=httpx.MockTransport(handler),
         )
         with self.assertRaises(RemoteImageError) as caught:
@@ -117,7 +102,7 @@ class RemoteImageCascadeTests(unittest.IsolatedAsyncioTestCase):
         cascade = RemoteImageCascade(
             base_url="https://router.test",
             api_key="secret",
-            models=["missing/model"],
+            models=[MODEL],
             transport=httpx.MockTransport(handler),
         )
         with self.assertRaises(RemoteImageError) as caught:
@@ -129,13 +114,13 @@ class RemoteImageCascadeTests(unittest.IsolatedAsyncioTestCase):
     async def test_total_failure_sanitizes_endpoint_key(self):
         def handler(request: httpx.Request) -> httpx.Response:
             if request.method == "GET":
-                return httpx.Response(200, json=self.catalog("one", "two"))
+                return httpx.Response(200, json=self.catalog(MODEL))
             return httpx.Response(503, text="Bearer top-secret unavailable")
 
         cascade = RemoteImageCascade(
             base_url="https://router.test",
             api_key="top-secret",
-            models=["one", "two"],
+            models=[MODEL],
             transport=httpx.MockTransport(handler),
         )
         with self.assertRaises(RemoteImageError) as caught:
@@ -157,13 +142,13 @@ class RemoteImageCascadeTests(unittest.IsolatedAsyncioTestCase):
         with patch.dict(os.environ, {
             "NINEROUTER_URL": "https://router.test/v1",
             "NINEROUTER_KEY": "endpoint-key",
-            "OPENSTORYLINE_IMAGE_MODELS": "primary,fallback",
+            "OPENSTORYLINE_IMAGE_MODELS": MODEL,
             "OPENSTORYLINE_IMAGE_TIMEOUT": "45",
             "OPENSTORYLINE_IMAGE_MAX_BYTES": "12345",
         }, clear=False):
             cascade = RemoteImageCascade.from_config(config)
 
-        self.assertEqual(cascade.models, ["primary", "fallback"])
+        self.assertEqual(cascade.models, [MODEL])
         self.assertEqual(cascade.timeout, 45)
         self.assertEqual(cascade.max_bytes, 12345)
         self.assertEqual(cascade.generations_endpoint, "https://router.test/v1/images/generations")

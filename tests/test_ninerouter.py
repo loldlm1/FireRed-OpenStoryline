@@ -119,6 +119,15 @@ class NineRouterClientTests(unittest.IsolatedAsyncioTestCase):
             NineRouterClient(base_url="", api_key="", model="")
         self.assertEqual(caught.exception.code, "NINEROUTER_CONFIG_INVALID")
 
+    def test_rejects_unapproved_text_or_vision_model(self):
+        with self.assertRaises(NineRouterError) as caught:
+            NineRouterClient(
+                base_url="https://router.test",
+                api_key="secret",
+                model="another/model",
+            )
+        self.assertEqual(caught.exception.code, "NINEROUTER_CONFIG_INVALID")
+
 
 if __name__ == "__main__":
     unittest.main()

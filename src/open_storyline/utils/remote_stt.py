@@ -11,10 +11,7 @@ import httpx
 
 
 DEFAULT_STT_MODELS = (
-    "groq/whisper-large-v3-turbo",
-    "groq/whisper-large-v3",
-    "huggingface/openai/whisper-large-v3",
-    "huggingface/openai/whisper-small",
+    "mistral/voxtral-mini-2602",
 )
 
 
@@ -106,7 +103,7 @@ def normalize_segments(payload: dict[str, Any]) -> list[dict[str, Any]]:
 
 
 class RemoteSttCascade:
-    """OpenAI-compatible remote STT cascade with no local inference fallback."""
+    """OpenAI-compatible remote STT client locked to the approved 9Router model."""
 
     def __init__(
         self,
@@ -130,6 +127,11 @@ class RemoteSttCascade:
             raise RemoteSTTError("STT_CONFIG_INVALID", "NINEROUTER_KEY or remote_asr.api_key is required")
         if not self.models:
             raise RemoteSTTError("STT_CONFIG_INVALID", "at least one remote STT model is required")
+        if self.models != list(DEFAULT_STT_MODELS):
+            raise RemoteSTTError(
+                "STT_CONFIG_INVALID",
+                f"remote STT must use only {DEFAULT_STT_MODELS[0]}",
+            )
 
     @classmethod
     def from_config(cls, config: Any, **kwargs: Any) -> "RemoteSttCascade":

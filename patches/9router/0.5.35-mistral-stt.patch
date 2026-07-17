@@ -1,0 +1,103 @@
+diff --git a/open-sse/handlers/sttCore.js b/open-sse/handlers/sttCore.js
+index acb7d13..42f80a1 100644
+--- a/open-sse/handlers/sttCore.js
++++ b/open-sse/handlers/sttCore.js
+@@ -98 +98,24 @@ async function transcribeNvidia(cfg, file, model, token) {
++// Mistral: request segment timestamps and normalize to the OpenAI verbose JSON shape.
++async function transcribeMistral(cfg, file, model, token, formData) {
++  const fd = new FormData();
++  fd.append("file", file, file.name || "audio.wav");
++  fd.append("model", model);
++  fd.append("timestamp_granularities", "segment");
++  const prompt = formData.get("prompt");
++  if (typeof prompt === "string" && prompt.trim()) fd.append("prompt", prompt.trim());
++
++  const res = await fetch(cfg.baseUrl, {
++    method: "POST",
++    headers: buildAuthHeaders(cfg, token),
++    body: fd,
++  });
++  if (!res.ok) return upstreamError(res);
++  const data = await res.json();
++  return jsonResponse({
++    text: data.text || "",
++    language: data.language || "",
++    segments: Array.isArray(data.segments) ? data.segments : [],
++  });
++}
++
+ // Gemini: generateContent with inline_data audio + transcription prompt
+@@ -185,2 +208,3 @@ export async function handleSttCore({ provider, model, formData, credentials, st
+       case "nvidia-asr":      return await transcribeNvidia(cfg, file, model, token);
++      case "mistral-stt":     return await transcribeMistral(cfg, file, model, token, formData);
+       case "huggingface-asr": return await transcribeHuggingFace(cfg, file, model, token);
+diff --git a/open-sse/providers/registry/mistral.js b/open-sse/providers/registry/mistral.js
+index b586913..2fa5ad1 100644
+--- a/open-sse/providers/registry/mistral.js
++++ b/open-sse/providers/registry/mistral.js
+@@ -27,4 +27,11 @@ export default {
+     { id: "mistral-embed", name: "Mistral Embed", kind: "embedding" },
++    { id: "voxtral-mini-2602", name: "Voxtral Mini Transcribe 2", kind: "stt" },
+   ],
+-  serviceKinds: ["llm","imageToText","embedding"],
++  serviceKinds: ["llm","imageToText","embedding","stt"],
++  sttConfig: {
++    baseUrl: "https://api.mistral.ai/v1/audio/transcriptions",
++    authType: "apikey",
++    authHeader: "bearer",
++    format: "mistral-stt",
++  },
+   embeddingConfig: { baseUrl: "https://api.mistral.ai/v1/embeddings", authType: "apikey", authHeader: "bearer" },
+diff --git a/tests/unit/mistral-stt-adapter.test.mjs b/tests/unit/mistral-stt-adapter.test.mjs
+new file mode 100644
+index 0000000..b762f8f
+--- /dev/null
++++ b/tests/unit/mistral-stt-adapter.test.mjs
+@@ -0,0 +1,47 @@
++import assert from "node:assert/strict";
++
++import { handleSttCore } from "../../open-sse/handlers/sttCore.js";
++import mistral from "../../open-sse/providers/registry/mistral.js";
++
++assert.ok(mistral.serviceKinds.includes("stt"));
++assert.equal(mistral.sttConfig.format, "mistral-stt");
++assert.ok(mistral.models.some((model) => model.id === "voxtral-mini-2602" && model.kind === "stt"));
++
++const incoming = new FormData();
++incoming.append("file", new File([new Uint8Array([1, 2, 3])], "sample.wav", { type: "audio/wav" }));
++incoming.append("model", "mistral/voxtral-mini-2602");
++incoming.append("language", "es");
++incoming.append("response_format", "verbose_json");
++
++let upstreamBody;
++let upstreamHeaders;
++globalThis.fetch = async (_url, options) => {
++  upstreamBody = options.body;
++  upstreamHeaders = options.headers;
++  return new Response(JSON.stringify({
++    text: "Hola mundo",
++    language: "es",
++    segments: [{ text: "Hola mundo", start: 0.2, end: 1.1 }],
++  }), { status: 200, headers: { "Content-Type": "application/json" } });
++};
++
++const result = await handleSttCore({
++  provider: "mistral",
++  model: "voxtral-mini-2602",
++  formData: incoming,
++  credentials: { apiKey: "test-key" },
++  sttConfig: mistral.sttConfig,
++});
++
++assert.equal(result.success, true);
++assert.equal(upstreamHeaders.Authorization, "Bearer test-key");
++assert.equal(upstreamBody.get("model"), "voxtral-mini-2602");
++assert.equal(upstreamBody.get("timestamp_granularities"), "segment");
++assert.equal(upstreamBody.get("language"), null);
++assert.equal(upstreamBody.get("response_format"), null);
++
++const payload = await result.response.json();
++assert.equal(payload.text, "Hola mundo");
++assert.deepEqual(payload.segments, [{ text: "Hola mundo", start: 0.2, end: 1.1 }]);
++
++console.log("mistral_stt_adapter_ok");
