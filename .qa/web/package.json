@@ -1,0 +1,23 @@
+{
+  "name": "token-efficient-web-qa-harness",
+  "version": "0.2.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "test": "playwright test",
+    "test:compact": "QA_COMPACT=1 playwright test",
+    "test:headed": "QA_COMPACT=0 playwright test --headed",
+    "install:browsers": "playwright install chromium",
+    "install:browsers:all": "playwright install",
+    "install:browsers:with-deps": "playwright install --with-deps chromium",
+    "test:firefox": "QA_COMPACT=1 QA_BROWSERS=firefox playwright test",
+    "test:webkit": "QA_COMPACT=1 QA_BROWSERS=webkit playwright test",
+    "test:chrome": "QA_COMPACT=1 QA_BROWSERS=chrome playwright test",
+    "install:browsers:chromium": "playwright install chromium",
+    "install:browsers:firefox": "playwright install firefox",
+    "install:browsers:webkit": "playwright install webkit"
+  },
+  "devDependencies": {
+    "@playwright/test": "1.61.1"
+  }
+}

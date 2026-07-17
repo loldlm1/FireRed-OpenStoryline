@@ -30,8 +30,9 @@ internal implementation details.
 
 ```text
 Browser/API client
-    -> `mvp_fastapi.py` authentication and persistent rate limits
-    -> durable job store and queue
+    -> `mvp_fastapi.py` password login, PostgreSQL sessions, and CSRF
+    -> failed-password-only PostgreSQL throttling
+    -> durable filesystem job store and queue
     -> direct Mistral Voxtral STT
     -> 9Router clip planning from transcript + sampled frames
     -> validated short candidates
@@ -85,9 +86,12 @@ remain available independently.
 
 ### API and UI boundaries
 
-- The remote MVP protects `/api/mvp/**` with a single configured token plus
-  separate persistent quotas for unauthorized clients, authenticated API calls,
-  and job creation.
+- The remote MVP protects `/api/mvp/**` with an opaque PostgreSQL-backed browser
+  session, except the explicit login and session-status routes. State-changing
+  calls also require same-origin CSRF validation.
+- Bearer tokens, `X-API-Key`, browser token storage, authenticated API quotas,
+  and job-creation quotas are intentionally unsupported. Persistent per-client
+  and global counters apply only to failed password submissions.
 - `/health` describes the runtime profile; `/up` is the Kamal proxy health check.
 - The original web application uses session and WebSocket message contracts that
   are consumed by `.claude/skills/openstoryline-use/scripts/bridge_openstoryline.py`.
@@ -121,7 +125,7 @@ evidence use, tool selection, parsing, and failure handling instead.
 | MCP node/tool schema | Node/schema test and invalid-input case |
 | Prompt/runtime skill | Consumer test, structured-output failure case, language parity review |
 | Provider client | Success, bounded same-model/key failover, invalid response, timeout/error, secret-redaction tests |
-| Remote MVP API | Auth, rate limit, status/error shape, traversal and upload-boundary tests |
+| Remote MVP API | Password/session/CSRF auth, failed-login limits, status/error shape, traversal and upload-boundary tests |
 | Job/storage code | Atomicity, restart recovery, isolation, corruption, path-safety tests |
 | FFmpeg/rendering | Unit validation plus `tests/test_mvp_render.py` when FFmpeg is installed |
 | Docker/Kamal/env | `tests/test_remote_profile.py`, `tests/test_kamal_config.py`, shell syntax, image/config check |
@@ -145,8 +149,9 @@ part of a feature.
   the documented production path.
 - `.env.kamal.example` documents deploy-machine variables. `.kamal/secrets`
   stores references and is ignored. Never commit resolved secret values.
-- `outputs/` is mounted persistently in production because it contains job
-  state, rate-limit state, inputs, and generated artifacts.
+- `outputs/` is mounted persistently in production because it contains current
+  job state, inputs, and generated artifacts. PostgreSQL stores application
+  authentication state and is the migration target for durable job/audit data.
 - A release is not verified by a successful build alone. It also needs working
   `/up` and `/health` checks, container/log review, persistent volume checks,
   and a known rollback command.

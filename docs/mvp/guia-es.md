@@ -47,22 +47,35 @@ git clone https://github.com/loldlm1/FireRed-OpenStoryline.git
 cd FireRed-OpenStoryline
 git switch agent/remote-video-mvp
 cp .env.kamal.example .env.kamal
-openssl rand -hex 32
+./bin/kamal-mvp auth hash-password
 ```
 
-Copia el resultado de `openssl` a `OPENSTORYLINE_WEB_TOKEN` y edita como mínimo:
+El último comando pide la contraseña dos veces sin mostrarla y devuelve sólo su
+hash Argon2id. Copia ese hash a `OPENSTORYLINE_WEB_PASSWORD_HASH`. Genera además
+valores distintos con `openssl rand -hex 32` para el pepper de seguridad y las
+dos contraseñas de PostgreSQL. Edita como mínimo:
 
 ```dotenv
 KAMAL_HOST=203.0.113.10
 KAMAL_SSH_USER=root
+KAMAL_DOMAIN=video.example.com
 NINEROUTER_URL=https://tu-9router.example.com
 NINEROUTER_KEY=clave-del-endpoint-de-9router
 MISTRAL_API_KEYS=key-directa-de-mistral
-OPENSTORYLINE_WEB_TOKEN=token-aleatorio-de-64-caracteres
+POSTGRES_PASSWORD=contraseña-aleatoria-del-administrador-de-postgres
+OPENSTORYLINE_DATABASE_PASSWORD=otra-contraseña-aleatoria-de-la-aplicación
+DATABASE_URL=postgresql+psycopg://openstoryline:contraseña-de-la-aplicación@openstoryline-mvp-db:5432/openstoryline
+OPENSTORYLINE_WEB_PASSWORD_HASH='$argon2id$hash-generado'
+OPENSTORYLINE_SECURITY_PEPPER=pepper-aleatorio-de-64-caracteres
+OPENSTORYLINE_PUBLIC_ORIGIN=https://video.example.com
+OPENSTORYLINE_ALLOW_INSECURE_HTTP=false
 ```
 
 `NINEROUTER_URL` debe ser accesible desde el VPS. Si 9Router sólo escucha en
 `127.0.0.1` de otra computadora, el servidor remoto no podrá conectarse.
+El password sin hash no se guarda en `.env.kamal`, PostgreSQL, JavaScript,
+headers, URLs ni logs. Conserva las comillas simples alrededor del hash: sus
+caracteres `$` serían interpretados al cargar `.env.kamal` sin esas comillas.
 
 ## 3. Elige IP:puerto o dominio
 
@@ -72,10 +85,14 @@ uno personalizado:
 ```dotenv
 KAMAL_DOMAIN=
 KAMAL_HTTP_PORT=8080
+OPENSTORYLINE_PUBLIC_ORIGIN=http://203.0.113.10:8080
+OPENSTORYLINE_ALLOW_INSECURE_HTTP=true
 ```
 
-La URL será `http://203.0.113.10:8080`. Este modo no cifra la clave durante el
-transporte; úsalo sólo en una red privada, VPN o prueba controlada.
+La URL será `http://203.0.113.10:8080`. Este modo no cifra la contraseña durante
+el transporte; úsalo sólo en una red privada, VPN o prueba controlada. El
+wrapper exige el opt-in explícito y no permite activar este modo por accidente
+cuando existe un dominio.
 En este modo el contenedor publica el puerto directamente y no reinicia ni
 reconfigura un `kamal-proxy` compartido que ya exista en el VPS. Los deploys y
 rollbacks detienen sólo el contenedor web actual justo antes de arrancar el
@@ -89,6 +106,8 @@ VPS y configura:
 KAMAL_DOMAIN=video.example.com
 KAMAL_HTTP_PORT=80
 KAMAL_HTTPS_PORT=443
+OPENSTORYLINE_PUBLIC_ORIGIN=https://video.example.com
+OPENSTORYLINE_ALLOW_INSECURE_HTTP=false
 ```
 
 Kamal-proxy solicitará y renovará el certificado de Let's Encrypt. La URL será
@@ -139,9 +158,12 @@ gate está rojo. No reinicies ni reconfigures el proceso manual de 9Router.
 ```
 
 Ese comando instala Docker en el VPS, levanta un registro temporal local,
-construye `Dockerfile.remote`, despliega el contenedor, monta
-`/var/lib/openstoryline/outputs` y arranca el proxy. Los trabajos, las cuotas y
-los outputs sobreviven a redeploys.
+construye `Dockerfile.remote`, inicia el accesorio privado PostgreSQL, despliega
+el contenedor, monta `/var/lib/openstoryline/outputs` y arranca el proxy. Las
+migraciones son explícitas: ejecuta `./bin/kamal-mvp db migrate` durante el
+primer rollout y antes de arrancar una versión que requiera una revisión nueva.
+Las sesiones, los límites de login y la base sobreviven a redeploys; los
+trabajos y videos permanecen en el volumen de outputs durante esta etapa.
 
 Los siguientes cambios se publican con:
 
@@ -161,31 +183,42 @@ Si cambias `KAMAL_HTTP_PORT` en modo IP, ejecuta `./bin/kamal-mvp deploy` para
 recrear el contenedor con la nueva publicación directa. Sólo el modo dominio
 usa `./bin/kamal-mvp proxy reboot` al cambiar los puertos del proxy.
 
-## 5. Entra con la clave y usa la API
+## 5. Entra con la contraseña y usa la aplicación
 
-Abre la URL, pega `OPENSTORYLINE_WEB_TOKEN`, sube el video y escribe el prompt.
-La página permite ver progreso y descargar cada artefacto o un ZIP.
+Abre la URL. La vista inicial muestra sólo el formulario de contraseña; el
+formulario de video aparece después de autenticar. La página permite ver
+progreso y descargar cada artefacto o un ZIP. Cerrar sesión revoca la sesión en
+PostgreSQL y borra las cookies del navegador.
 
-Los clientes de API pueden usar cualquiera de estos encabezados:
+En dominio/HTTPS, la sesión usa una cookie opaca `HttpOnly`, `Secure` y
+`SameSite`, junto con un token CSRF separado para operaciones que modifican
+estado. El opt-in HTTP de desarrollo no puede usar `Secure`. En ningún modo hay
+una clave reutilizable en el DOM, URL, `localStorage` o `sessionStorage`.
 
-```http
-X-API-Key: tu-clave
-Authorization: Bearer tu-clave
-```
+Los clientes antiguos que enviaban `X-API-Key` o `Authorization: Bearer` dejan
+de ser compatibles de forma intencional. Un cliente automatizado debe iniciar
+sesión en `/api/mvp/auth/login`, conservar cookies, enviar el origen configurado
+y presentar `X-CSRF-Token` en cada request que modifique estado. No pases la
+contraseña por argumentos del shell ni la guardes en scripts.
 
-Las cuotas predeterminadas son persistentes:
+Sólo los intentos fallidos de contraseña consumen límites persistentes:
 
 | Ámbito | RPM | RPD | Para qué sirve |
 | --- | ---: | ---: | --- |
-| Intentos inválidos por IP | 20 | 200 | Frenar fuerza bruta |
-| Intentos inválidos globales | 600 | 50.000 | Frenar abuso distribuido |
-| API con clave válida | 120 | 10.000 | Proteger consultas y descargas |
-| Nuevos trabajos | 4 | 50 | Proteger CPU, disco y proveedores |
+| Intentos inválidos por cliente | 10 | 100 | Frenar fuerza bruta local |
+| Intentos inválidos globales | 120 | 5.000 | Frenar abuso distribuido |
 
-Un exceso devuelve HTTP 429, `Retry-After` y encabezados `X-RateLimit-*`. Una
-clave incorrecta devuelve 401. Puedes ajustar todos los valores en
-`.env.kamal`; la cuota de 50 trabajos/día está por encima de la capacidad
-teórica diaria de Whisper gratis para fuentes de 30 minutos.
+Un exceso devuelve HTTP 429 con `Retry-After`; una contraseña incorrecta
+devuelve un 401 genérico. Logins correctos, consultas autenticadas, descargas y
+nuevos trabajos no consumen una cuota RPM/RPD. Ajusta los cuatro valores
+`OPENSTORYLINE_LOGIN_*` en `.env.kamal` si hace falta.
+
+Para rotar la contraseña, genera un hash nuevo, reemplaza
+`OPENSTORYLINE_WEB_PASSWORD_HASH` en el archivo ignorado y despliega/reinicia.
+La rotación se trata como un cierre global de sesiones: verifica que una sesión
+anterior quede rechazada y que el login nuevo funcione. Conserva el antiguo
+`OPENSTORYLINE_WEB_TOKEN` sólo fuera de la configuración activa y únicamente
+durante la ventana de rollback al release anterior.
 
 ## 6. Activa ComfyUI-FFMPEGA, si lo deseas
 
@@ -221,9 +254,10 @@ curl -fsS https://video.example.com/up
 
 - `STT_ALL_PROVIDERS_FAILED`: revisa `failure.json`, la key ring directa de
   Mistral y la cuota de la organización.
-- `RATE_LIMIT_EXCEEDED`: espera el valor de `Retry-After` o ajusta la cuota.
-- `RATE_LIMITER_UNAVAILABLE`: revisa permisos y espacio libre del volumen de
-  outputs.
+- `LOGIN_RATE_LIMITED`: espera el valor de `Retry-After` o ajusta los límites
+  de intentos fallidos.
+- `AUTH_UNAVAILABLE`: revisa la conexión, la migración y el estado del accesorio
+  PostgreSQL sin imprimir la URL ni los secretos.
 - Timeout al subir: confirma el puerto/firewall y espacio en disco; el proxy y
   la aplicación aceptan hasta `OPENSTORYLINE_MAX_UPLOAD_BYTES`.
 - `IMAGE_DISCOVERY_FAILED`: actualiza 9Router (la generación nativa requiere un

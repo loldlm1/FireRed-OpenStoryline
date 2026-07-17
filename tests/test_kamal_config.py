@@ -15,6 +15,9 @@ def render_sample(*, domain: str = "", http_port: str = "80") -> str:
         "KAMAL_DOMAIN": domain,
         "KAMAL_HTTP_PORT": http_port,
         "NINEROUTER_URL": "https://router.example.test",
+        "OPENSTORYLINE_PUBLIC_ORIGIN": (
+            f"https://{domain}" if domain else "http://203.0.113.10"
+        ),
     }
 
     conditional = re.compile(
@@ -23,13 +26,16 @@ def render_sample(*, domain: str = "", http_port: str = "80") -> str:
     )
     match = conditional.search(text)
     assert match is not None
-    text = conditional.sub(match.group(1) if domain else "", text)
+    text = conditional.sub(lambda item: item.group(1) if domain else "", text)
 
     ip_conditional = re.compile(
         r'<% if ENV\.fetch\("KAMAL_DOMAIN", ""\)\.strip\.empty\? %>\n(.*?)<% end %>\n?',
         re.DOTALL,
     )
-    text = ip_conditional.sub("" if domain else r"\1", text)
+    text = ip_conditional.sub(
+        lambda item: "" if domain else item.group(1),
+        text,
+    )
 
     expression = re.compile(
         r'<%= ENV\.fetch\("([A-Z0-9_]+)"(?:, "([^"]*)")?\) %>'
@@ -90,7 +96,8 @@ class KamalConfigTests(unittest.TestCase):
             config["env"]["secret"],
             [
                 "DATABASE_URL",
-                "OPENSTORYLINE_WEB_TOKEN",
+                "OPENSTORYLINE_WEB_PASSWORD_HASH",
+                "OPENSTORYLINE_SECURITY_PEPPER",
                 "NINEROUTER_KEY",
                 "MISTRAL_API_KEYS",
             ],
@@ -104,7 +111,14 @@ class KamalConfigTests(unittest.TestCase):
         self.assertEqual(config["env"]["clear"]["OPENSTORYLINE_IMAGE_SIZE"], "1024x1024")
         secrets = (ROOT / ".kamal" / "secrets.example").read_text(encoding="utf-8")
         kamal_env = (ROOT / ".env.kamal.example").read_text(encoding="utf-8")
-        self.assertIn("$OPENSTORYLINE_WEB_TOKEN", secrets)
+        self.assertIn(
+            "OPENSTORYLINE_WEB_PASSWORD_HASH=$OPENSTORYLINE_WEB_PASSWORD_HASH",
+            secrets,
+        )
+        self.assertIn(
+            "OPENSTORYLINE_SECURITY_PEPPER=$OPENSTORYLINE_SECURITY_PEPPER",
+            secrets,
+        )
         self.assertIn("DATABASE_URL=$DATABASE_URL", secrets)
         self.assertIn(
             "OPENSTORYLINE_DATABASE_PASSWORD=$OPENSTORYLINE_DATABASE_PASSWORD",
@@ -146,6 +160,14 @@ class KamalConfigTests(unittest.TestCase):
         self.assertLess(dispatch, provider_requirements)
         self.assertLess(dispatch, release_scan)
         self.assertIn("migrate|current|backup|restore-check", wrapper)
+
+    def test_password_hash_command_is_local_and_precedes_env_loading(self):
+        wrapper = (ROOT / "bin" / "kamal-mvp").read_text(encoding="utf-8")
+        dispatch = wrapper.index('"${1:-}" == "auth"')
+        env_loading = wrapper.index('if [[ -f "$ENV_FILE" ]]')
+
+        self.assertLess(dispatch, env_loading)
+        self.assertIn("open_storyline.mvp.auth hash-password", wrapper)
 
 
 if __name__ == "__main__":

@@ -20,6 +20,13 @@ as the private `db` Kamal accessory on the same VPS and does not publish port
   PostgreSQL is reachable and at the expected Alembic revision, but returns
   only a generic readiness code.
 
+PostgreSQL also stores password-login state. `auth_sessions` contains only
+keyed digests and bounded session metadata; `login_attempt_buckets` contains
+keyed client/global counters for failed password submissions. Raw passwords,
+password hashes, session cookies, CSRF values, addresses, and user-agent text
+must not enter application logs or audit documents. Authenticated API and job
+activity has no RPM/RPD quota.
+
 Create or inspect the schema with:
 
 ```bash
@@ -69,3 +76,20 @@ against loss of that VPS or disk.
 A real restore is deliberately not exposed as an automatic wrapper command.
 It must be performed during a maintenance window with an explicit empty-target
 check and operator confirmation. Never overwrite a running database implicitly.
+
+## Password and session operations
+
+Generate an Argon2id password hash locally before loading deploy or provider
+secrets:
+
+```bash
+./bin/kamal-mvp auth hash-password
+```
+
+Store only the resulting hash in the ignored deploy environment. Production
+also requires a separate random `OPENSTORYLINE_SECURITY_PEPPER` and an exact
+HTTPS `OPENSTORYLINE_PUBLIC_ORIGIN`. Changing the password hash is treated as a
+global session rotation: deploy/restart after replacing the hash, then verify
+that an old browser session is rejected and a new login succeeds. Do not place
+the password in a URL, header, JavaScript storage, shell argument, or database
+backup note.

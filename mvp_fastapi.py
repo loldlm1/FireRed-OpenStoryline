@@ -2,10 +2,7 @@ from __future__ import annotations
 
 from contextlib import asynccontextmanager
 from pathlib import Path
-import asyncio
-import hashlib
 import hmac
-import os
 import sys
 
 from fastapi import FastAPI, Request
@@ -18,70 +15,33 @@ if str(SRC_DIR) not in sys.path:
 
 from open_storyline.config import default_config_path, load_settings
 from open_storyline.mvp.api import create_mvp_router
+from open_storyline.mvp.auth import (
+    CSRF_COOKIE,
+    SAFE_METHODS,
+    SESSION_COOKIE,
+    AuthService,
+    AuthSettings,
+    AuthUnavailable,
+    create_auth_router,
+)
 from open_storyline.mvp.database import Database
 from open_storyline.mvp.jobs import JobManager, JobStore
 from open_storyline.mvp.pipeline import MVPJobProcessor
-from open_storyline.mvp.rate_limit import PersistentRateLimiter, RateDecision, RatePolicy
-
-
-def _enabled(name: str, default: bool = False) -> bool:
-    raw = os.getenv(name)
-    if raw is None:
-        return default
-    return raw.strip().lower() in {"1", "true", "yes", "on"}
-
-
-def _client_scope(request: Request) -> str:
-    address = request.client.host if request.client else "unknown"
-    if _enabled("OPENSTORYLINE_TRUST_PROXY_HEADERS"):
-        forwarded = request.headers.get("x-forwarded-for", "").split(",", 1)[0].strip()
-        if forwarded:
-            address = forwarded[:128]
-    digest = hashlib.sha256(address.encode("utf-8", errors="replace")).hexdigest()[:24]
-    return f"unauthorized:client:{digest}"
-
-
-def _supplied_token(request: Request) -> str:
-    api_key = request.headers.get("x-api-key", "").strip()
-    if api_key:
-        return api_key
-    authorization = request.headers.get("authorization", "")
-    return authorization[7:].strip() if authorization.lower().startswith("bearer ") else ""
-
-
-def _limited(scope: str, decision: RateDecision) -> JSONResponse:
-    return JSONResponse(
-        {
-            "detail": {
-                "code": "RATE_LIMIT_EXCEEDED",
-                "scope": scope,
-                "message": "request quota exceeded; retry after the indicated interval",
-            }
-        },
-        status_code=429,
-        headers=decision.headers(),
-    )
 
 
 def create_app() -> FastAPI:
     @asynccontextmanager
     async def lifespan(app: FastAPI):
-        token = os.getenv("OPENSTORYLINE_WEB_TOKEN", "").strip()
-        if len(token) < 16:
-            raise RuntimeError("OPENSTORYLINE_WEB_TOKEN must contain at least 16 characters")
         config = load_settings(default_config_path())
         database = Database.from_env()
+        auth_service = AuthService(database, AuthSettings.from_env())
         store = JobStore(Path(config.project.outputs_dir) / "mvp_jobs")
         manager = JobManager(store, MVPJobProcessor(config))
-        limiter_path = os.getenv("OPENSTORYLINE_RATE_LIMIT_DB", "").strip()
-        if not limiter_path:
-            limiter_path = str(Path(config.project.outputs_dir) / "mvp_rate_limits.sqlite3")
         app.state.config = config
         app.state.database = database
+        app.state.auth_service = auth_service
         app.state.mvp_jobs = store
         app.state.mvp_manager = manager
-        app.state.rate_limiter = PersistentRateLimiter(limiter_path)
-        app.state.rate_policy = RatePolicy.from_env()
         try:
             await manager.start()
             yield
@@ -94,84 +54,51 @@ def create_app() -> FastAPI:
         version="0.1.0",
         lifespan=lifespan,
     )
-    app.state.rate_limiter = None
-    app.state.rate_policy = None
     app.state.database = None
+    app.state.auth_service = None
 
     @app.middleware("http")
-    async def require_access_token(request: Request, call_next):
+    async def require_browser_session(request: Request, call_next):
         if not request.url.path.startswith("/api/mvp"):
             return await call_next(request)
-        expected = os.getenv("OPENSTORYLINE_WEB_TOKEN", "").strip()
-        if not expected:
+        if request.url.path in {
+            "/api/mvp/auth/login",
+            "/api/mvp/auth/session",
+        }:
+            return await call_next(request)
+        service = app.state.auth_service
+        if service is None:
             return JSONResponse(
-                {"detail": {"code": "WEB_TOKEN_NOT_CONFIGURED"}},
+                {"detail": {"code": "AUTH_UNAVAILABLE"}},
                 status_code=503,
             )
-        limiter = app.state.rate_limiter
-        policy = app.state.rate_policy
-        if limiter is None or policy is None:
-            return JSONResponse(
-                {"detail": {"code": "RATE_LIMITER_UNAVAILABLE"}},
-                status_code=503,
-            )
-
-        supplied = _supplied_token(request)
-        if not supplied or not hmac.compare_digest(supplied, expected):
-            try:
-                global_decision = await asyncio.to_thread(
-                    limiter.check,
-                    "unauthorized:global",
-                    policy.unauthorized_global,
-                )
-                if not global_decision.allowed:
-                    return _limited("unauthorized_global", global_decision)
-                client_decision = await asyncio.to_thread(
-                    limiter.check,
-                    _client_scope(request),
-                    policy.unauthorized_client,
-                )
-            except Exception:
-                return JSONResponse(
-                    {"detail": {"code": "RATE_LIMITER_UNAVAILABLE"}},
-                    status_code=503,
-                )
-            if not client_decision.allowed:
-                return _limited("unauthorized_client", client_decision)
-            return JSONResponse(
-                {"detail": {"code": "UNAUTHORIZED", "message": "invalid access token"}},
-                status_code=401,
-                headers={"WWW-Authenticate": "Bearer", **client_decision.headers()},
-            )
-
-        key_digest = hashlib.sha256(expected.encode("utf-8")).hexdigest()[:24]
         try:
-            api_decision = await asyncio.to_thread(
-                limiter.check,
-                f"api:{key_digest}",
-                policy.api,
-            )
-            if not api_decision.allowed:
-                return _limited("api", api_decision)
-            active_decision = api_decision
-            if request.method == "POST" and request.url.path.rstrip("/") == "/api/mvp/jobs":
-                jobs_decision = await asyncio.to_thread(
-                    limiter.check,
-                    f"jobs:{key_digest}",
-                    policy.jobs,
-                )
-                if not jobs_decision.allowed:
-                    return _limited("jobs", jobs_decision)
-                active_decision = jobs_decision
-        except Exception:
+            context = await service.resolve_session(request.cookies.get(SESSION_COOKIE))
+        except AuthUnavailable:
             return JSONResponse(
-                {"detail": {"code": "RATE_LIMITER_UNAVAILABLE"}},
+                {"detail": {"code": "AUTH_UNAVAILABLE"}},
                 status_code=503,
             )
-
-        response = await call_next(request)
-        response.headers.update(active_decision.headers())
-        return response
+        if context is None:
+            return JSONResponse(
+                {"detail": {"code": "UNAUTHENTICATED", "message": "login required"}},
+                status_code=401,
+            )
+        request.state.auth_session = context
+        if request.method not in SAFE_METHODS:
+            header_token = request.headers.get("x-csrf-token", "")
+            cookie_token = request.cookies.get(CSRF_COOKIE, "")
+            if (
+                not service.same_origin(request)
+                or not header_token
+                or not hmac.compare_digest(header_token, cookie_token)
+                or not service.valid_csrf(context, header_token)
+            ):
+                return JSONResponse(
+                    {"detail": {"code": "CSRF_VALIDATION_FAILED"}},
+                    status_code=403,
+                )
+        return await call_next(request)
 
     @app.get("/", include_in_schema=False)
     async def index():
@@ -201,6 +128,7 @@ def create_app() -> FastAPI:
         lambda: app.state.mvp_jobs,
         lambda: app.state.mvp_manager,
     ))
+    app.include_router(create_auth_router(lambda: app.state.auth_service))
     return app
 
 

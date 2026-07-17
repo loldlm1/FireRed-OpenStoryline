@@ -79,3 +79,6 @@ data/**
 !data/prompts/
 !data/prompts/**
 resource/**
+
+# Token-efficient browser QA artifacts
+.qa/web/artifacts/

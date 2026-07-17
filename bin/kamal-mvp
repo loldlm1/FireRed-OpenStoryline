@@ -167,6 +167,12 @@ run_database_command() {
   esac
 }
 
+if [[ "${1:-}" == "auth" && "${2:-}" == "hash-password" && $# -eq 2 ]]; then
+  python_bin="$(resolve_python)"
+  cd "$ROOT_DIR"
+  exec env PYTHONPATH="$ROOT_DIR/src" "$python_bin" -m open_storyline.mvp.auth hash-password
+fi
+
 if [[ -f "$ENV_FILE" ]]; then
   set -a
   # shellcheck disable=SC1090
@@ -182,12 +188,20 @@ if [[ "${1:-}" == "db" ]]; then
 fi
 
 require_value KAMAL_HOST
+require_value DATABASE_URL
+require_value POSTGRES_PASSWORD
+require_value OPENSTORYLINE_DATABASE_PASSWORD
 require_value NINEROUTER_URL
 require_value NINEROUTER_KEY
 require_value MISTRAL_API_KEYS
-require_value OPENSTORYLINE_WEB_TOKEN
+require_value OPENSTORYLINE_WEB_PASSWORD_HASH
+require_value OPENSTORYLINE_SECURITY_PEPPER
+require_value OPENSTORYLINE_PUBLIC_ORIGIN
 
-[[ ${#OPENSTORYLINE_WEB_TOKEN} -ge 16 ]] || fail "OPENSTORYLINE_WEB_TOKEN must contain at least 16 characters"
+[[ "$OPENSTORYLINE_WEB_PASSWORD_HASH" == \$argon2id\$* ]] \
+  || fail "OPENSTORYLINE_WEB_PASSWORD_HASH must be an Argon2id hash"
+[[ ${#OPENSTORYLINE_SECURITY_PEPPER} -ge 32 ]] \
+  || fail "OPENSTORYLINE_SECURITY_PEPPER must contain at least 32 characters"
 [[ "${KAMAL_SSH_PORT:-22}" =~ ^[0-9]+$ ]] || fail "KAMAL_SSH_PORT must be numeric"
 [[ "${KAMAL_HTTP_PORT:-80}" =~ ^[0-9]+$ ]] || fail "KAMAL_HTTP_PORT must be numeric"
 [[ "${KAMAL_HTTPS_PORT:-443}" =~ ^[0-9]+$ ]] || fail "KAMAL_HTTPS_PORT must be numeric"
@@ -195,6 +209,13 @@ require_value OPENSTORYLINE_WEB_TOKEN
 if [[ -n "${KAMAL_DOMAIN:-}" ]]; then
   [[ "${KAMAL_HTTP_PORT:-80}" == 80 && "${KAMAL_HTTPS_PORT:-443}" == 443 ]] \
     || fail "automatic HTTPS requires KAMAL_HTTP_PORT=80 and KAMAL_HTTPS_PORT=443"
+  [[ "$OPENSTORYLINE_PUBLIC_ORIGIN" == "https://${KAMAL_DOMAIN}" ]] \
+    || fail "OPENSTORYLINE_PUBLIC_ORIGIN must be https://$KAMAL_DOMAIN"
+  [[ "${OPENSTORYLINE_ALLOW_INSECURE_HTTP:-false}" == "false" ]] \
+    || fail "OPENSTORYLINE_ALLOW_INSECURE_HTTP must be false in domain mode"
+else
+  [[ "${OPENSTORYLINE_ALLOW_INSECURE_HTTP:-false}" == "true" ]] \
+    || fail "direct-port mode requires explicit OPENSTORYLINE_ALLOW_INSECURE_HTTP=true"
 fi
 
 command -v docker >/dev/null 2>&1 || fail "Docker is required on the deploy machine to build the image"
