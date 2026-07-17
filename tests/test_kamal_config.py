@@ -58,6 +58,7 @@ class KamalConfigTests(unittest.TestCase):
 
     def test_ip_mode_is_valid_yaml_without_host_or_ssl(self):
         config = yaml.safe_load(render_sample())
+        self.assertEqual(config["secrets_path"], ".kamal/secrets")
         self.assertEqual(config["servers"]["web"]["hosts"], ["203.0.113.10"])
         self.assertNotIn("host", config["proxy"])
         self.assertNotIn("ssl", config["proxy"])
@@ -87,7 +88,12 @@ class KamalConfigTests(unittest.TestCase):
         self.assertEqual(config["registry"]["server"], "localhost:5555")
         self.assertEqual(
             config["env"]["secret"],
-            ["OPENSTORYLINE_WEB_TOKEN", "NINEROUTER_KEY", "MISTRAL_API_KEYS"],
+            [
+                "DATABASE_URL",
+                "OPENSTORYLINE_WEB_TOKEN",
+                "NINEROUTER_KEY",
+                "MISTRAL_API_KEYS",
+            ],
         )
         self.assertEqual(
             config["env"]["clear"]["OPENSTORYLINE_IMAGE_MODELS"],
@@ -99,9 +105,47 @@ class KamalConfigTests(unittest.TestCase):
         secrets = (ROOT / ".kamal" / "secrets.example").read_text(encoding="utf-8")
         kamal_env = (ROOT / ".env.kamal.example").read_text(encoding="utf-8")
         self.assertIn("$OPENSTORYLINE_WEB_TOKEN", secrets)
+        self.assertIn("DATABASE_URL=$DATABASE_URL", secrets)
+        self.assertIn(
+            "OPENSTORYLINE_DATABASE_PASSWORD=$OPENSTORYLINE_DATABASE_PASSWORD",
+            secrets,
+        )
+        self.assertIn("POSTGRES_PASSWORD=$POSTGRES_PASSWORD", secrets)
         self.assertIn("MISTRAL_API_KEYS=$MISTRAL_API_KEYS", secrets)
         self.assertNotIn("replace-with", secrets)
         self.assertIn("MISTRAL_QA_STT_AUDIO=", kamal_env)
+
+    def test_postgres_accessory_is_private_persistent_and_health_checked(self):
+        config = yaml.safe_load(render_sample())
+        database = config["accessories"]["db"]
+
+        self.assertRegex(database["image"], r"^postgres:17-bookworm@sha256:[a-f0-9]{64}$")
+        self.assertEqual(database["host"], "203.0.113.10")
+        self.assertEqual(database["network"], "kamal")
+        self.assertNotIn("port", database)
+        self.assertEqual(database["env"]["clear"]["POSTGRES_USER"], "postgres")
+        self.assertEqual(
+            database["env"]["secret"],
+            ["OPENSTORYLINE_DATABASE_PASSWORD", "POSTGRES_PASSWORD"],
+        )
+        self.assertEqual(database["options"]["restart"], "unless-stopped")
+        self.assertIn("pg_isready", database["options"]["health-cmd"])
+        remotes = {item["remote"] for item in database["directories"]}
+        self.assertEqual(remotes, {"/var/lib/postgresql/data", "/backups"})
+        self.assertEqual(
+            database["files"][0]["remote"],
+            "/docker-entrypoint-initdb.d/10-openstoryline-app.sh",
+        )
+
+    def test_database_commands_bypass_provider_release_gates(self):
+        wrapper = (ROOT / "bin" / "kamal-mvp").read_text(encoding="utf-8")
+        dispatch = wrapper.index('if [[ "${1:-}" == "db" ]]')
+        provider_requirements = wrapper.index("require_value NINEROUTER_URL")
+        release_scan = wrapper.index('for arg in "$@"')
+
+        self.assertLess(dispatch, provider_requirements)
+        self.assertLess(dispatch, release_scan)
+        self.assertIn("migrate|current|backup|restore-check", wrapper)
 
 
 if __name__ == "__main__":

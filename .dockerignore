@@ -4,6 +4,9 @@
 !requirements-remote.txt
 !config.toml
 !mvp_fastapi.py
+!alembic.ini
+!migrations/
+!migrations/**
 !src/
 !src/**
 !web/

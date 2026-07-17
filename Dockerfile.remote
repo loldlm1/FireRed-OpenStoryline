@@ -14,7 +14,8 @@ RUN apt-get update \
 COPY requirements-remote.txt ./
 RUN pip install --no-cache-dir -r requirements-remote.txt
 
-COPY config.toml mvp_fastapi.py ./
+COPY config.toml mvp_fastapi.py alembic.ini ./
+COPY migrations/ ./migrations/
 COPY src/ ./src/
 COPY web/mvp.html ./web/mvp.html
 

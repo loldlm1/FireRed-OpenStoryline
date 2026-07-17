@@ -11,6 +11,32 @@ from open_storyline.mvp.rate_limit import PersistentRateLimiter, RatePolicy
 
 
 class MVPAppSecurityTests(unittest.IsolatedAsyncioTestCase):
+    async def test_up_reports_database_readiness_without_backend_details(self):
+        class DatabaseStub:
+            def __init__(self, ready: bool, code: str) -> None:
+                self.result = type("Readiness", (), {"ready": ready, "code": code})()
+
+            async def readiness(self):
+                return self.result
+
+        with patch.dict(os.environ, {"OPENSTORYLINE_WEB_TOKEN": "a-secure-test-token"}, clear=False):
+            app = create_app()
+            transport = httpx.ASGITransport(app=app)
+            async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+                app.state.database = DatabaseStub(True, "DATABASE_READY")
+                healthy = await client.get("/up")
+                app.state.database = DatabaseStub(False, "DATABASE_UNAVAILABLE")
+                unavailable = await client.get("/up")
+
+        self.assertEqual(healthy.status_code, 200)
+        self.assertEqual(healthy.json(), {"status": "ok"})
+        self.assertEqual(unavailable.status_code, 503)
+        self.assertEqual(
+            unavailable.json(),
+            {"status": "unavailable", "code": "DATABASE_UNAVAILABLE"},
+        )
+        self.assertNotIn("postgres", unavailable.text.lower())
+
     async def test_health_is_public_but_job_api_requires_token(self):
         with patch.dict(os.environ, {"OPENSTORYLINE_WEB_TOKEN": "a-secure-test-token"}, clear=False):
             with TemporaryDirectory() as tmpdir:
