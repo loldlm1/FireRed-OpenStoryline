@@ -57,6 +57,9 @@ and invariants in this repository.
   `loldlm1/FireRed-OpenStoryline`. Local `origin` must fetch from and push to
   that fork. Treat `FireRedTeam/FireRed-OpenStoryline` as a read-only upstream
   unless the user explicitly authorizes a write to the parent repository.
+- Configure local Git with `remote.pushDefault=origin` and
+  `push.default=current` so a plain push publishes the current branch to the
+  fork. Do not infer a push or pull-request destination from GitHub's fork UI.
 - Before any GitHub write, call the GitHub MCP identity check and confirm the
   authenticated login is `loldlm1`. Verify the destination owner, repository,
   head branch, and base branch before creating or updating remote state.
@@ -68,6 +71,10 @@ and invariants in this repository.
   base in the fork unless the user specifies another integration branch. Read
   the created pull request back through GitHub MCP and confirm both repositories
   and branches after creation.
+- GitHub MCP permissions depend on its token. If an authorized write returns
+  `403 Resource not accessible by personal access token`, keep all refs in the
+  fork, report that the token needs the corresponding repository write
+  permission, and do not retry against `FireRedTeam`.
 - Never print, log, or persist `GITHUB_PAT_TOKEN`. Report only whether GitHub MCP
   authentication and the requested operation succeeded.
 
