@@ -3,6 +3,8 @@ from __future__ import annotations
 from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any, Iterable, Optional
+import math
+import mimetypes
 import os
 import re
 import subprocess
@@ -10,9 +12,9 @@ import subprocess
 import httpx
 
 
-DEFAULT_STT_MODELS = (
-    "mistral/voxtral-mini-2602",
-)
+MISTRAL_STT_ENDPOINT = "https://api.mistral.ai/v1/audio/transcriptions"
+MISTRAL_STT_MODEL = "voxtral-mini-2602"
+MAX_MISTRAL_API_KEYS = 8
 
 
 @dataclass(frozen=True)
@@ -52,9 +54,24 @@ class RemoteSTTError(RuntimeError):
         }
 
 
-def _split_models(raw: str | None, fallback: Iterable[str]) -> list[str]:
-    values = (raw or "").split(",") if raw is not None else list(fallback)
-    return [str(item).strip() for item in values if str(item).strip()]
+def parse_mistral_api_keys(raw: str | None) -> list[str]:
+    keys: list[str] = []
+    for item in str(raw or "").split(","):
+        key = item.strip()
+        if not key or key in keys:
+            continue
+        if key.lower().startswith("replace-"):
+            raise RemoteSTTError(
+                "STT_CONFIG_INVALID",
+                "MISTRAL_API_KEYS still contains an example value",
+            )
+        keys.append(key)
+        if len(keys) > MAX_MISTRAL_API_KEYS:
+            raise RemoteSTTError(
+                "STT_CONFIG_INVALID",
+                f"MISTRAL_API_KEYS supports at most {MAX_MISTRAL_API_KEYS} values",
+            )
+    return keys
 
 
 def _sanitize_reason(value: str, secrets: Iterable[str], limit: int = 600) -> str:
@@ -67,11 +84,14 @@ def _sanitize_reason(value: str, secrets: Iterable[str], limit: int = 600) -> st
     return text[:limit]
 
 
-def _milliseconds(value: Any) -> int:
+def _milliseconds(value: Any) -> int | None:
     try:
-        return max(0, int(round(float(value) * 1000)))
+        seconds = float(value)
     except (TypeError, ValueError):
-        return 0
+        return None
+    if not math.isfinite(seconds) or seconds < 0:
+        return None
+    return int(round(seconds * 1000))
 
 
 def normalize_segments(payload: dict[str, Any]) -> list[dict[str, Any]]:
@@ -90,8 +110,8 @@ def normalize_segments(payload: dict[str, Any]) -> list[dict[str, Any]]:
             start_value = timestamp[0] if start_value is None else start_value
             end_value = timestamp[1] if end_value is None else end_value
         start = _milliseconds(start_value)
-        end = max(start, _milliseconds(end_value))
-        if not text or end <= start:
+        end = _milliseconds(end_value)
+        if not text or start is None or end is None or end <= start:
             continue
         normalized.append({
             "id": item.get("id", index),
@@ -102,126 +122,134 @@ def normalize_segments(payload: dict[str, Any]) -> list[dict[str, Any]]:
     return normalized
 
 
-class RemoteSttCascade:
-    """OpenAI-compatible remote STT client locked to the approved 9Router model."""
+class MistralSTTClient:
+    """Direct Mistral Voxtral client for the remote-only MVP."""
 
     def __init__(
         self,
         *,
-        base_url: str,
-        api_key: str,
-        models: Iterable[str],
+        api_keys: Iterable[str],
         timeout: float = 180.0,
-        response_format: str = "verbose_json",
         transport: Optional[httpx.AsyncBaseTransport] = None,
     ) -> None:
-        self.base_url = str(base_url or "").rstrip("/")
-        self.api_key = str(api_key or "")
-        self.models = [str(model).strip() for model in models if str(model).strip()]
+        self.api_keys = [str(key).strip() for key in api_keys if str(key).strip()]
         self.timeout = float(timeout)
-        self.response_format = response_format
         self.transport = transport
-        if not self.base_url:
-            raise RemoteSTTError("STT_CONFIG_INVALID", "NINEROUTER_URL or remote_asr.base_url is required")
-        if not self.api_key:
-            raise RemoteSTTError("STT_CONFIG_INVALID", "NINEROUTER_KEY or remote_asr.api_key is required")
-        if not self.models:
-            raise RemoteSTTError("STT_CONFIG_INVALID", "at least one remote STT model is required")
-        if self.models != list(DEFAULT_STT_MODELS):
+        if not self.api_keys:
+            raise RemoteSTTError("STT_CONFIG_INVALID", "MISTRAL_API_KEYS is required")
+        if len(self.api_keys) != 1:
             raise RemoteSTTError(
                 "STT_CONFIG_INVALID",
-                f"remote STT must use only {DEFAULT_STT_MODELS[0]}",
+                "exactly one Mistral API key is supported until key failover is enabled",
             )
 
     @classmethod
-    def from_config(cls, config: Any, **kwargs: Any) -> "RemoteSttCascade":
-        base_url = os.getenv("NINEROUTER_URL") or getattr(config, "base_url", "")
-        api_key = os.getenv("NINEROUTER_KEY") or getattr(config, "api_key", "")
-        models = _split_models(
-            os.getenv("OPENSTORYLINE_STT_MODELS"),
-            getattr(config, "models", DEFAULT_STT_MODELS),
-        )
-        timeout = float(os.getenv("OPENSTORYLINE_STT_TIMEOUT") or getattr(config, "timeout", 180.0))
-        response_format = getattr(config, "response_format", "verbose_json")
+    def from_config(cls, config: Any, **kwargs: Any) -> "MistralSTTClient":
+        api_keys = parse_mistral_api_keys(os.getenv("MISTRAL_API_KEYS"))
+        try:
+            timeout = float(os.getenv("MISTRAL_STT_TIMEOUT") or getattr(config, "timeout", 180.0))
+        except (TypeError, ValueError) as exc:
+            raise RemoteSTTError(
+                "STT_CONFIG_INVALID",
+                "MISTRAL_STT_TIMEOUT must be a positive number",
+            ) from exc
+        if not math.isfinite(timeout) or timeout <= 0:
+            raise RemoteSTTError(
+                "STT_CONFIG_INVALID",
+                "MISTRAL_STT_TIMEOUT must be a positive number",
+            )
         return cls(
-            base_url=base_url,
-            api_key=api_key,
-            models=models,
+            api_keys=api_keys,
             timeout=timeout,
-            response_format=response_format,
             **kwargs,
         )
 
     @property
     def endpoint(self) -> str:
-        if self.base_url.endswith("/v1"):
-            return f"{self.base_url}/audio/transcriptions"
-        return f"{self.base_url}/v1/audio/transcriptions"
+        return MISTRAL_STT_ENDPOINT
 
     async def transcribe(self, audio_path: str | Path, *, language: str = "") -> STTResult:
         path = Path(audio_path)
         if not path.is_file():
             raise RemoteSTTError("STT_INPUT_MISSING", f"audio file not found: {path.name}")
+        if str(language or "").strip():
+            raise RemoteSTTError(
+                "STT_LANGUAGE_UNSUPPORTED",
+                "explicit language cannot be combined with required Mistral segment timestamps",
+            )
 
         attempts: list[STTAttempt] = []
-        headers = {"Authorization": f"Bearer {self.api_key}"}
+        api_key = self.api_keys[0]
+        headers = {"Authorization": f"Bearer {api_key}"}
+        content_type = mimetypes.guess_type(path.name)[0] or "application/octet-stream"
         async with httpx.AsyncClient(timeout=self.timeout, transport=self.transport) as client:
-            for model in self.models:
-                try:
-                    with path.open("rb") as stream:
-                        response = await client.post(
-                            self.endpoint,
-                            headers=headers,
-                            data={
-                                "model": model,
-                                "language": language,
-                                "response_format": self.response_format,
-                            },
-                            files={"file": (path.name, stream, "audio/mpeg")},
-                        )
-                    if response.status_code >= 400:
-                        attempts.append(STTAttempt(
-                            model=model,
-                            success=False,
-                            status_code=response.status_code,
-                            reason=_sanitize_reason(response.text, [self.api_key]),
-                        ))
-                        continue
-
+            try:
+                with path.open("rb") as stream:
+                    response = await client.post(
+                        self.endpoint,
+                        headers=headers,
+                        data={
+                            "model": MISTRAL_STT_MODEL,
+                            "timestamp_granularities": "segment",
+                        },
+                        files={"file": (path.name, stream, content_type)},
+                    )
+                if response.status_code >= 400:
+                    attempts.append(STTAttempt(
+                        model=MISTRAL_STT_MODEL,
+                        success=False,
+                        status_code=response.status_code,
+                        reason=_sanitize_reason(response.text, self.api_keys),
+                    ))
+                else:
                     try:
                         payload = response.json()
                     except ValueError:
-                        payload = {"text": response.text}
-                    text = str(payload.get("text") or "").strip()
-                    if not text:
-                        attempts.append(STTAttempt(model, False, response.status_code, "empty transcript"))
-                        continue
-                    segments = normalize_segments(payload)
-                    if self.response_format == "verbose_json" and not segments:
                         attempts.append(STTAttempt(
-                            model,
+                            MISTRAL_STT_MODEL,
                             False,
                             response.status_code,
-                            "transcript has no timestamped segments",
+                            "invalid JSON response",
                         ))
-                        continue
-                    attempts.append(STTAttempt(model, True, response.status_code, "ok"))
-                    return STTResult(
-                        model=model,
-                        text=text,
-                        segments=segments,
-                        attempts=attempts,
-                    )
-                except (httpx.HTTPError, OSError) as exc:
-                    attempts.append(STTAttempt(
-                        model=model,
-                        success=False,
-                        status_code=None,
-                        reason=_sanitize_reason(str(exc), [self.api_key]),
-                    ))
+                    else:
+                        if not isinstance(payload, dict):
+                            payload = {}
+                        text = str(payload.get("text") or "").strip()
+                        segments = normalize_segments(payload)
+                        reason = "ok"
+                        if not text:
+                            reason = "empty transcript"
+                        elif not segments:
+                            reason = "transcript has no timestamped segments"
+                        if reason == "ok":
+                            attempts.append(STTAttempt(
+                                MISTRAL_STT_MODEL,
+                                True,
+                                response.status_code,
+                                reason,
+                            ))
+                            return STTResult(
+                                model=MISTRAL_STT_MODEL,
+                                text=text,
+                                segments=segments,
+                                attempts=attempts,
+                            )
+                        attempts.append(STTAttempt(
+                            MISTRAL_STT_MODEL,
+                            False,
+                            response.status_code,
+                            reason,
+                        ))
+            except (httpx.HTTPError, OSError) as exc:
+                attempts.append(STTAttempt(
+                    model=MISTRAL_STT_MODEL,
+                    success=False,
+                    status_code=None,
+                    reason=_sanitize_reason(str(exc), self.api_keys),
+                ))
 
         summary = "; ".join(f"{item.model}: {item.reason}" for item in attempts)
-        raise RemoteSTTError("STT_ALL_PROVIDERS_FAILED", summary or "all remote STT models failed", attempts)
+        raise RemoteSTTError("STT_ALL_PROVIDERS_FAILED", summary or "direct Mistral STT failed", attempts)
 
 
 def extract_audio_for_stt(video_path: str | Path, output_path: str | Path) -> Path:

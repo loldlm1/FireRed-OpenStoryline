@@ -234,9 +234,9 @@ class LocalASRInput(BaseInput):
 class RemoteASRInput(BaseInput):
     mode: Literal["auto", "skip", "default"] = Field(
         default="auto",
-        description="auto: use the configured remote STT cascade; skip/default: do not transcribe",
+        description="auto: transcribe directly with Mistral Voxtral; skip/default: do not transcribe",
     )
-    language: Annotated[str, Field(default="", description="Optional ISO-639-1 language override")] = ""
+    language: Annotated[str, Field(default="", description="Reserved; direct Mistral segment timestamps require automatic language detection")] = ""
 
 
 class SpeechRoughCutInput(BaseInput):

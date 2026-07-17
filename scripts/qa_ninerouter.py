@@ -5,16 +5,12 @@ import argparse
 import base64
 import binascii
 import json
-import math
-import mimetypes
 import os
-from pathlib import Path
 import re
 import subprocess
 from dataclasses import asdict, dataclass, field
 from typing import Any, Iterable
 from urllib import error, parse, request
-import uuid
 
 
 SECRET_PATTERNS = (
@@ -236,46 +232,6 @@ def _image_bytes(payload: Any, raw: bytes, max_bytes: int) -> tuple[bool, int]:
     return content.startswith(b"RIFF") and content[8:12] == b"WEBP", len(content)
 
 
-def _timestamped_segments(payload: Any) -> tuple[bool, int]:
-    if not isinstance(payload, dict) or not str(payload.get("text") or "").strip():
-        return False, 0
-    segments = payload.get("segments") or []
-    valid = 0
-    for item in segments:
-        if not isinstance(item, dict):
-            continue
-        try:
-            start = float(item.get("start"))
-            end = float(item.get("end"))
-        except (TypeError, ValueError):
-            continue
-        if str(item.get("text") or "").strip() and math.isfinite(start) and math.isfinite(end) and end > start:
-            valid += 1
-    return valid > 0, valid
-
-
-def _multipart(fields: dict[str, str], file_path: Path) -> tuple[bytes, str]:
-    boundary = f"----------------9router{uuid.uuid4().hex}"
-    chunks: list[bytes] = []
-    for name, value in fields.items():
-        chunks.extend([
-            f"--{boundary}\r\n".encode(),
-            f'Content-Disposition: form-data; name="{name}"\r\n\r\n'.encode(),
-            str(value).encode(),
-            b"\r\n",
-        ])
-    content_type = mimetypes.guess_type(file_path.name)[0] or "application/octet-stream"
-    chunks.extend([
-        f"--{boundary}\r\n".encode(),
-        f'Content-Disposition: form-data; name="file"; filename="{file_path.name}"\r\n'.encode(),
-        f"Content-Type: {content_type}\r\n\r\n".encode(),
-        file_path.read_bytes(),
-        b"\r\n",
-        f"--{boundary}--\r\n".encode(),
-    ])
-    return b"".join(chunks), f"multipart/form-data; boundary={boundary}"
-
-
 def live_contract_checks(
     base_url: str,
     api_key: str,
@@ -284,8 +240,6 @@ def live_contract_checks(
     max_image_bytes: int,
     text_catalog: Check,
     image_catalog: Check,
-    stt_catalog: Check,
-    stt_audio: str,
 ) -> list[Check]:
     checks: list[Check] = []
     text_models = configured_models("OPENSTORYLINE_LLM_MODEL")
@@ -360,45 +314,6 @@ def live_contract_checks(
             {"model": image_model, "bytes": byte_count if valid else 0},
         ))
 
-    stt_models = configured_models("OPENSTORYLINE_STT_MODELS")
-    stt_model = stt_models[0] if stt_models else ""
-    if not _catalog_contains(stt_catalog, stt_model):
-        checks.append(_skipped("stt_contract", "configured model is not catalog-advertised"))
-    elif not stt_audio:
-        checks.append(Check("stt_contract", False, category="missing_fixture", details={"model": stt_model}))
-    else:
-        path = Path(stt_audio).expanduser()
-        if not path.is_file():
-            checks.append(Check("stt_contract", False, category="missing_fixture", details={"model": stt_model}))
-        else:
-            body, content_type = _multipart({
-                "model": stt_model,
-                "response_format": "verbose_json",
-            }, path)
-            status, raw, category = http_request(
-                f"{base_url}/v1/audio/transcriptions",
-                method="POST",
-                api_key=api_key,
-                timeout=timeout,
-                body=body,
-                content_type=content_type,
-            )
-            payload: Any = None
-            if category == "ok":
-                try:
-                    payload = json.loads(raw)
-                except (UnicodeDecodeError, json.JSONDecodeError):
-                    category = "invalid_json"
-            valid, segments = _timestamped_segments(payload)
-            checks.append(Check(
-                "stt_contract",
-                status == 200 and category == "ok" and valid,
-                status,
-                "ok" if status == 200 and category == "ok" and valid else (
-                    "contract_invalid" if status == 200 and category == "ok" else category
-                ),
-                {"model": stt_model, "segments": segments if valid else 0},
-            ))
     return checks
 
 
@@ -516,14 +431,6 @@ def run(args: argparse.Namespace) -> tuple[int, dict[str, Any]]:
             timeout=args.timeout,
             strict_models=args.strict_models,
         ),
-        "stt": catalog_check(
-            base_url,
-            "/v1/models/stt",
-            key,
-            configured_models("OPENSTORYLINE_STT_MODELS"),
-            timeout=args.timeout,
-            strict_models=args.strict_models,
-        ),
     }
     checks.extend(catalog_checks.values())
 
@@ -535,15 +442,12 @@ def run(args: argparse.Namespace) -> tuple[int, dict[str, Any]]:
             max_image_bytes=args.max_image_bytes,
             text_catalog=catalog_checks["text"],
             image_catalog=catalog_checks["image"],
-            stt_catalog=catalog_checks["stt"],
-            stt_audio=args.stt_audio,
         ))
     else:
         checks.extend([
             _skipped("text_contract", "live inference not requested"),
             _skipped("vision_contract", "live inference not requested"),
             _skipped("image_contract", "live inference not requested"),
-            _skipped("stt_contract", "live inference not requested"),
         ])
 
     if not args.skip_ssh:
@@ -581,8 +485,7 @@ def main() -> int:
     parser.add_argument("--timeout", type=float, default=10.0)
     parser.add_argument("--skip-ssh", action="store_true")
     parser.add_argument("--strict-models", action="store_true")
-    parser.add_argument("--live-inference", action="store_true", help="run synthetic text, vision, image, and STT calls")
-    parser.add_argument("--stt-audio", default="", help="non-private audio fixture for the live STT check")
+    parser.add_argument("--live-inference", action="store_true", help="run synthetic text, vision, and image calls")
     parser.add_argument("--max-image-bytes", type=int, default=26_214_400)
     parser.add_argument("--container-host-probe", action="store_true", help="run a disposable remote container route probe")
     parser.add_argument(

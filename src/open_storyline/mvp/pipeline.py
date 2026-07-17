@@ -16,7 +16,7 @@ from open_storyline.mvp.render import (
     probe_media,
 )
 from open_storyline.mvp.shorts import ShortsPlanner
-from open_storyline.utils.remote_stt import RemoteSTTError, RemoteSttCascade, extract_audio_for_stt
+from open_storyline.utils.remote_stt import MistralSTTClient, RemoteSTTError, extract_audio_for_stt
 
 
 class MVPJobProcessor:
@@ -38,7 +38,7 @@ class MVPJobProcessor:
         audio = await asyncio.to_thread(extract_audio_for_stt, source, work_dir / "audio.mp3")
 
         store.update(job_id, progress=0.28, stage="remote_transcription")
-        stt = RemoteSttCascade.from_config(self.config.remote_asr)
+        stt = MistralSTTClient.from_config(self.config.remote_asr)
         transcript = await stt.transcribe(audio, language=self.config.remote_asr.language)
         transcript_path = output_dir / "transcript.json"
         transcript_path.write_text(json.dumps({

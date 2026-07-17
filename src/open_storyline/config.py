@@ -144,14 +144,8 @@ class UnderstandClipsConfig(ConfigBaseModel):
 
 
 class RemoteASRConfig(ConfigBaseModel):
-    base_url: str = ""
-    api_key: str = ""
-    models: List[str] = Field(default_factory=lambda: [
-        "mistral/voxtral-mini-2602",
-    ])
     timeout: float = Field(default=180.0, gt=0)
     language: str = ""
-    response_format: Literal["json", "text", "verbose_json", "srt", "vtt"] = "verbose_json"
 
 
 class NineRouterConfig(ConfigBaseModel):

@@ -23,7 +23,7 @@ It contains two intentionally separate runtime profiles:
 | Profile | Entry points | Purpose |
 | --- | --- | --- |
 | Full local agent | `src/open_storyline/agent.py`, `src/open_storyline/mcp/server.py`, `cli.py`, `run.sh` | LangChain agent plus MCP video-editing nodes, runtime Storyline skills, local resources, and configurable external model providers. |
-| Remote-only social-clips MVP | `mvp_fastapi.py`, `src/open_storyline/mvp/`, `Dockerfile.remote`, `config/deploy.yml` | Authenticated upload/job API using remote inference through 9Router and deterministic CPU FFmpeg rendering. |
+| Remote-only social-clips MVP | `mvp_fastapi.py`, `src/open_storyline/mvp/`, `Dockerfile.remote`, `config/deploy.yml` | Authenticated upload/job API using Codex inference through 9Router, direct Mistral STT, and deterministic CPU FFmpeg rendering. |
 
 Do not merge the profiles, dependencies, containers, or runtime assumptions as
 an incidental refactor. The remote MVP is isolated so upstream full-agent work
@@ -102,10 +102,10 @@ original web service require a maintainer-provided source/regeneration path.
 
 The following are non-negotiable unless the user explicitly changes the product policy:
 
-- LLM, frame understanding, speech-to-text, and generated images use configured remote providers through 9Router-compatible endpoints.
+- LLM, frame understanding, and generated images use the configured 9Router endpoint. Speech-to-text uses the fixed direct Mistral Voxtral endpoint with `MISTRAL_API_KEYS`.
 - The MVP must not import or silently fall back to local ASR, embeddings, scene models, or other local inference.
 - Local FFmpeg work is deterministic media processing only.
-- Provider cascades fail closed and retain sanitized per-attempt reasons.
+- Provider requests and the ordered Mistral key ring fail closed and retain sanitized per-attempt reasons.
 - Clip plans must remain bounded and validated for duration, source bounds, overlap, deduplication, finite scores, and output count.
 - Jobs remain durable under `outputs/mvp_jobs/<job_id>` with atomic `job.json` updates and restart recovery.
 - API routes under `/api/mvp` remain authenticated and protected by persistent rate limits; `/health` and `/up` remain public health endpoints.

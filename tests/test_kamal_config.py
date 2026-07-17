@@ -68,19 +68,18 @@ class KamalConfigTests(unittest.TestCase):
         self.assertEqual(config["registry"]["server"], "localhost:5555")
         self.assertEqual(
             config["env"]["secret"],
-            ["OPENSTORYLINE_WEB_TOKEN", "NINEROUTER_KEY"],
+            ["OPENSTORYLINE_WEB_TOKEN", "NINEROUTER_KEY", "MISTRAL_API_KEYS"],
         )
         self.assertEqual(
             config["env"]["clear"]["OPENSTORYLINE_IMAGE_MODELS"],
             "cx/gpt-5.5-image",
         )
-        self.assertEqual(
-            config["env"]["clear"]["OPENSTORYLINE_STT_MODELS"],
-            "mistral/voxtral-mini-2602",
-        )
+        self.assertNotIn("OPENSTORYLINE_STT_MODELS", config["env"]["clear"])
+        self.assertEqual(config["env"]["clear"]["MISTRAL_STT_TIMEOUT"], 180)
         self.assertEqual(config["env"]["clear"]["OPENSTORYLINE_IMAGE_SIZE"], "1024x1024")
         secrets = (ROOT / ".kamal" / "secrets.example").read_text(encoding="utf-8")
         self.assertIn("$OPENSTORYLINE_WEB_TOKEN", secrets)
+        self.assertIn("MISTRAL_API_KEYS=$MISTRAL_API_KEYS", secrets)
         self.assertNotIn("replace-with", secrets)
 
 

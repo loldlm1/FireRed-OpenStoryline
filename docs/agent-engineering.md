@@ -32,7 +32,7 @@ internal implementation details.
 Browser/API client
     -> `mvp_fastapi.py` authentication and persistent rate limits
     -> durable job store and queue
-    -> remote STT cascade
+    -> direct Mistral Voxtral STT
     -> 9Router clip planning from transcript + sampled frames
     -> validated short candidates
     -> deterministic CPU FFmpeg rendering
@@ -63,7 +63,9 @@ remain available independently.
 ### Model and provider boundaries
 
 - The full agent uses OpenAI-compatible LLM/VLM configuration through LangChain.
-- The remote MVP uses the small 9Router client and remote STT/image cascades.
+- The remote MVP uses the small 9Router client for Codex text/vision and a
+  fixed direct Mistral client for timestamped STT. Full-agent generated images
+  also use the 9Router image route.
 - Provider output is untrusted. Parse and validate it before filesystem, render,
   job-state, or tool actions.
 - Preserve explicit timeouts, bounded retries, typed error codes, sanitization,
@@ -118,7 +120,7 @@ evidence use, tool selection, parsing, and failure handling instead.
 | Config model or `config.toml` | Config load command plus affected tests |
 | MCP node/tool schema | Node/schema test and invalid-input case |
 | Prompt/runtime skill | Consumer test, structured-output failure case, language parity review |
-| Provider client | Success, fallback/retry, invalid response, timeout/error, secret-redaction tests |
+| Provider client | Success, bounded same-model/key failover, invalid response, timeout/error, secret-redaction tests |
 | Remote MVP API | Auth, rate limit, status/error shape, traversal and upload-boundary tests |
 | Job/storage code | Atomicity, restart recovery, isolation, corruption, path-safety tests |
 | FFmpeg/rendering | Unit validation plus `tests/test_mvp_render.py` when FFmpeg is installed |
@@ -181,4 +183,3 @@ location that coding agents may interpret as current instructions.
 - Real provider checks can incur cost, expose private media, and fail because of
   quota or service state. Run them only with explicit authorization and report
   them separately from the deterministic suite.
-

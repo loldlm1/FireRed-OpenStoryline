@@ -70,14 +70,8 @@ max_frames = 64                  # 单clip抽帧上限兜底，避免长视频�
 
 # ============= Remote-only speech to text ======================
 [remote_asr]
-base_url = "" # Prefer NINEROUTER_URL
-api_key = ""  # Prefer NINEROUTER_KEY
-models = [
-    "mistral/voxtral-mini-2602",
-]
 timeout = 180.0
 language = "" # Mistral timestamps and explicit language cannot be combined.
-response_format = "verbose_json"
 
 # ============= 9Router planning and vision =====================
 [ninerouter]

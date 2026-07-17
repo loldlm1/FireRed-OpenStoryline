@@ -8,14 +8,14 @@ from open_storyline.nodes.core_nodes.base_node import BaseNode, NodeMeta
 from open_storyline.nodes.node_schema import RemoteASRInput
 from open_storyline.nodes.node_state import NodeState
 from open_storyline.utils.register import NODE_REGISTRY
-from open_storyline.utils.remote_stt import RemoteSttCascade, extract_audio_for_stt
+from open_storyline.utils.remote_stt import MistralSTTClient, extract_audio_for_stt
 
 
 @NODE_REGISTRY.register()
 class RemoteASRNode(BaseNode):
     meta = NodeMeta(
         name="remote_asr",
-        description="Transcribe video clips through the configured remote 9Router STT cascade",
+        description="Transcribe video clips directly with Mistral Voxtral",
         node_id="remote_asr",
         node_kind="asr",
         require_prior_kind=["split_shots"],
@@ -28,7 +28,7 @@ class RemoteASRNode(BaseNode):
         return {"asr_infos": []}
 
     async def process(self, node_state: NodeState, inputs: Dict[str, Any]) -> Any:
-        cascade = RemoteSttCascade.from_config(self.server_cfg.remote_asr)
+        client = MistralSTTClient.from_config(self.server_cfg.remote_asr)
         language = str(inputs.get("language") or self.server_cfg.remote_asr.language or "")
         asr_infos = []
         for clip in inputs["split_shots"].get("clips", []):
@@ -36,7 +36,7 @@ class RemoteASRNode(BaseNode):
                 continue
             with tempfile.TemporaryDirectory(prefix="openstoryline-stt-") as tmpdir:
                 audio_path = extract_audio_for_stt(clip["path"], Path(tmpdir) / "audio.mp3")
-                result = await cascade.transcribe(audio_path, language=language)
+                result = await client.transcribe(audio_path, language=language)
             asr_infos.append({
                 "clip_id": clip["clip_id"],
                 "path": clip["path"],
