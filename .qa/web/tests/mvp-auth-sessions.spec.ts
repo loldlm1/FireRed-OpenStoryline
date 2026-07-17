@@ -79,6 +79,32 @@ test.describe('remote MVP password sessions', () => {
     await expect(page.locator('#session-select')).toHaveValue(selectedSession);
     await expect(page.locator('#recent-jobs .recent-job')).toHaveCount(2);
 
+    const deletedJobId = await page.evaluate(async (sessionId) => {
+      const response = await fetch(`/api/mvp/sessions/${sessionId}`, {
+        credentials: 'same-origin',
+      });
+      const session = await response.json();
+      return session.jobs[0].id as string;
+    }, selectedSession);
+    await expect(page.locator('#session-delete')).toBeEnabled();
+    await page.locator('#session-delete').click();
+    await expect(page.locator('#session-delete-dialog')).toBeVisible();
+    await expect(page.locator('#session-delete-description')).toContainText(
+      'Sus videos se eliminarán permanentemente ahora',
+    );
+    await expect(page.locator('#session-delete-confirm')).toBeFocused();
+    await page.locator('#session-delete-confirm').click();
+    await expect(page.locator('#session-delete-dialog')).toBeHidden();
+    await expect(page.locator('#session-notice')).toContainText(
+      'La auditoría se conserva hasta',
+    );
+    await expect(page.locator('#status')).toContainText('Sus videos ya no están disponibles');
+    await expect(
+      page.locator('#session-select option', { hasText: sessionTitle }),
+    ).toHaveCount(0);
+    const deletedJobResponse = await page.request.get(`/api/mvp/jobs/${deletedJobId}`);
+    expect(deletedJobResponse.status()).toBe(404);
+
     await page.locator('#logout').click();
     await expect(page.locator('#login-view')).toBeVisible();
     await expect(page.locator('#password')).toBeFocused();

@@ -157,6 +157,78 @@ those logs, while the PostgreSQL events and documents remain authoritative.
 Prompts, transcripts, subtitle text, provider bodies, cookies, CSRF values, and
 secrets are deliberately absent from stdout.
 
+## Media and audit retention
+
+Source videos, rendered clips, and generated ZIP bundles remain on the output
+volume for seven days after a job reaches a terminal state. Work files are
+removed immediately after terminal processing. Deleting an editing session in
+the browser soft-deletes its database rows and immediately attempts to remove
+all of its video media. The browser hides the session at once; the audit CLI can
+still inspect its prompts, plans, JSON/SRT evidence, events, QC results, and
+reviews until the 30-day audit deadline.
+
+Retention uses database timestamps, bounded batches, validated job-root paths,
+and one PostgreSQL advisory lock. It never relies on file modification times.
+Preview and status commands are read-only:
+
+```bash
+./bin/kamal-mvp retention status --format json
+./bin/kamal-mvp retention preview --limit 100 --format json
+```
+
+`retention run` also previews unless the explicit mutation flag is present:
+
+```bash
+./bin/kamal-mvp retention run --limit 100 --format json
+./bin/kamal-mvp retention run --apply --limit 100 --format json
+```
+
+Audit holds are CLI-only and retain database audit evidence after day 30. They
+do not retain video files. Supply the private reason through a JSON file or
+stdin so it does not enter shell history:
+
+```bash
+printf '%s' '{"reason":"manual quality investigation"}' | \
+  ./bin/kamal-mvp audit hold SESSION_ID --set --input - --format json
+./bin/kamal-mvp audit hold SESSION_ID --clear --format json
+```
+
+The committed production default is
+`OPENSTORYLINE_RETENTION_ENABLED=false`. Keep it disabled on the initial
+deployment, run and review the preview, then enable the daily scheduler only
+with explicit operator approval. `OPENSTORYLINE_MEDIA_RETENTION_DAYS=7`,
+`OPENSTORYLINE_AUDIT_RETENTION_DAYS=30`,
+`OPENSTORYLINE_RETENTION_INTERVAL_SECONDS=86400`, and
+`OPENSTORYLINE_RETENTION_BATCH_SIZE=100` are bounded operational controls; the
+example production policy preserves seven and 30 days.
+
+## Initial cutover and rollback gate
+
+Use this order for the first PostgreSQL/audit release. Real server commands
+require a separately authorized maintenance window.
+
+1. Boot and verify the private `db` accessory.
+2. Run `./bin/kamal-mvp db migrate` and `./bin/kamal-mvp db current`.
+3. Run `./bin/kamal-mvp db backup` and `./bin/kamal-mvp db restore-check`.
+4. Deploy the application with `OPENSTORYLINE_RETENTION_ENABLED=false`.
+5. Run the legacy import dry-run, apply it, then repeat apply to prove
+   idempotency.
+6. Run audit backfill dry-run/apply and verify bounded job/document counts.
+7. Run retention preview twice and review job counts and estimated bytes; the
+   output intentionally excludes private payload text.
+8. Enable retention only after explicit approval, then redeploy/restart.
+9. Verify `/up`, `/health`, `kamal app details`, `kamal accessory details db`,
+   recent redacted app logs, audit CLI output, and retention status.
+
+The rollback point is the Sprint 4-compatible image/commit, a restore-checked
+`openstoryline.latest.dump`, current compatibility snapshots, and retention
+disabled. Stop future deletion first by setting
+`OPENSTORYLINE_RETENTION_ENABLED=false`. Additive tables remain compatible with
+a code rollback; do not downgrade them automatically. Restore the dump only
+with writes stopped and an empty/isolated target check. Media already purged by
+expiry or session deletion is irreversible and cannot be recovered from the
+database dump.
+
 ## Password and session operations
 
 Generate an Argon2id password hash locally before loading deploy or provider

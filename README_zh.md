@@ -338,6 +338,7 @@ FireRed-OpenStoryline/
 - [常见问题](docs/source/zh/faq.md) - 常见问题解答
 - [Agent 工程指南](docs/agent-engineering.md) - 面向代码 Agent 的架构、契约与验证规则
 - [远程 MVP 架构](docs/mvp/architecture.md) - 当前远程推理运行策略
+- [远程 MVP 数据库与审计](docs/mvp/audit-and-database.md) - PostgreSQL、保留策略、备份与 Agent 审查操作
 - [远程 MVP 实现历史](docs/mvp/implementation-history.md) - 已完成的实现记录
 
 ## TODO

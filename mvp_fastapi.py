@@ -30,6 +30,11 @@ from open_storyline.mvp.database import Database
 from open_storyline.mvp.jobs import JobManager, JobStore
 from open_storyline.mvp.observability import emit_event, finish_request, start_request
 from open_storyline.mvp.pipeline import MVPJobProcessor
+from open_storyline.mvp.retention import (
+    RetentionScheduler,
+    RetentionService,
+    RetentionSettings,
+)
 
 
 def create_app() -> FastAPI:
@@ -38,9 +43,18 @@ def create_app() -> FastAPI:
         config = load_settings(default_config_path())
         database = Database.from_env()
         auth_service = AuthService(database, AuthSettings.from_env())
-        store = JobStore(Path(config.project.outputs_dir) / "mvp_jobs", database)
+        retention_settings = RetentionSettings.from_env()
+        store = JobStore(
+            Path(config.project.outputs_dir) / "mvp_jobs",
+            database,
+            media_retention_days=retention_settings.media_days,
+            audit_retention_days=retention_settings.audit_days,
+        )
         audit_service = AuditService(store)
         store.attach_audit(audit_service)
+        retention_service = RetentionService(store, retention_settings)
+        store.attach_retention(retention_service)
+        retention_scheduler = RetentionScheduler(retention_service)
         manager = JobManager(store, MVPJobProcessor(config))
         app.state.config = config
         app.state.database = database
@@ -48,10 +62,14 @@ def create_app() -> FastAPI:
         app.state.mvp_jobs = store
         app.state.mvp_manager = manager
         app.state.audit_service = audit_service
+        app.state.retention_service = retention_service
+        app.state.retention_scheduler = retention_scheduler
         try:
             await manager.start()
+            await retention_scheduler.start()
             yield
         finally:
+            await retention_scheduler.stop()
             await manager.stop()
             await database.dispose()
 
@@ -62,6 +80,7 @@ def create_app() -> FastAPI:
     )
     app.state.database = None
     app.state.auth_service = None
+    app.state.retention_service = None
 
     @app.middleware("http")
     async def request_observability(request: Request, call_next):
@@ -160,6 +179,7 @@ def create_app() -> FastAPI:
     app.include_router(create_mvp_router(
         lambda: app.state.mvp_jobs,
         lambda: app.state.mvp_manager,
+        lambda: app.state.retention_service,
     ))
     app.include_router(create_auth_router(lambda: app.state.auth_service))
     return app

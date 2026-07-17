@@ -31,6 +31,15 @@ ACTIVE_STATES = {"uploading", "queued", "running"}
 WORKER_ADVISORY_LOCK = 7_303_110_792_761
 CAPACITY_ADVISORY_LOCK = 7_303_110_792_762
 WORKER_EXECUTION_ADVISORY_LOCK = 7_303_110_792_763
+MEDIA_ARTIFACT_SUFFIXES = {
+    ".avi",
+    ".m4v",
+    ".mkv",
+    ".mov",
+    ".mp4",
+    ".webm",
+    ".zip",
+}
 Processor = Callable[[str, "JobStore"], Awaitable[dict[str, Any] | None]]
 
 
@@ -40,6 +49,10 @@ class AuditObserver(Protocol):
     async def ingest_job_snapshot(self, job_id: str) -> dict[str, Any]: ...
 
     async def verify_job(self, job_id: str) -> dict[str, Any]: ...
+
+
+class RetentionObserver(Protocol):
+    async def cleanup_terminal_job(self, job_id: str) -> dict[str, Any]: ...
 
 
 class JobStoreError(RuntimeError):
@@ -129,6 +142,8 @@ class JobStore:
         database: Database,
         *,
         max_active_jobs: int | None = None,
+        media_retention_days: int | None = None,
+        audit_retention_days: int | None = None,
     ) -> None:
         self.root = Path(root).expanduser().resolve()
         self.root.mkdir(parents=True, exist_ok=True)
@@ -136,10 +151,35 @@ class JobStore:
         self.max_active_jobs = max_active_jobs or _bounded_int(
             "OPENSTORYLINE_MAX_ACTIVE_JOBS", 20, 1, 1000
         )
+        self.media_retention = timedelta(
+            days=media_retention_days
+            if media_retention_days is not None
+            else _bounded_int("OPENSTORYLINE_MEDIA_RETENTION_DAYS", 7, 1, 365)
+        )
+        self.audit_retention = timedelta(
+            days=audit_retention_days
+            if audit_retention_days is not None
+            else _bounded_int("OPENSTORYLINE_AUDIT_RETENTION_DAYS", 30, 1, 3650)
+        )
         self.audit: AuditObserver | None = None
+        self.retention: RetentionObserver | None = None
 
     def attach_audit(self, observer: AuditObserver) -> None:
         self.audit = observer
+
+    def attach_retention(self, observer: RetentionObserver) -> None:
+        self.retention = observer
+
+    @staticmethod
+    def _artifact_expiry(
+        job: VideoJob,
+        *,
+        kind: str,
+        relative_path: str,
+    ) -> datetime | None:
+        if kind == "video" or Path(relative_path).suffix.lower() in MEDIA_ARTIFACT_SUFFIXES:
+            return job.media_expires_at
+        return job.audit_expires_at
 
     async def _audit_safely(
         self,
@@ -168,6 +208,33 @@ class JobStore:
                     job_id,
                     "audit_operation_failed",
                     {"operation": operation, "code": code},
+                )
+            except Exception:
+                pass
+
+    async def _retention_safely(self, job_id: str) -> None:
+        if self.retention is None:
+            return
+        try:
+            await self.retention.cleanup_terminal_job(job_id)
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            code = sanitize_text(
+                getattr(exc, "code", "RETENTION_OPERATION_FAILED"),
+                limit=120,
+            )
+            emit_event(
+                "retention_operation_failed",
+                job_id=job_id,
+                outcome="error",
+                error_code=code,
+            )
+            try:
+                await self.record_event(
+                    job_id,
+                    "retention_operation_failed",
+                    {"operation": "cleanup_terminal_job", "code": code},
                 )
             except Exception:
                 pass
@@ -219,7 +286,7 @@ class JobStore:
             id=identifier,
             title=clean_title,
             updated_at=now,
-            audit_expires_at=now + timedelta(days=30),
+            audit_expires_at=now + self.audit_retention,
         )
         try:
             async with self.database.sessions() as session:
@@ -327,8 +394,8 @@ class JobStore:
             },
             result_data={},
             updated_at=now,
-            media_expires_at=now + timedelta(days=7),
-            audit_expires_at=now + timedelta(days=30),
+            media_expires_at=now + self.media_retention,
+            audit_expires_at=now + self.audit_retention,
         )
         try:
             async with self.database.sessions() as session:
@@ -352,7 +419,7 @@ class JobStore:
                     ):
                         raise JobStoreError("SESSION_NOT_FOUND", "session not found")
                     owner.updated_at = now
-                    owner.audit_expires_at = now + timedelta(days=30)
+                    owner.audit_expires_at = now + self.audit_retention
                     session.add(row)
                     await session.flush()
                     await self._append_event(
@@ -375,12 +442,18 @@ class JobStore:
         return state
 
     async def load(self, job_id: str) -> dict[str, Any]:
+        return await self._load(job_id, include_deleted=False)
+
+    async def load_for_audit(self, job_id: str) -> dict[str, Any]:
+        return await self._load(job_id, include_deleted=True)
+
+    async def _load(self, job_id: str, *, include_deleted: bool) -> dict[str, Any]:
         if not JOB_ID_PATTERN.fullmatch(str(job_id or "")):
             raise JobStoreError("JOB_ID_INVALID", "invalid job id")
         try:
             async with self.database.sessions() as session:
                 row = await session.get(VideoJob, job_id)
-                if row is None or row.deleted_at is not None:
+                if row is None or (row.deleted_at is not None and not include_deleted):
                     raise JobStoreError("JOB_NOT_FOUND", "job not found")
                 artifacts = list(
                     (
@@ -472,6 +545,7 @@ class JobStore:
                     )
                     if row is None:
                         raise JobStoreError("JOB_NOT_FOUND", "job not found")
+                    previous_state = row.state
                     result_data = dict(row.result_data or {})
                     for name, value in changes.items():
                         if name == "state":
@@ -496,7 +570,32 @@ class JobStore:
                     if row.state == "running" and row.started_at is None:
                         row.started_at = now
                     if row.state in TERMINAL_STATES:
-                        row.completed_at = now
+                        if previous_state not in TERMINAL_STATES or row.completed_at is None:
+                            row.completed_at = now
+                            row.media_expires_at = now + self.media_retention
+                            row.audit_expires_at = now + self.audit_retention
+                            owner = await session.get(EditingSession, row.editing_session_id)
+                            if owner is not None and owner.audit_expires_at < row.audit_expires_at:
+                                owner.audit_expires_at = row.audit_expires_at
+                                owner.updated_at = now
+                            artifacts = list(
+                                (
+                                    await session.execute(
+                                        select(Artifact)
+                                        .where(
+                                            Artifact.job_id == row.id,
+                                            Artifact.availability == "available",
+                                        )
+                                        .with_for_update()
+                                    )
+                                ).scalars()
+                            )
+                            for artifact in artifacts:
+                                artifact.retention_expires_at = self._artifact_expiry(
+                                    row,
+                                    kind=artifact.kind,
+                                    relative_path=artifact.relative_path,
+                                )
                     derived_event = event_type or (
                         "job_state_changed"
                         if "state" in changes
@@ -573,12 +672,12 @@ class JobStore:
 
     def output_dir(self, job_id: str) -> Path:
         path = self._job_dir(job_id) / "output"
-        path.mkdir(exist_ok=True)
+        path.mkdir(parents=True, exist_ok=True)
         return path
 
     def work_dir(self, job_id: str) -> Path:
         path = self._job_dir(job_id) / "work"
-        path.mkdir(exist_ok=True)
+        path.mkdir(parents=True, exist_ok=True)
         return path
 
     async def source_path(self, job_id: str) -> Path:
@@ -633,7 +732,11 @@ class JobStore:
                             size=artifact_path.stat().st_size,
                             sha256=digest,
                             availability="available",
-                            retention_expires_at=job.media_expires_at,
+                            retention_expires_at=self._artifact_expiry(
+                                job,
+                                kind=str(kind)[:64],
+                                relative_path=relative_path,
+                            ),
                         )
                         session.add(artifact)
                     else:
@@ -642,6 +745,11 @@ class JobStore:
                         artifact.size = artifact_path.stat().st_size
                         artifact.sha256 = digest
                         artifact.availability = "available"
+                        artifact.retention_expires_at = self._artifact_expiry(
+                            job,
+                            kind=artifact.kind,
+                            relative_path=relative_path,
+                        )
                         artifact.purged_at = None
                         artifact.purge_reason = None
                     job.updated_at = now
@@ -667,16 +775,31 @@ class JobStore:
         return state
 
     async def resolve_artifact(self, job_id: str, name: str) -> Path:
+        return await self._resolve_artifact(job_id, name, include_deleted=False)
+
+    async def resolve_artifact_for_audit(self, job_id: str, name: str) -> Path:
+        return await self._resolve_artifact(job_id, name, include_deleted=True)
+
+    async def _resolve_artifact(
+        self,
+        job_id: str,
+        name: str,
+        *,
+        include_deleted: bool,
+    ) -> Path:
         clean_name = Path(str(name or "").replace("\\", "/")).name
         if not clean_name or clean_name != name:
             raise JobStoreError("ARTIFACT_NOT_FOUND", "artifact not found")
         try:
             async with self.database.sessions() as session:
                 artifact = await session.scalar(
-                    select(Artifact).where(
+                    select(Artifact)
+                    .join(VideoJob, VideoJob.id == Artifact.job_id)
+                    .where(
                         Artifact.job_id == job_id,
                         Artifact.name == clean_name,
                         Artifact.availability == "available",
+                        True if include_deleted else VideoJob.deleted_at.is_(None),
                     )
                 )
         except SQLAlchemyError:
@@ -789,10 +912,16 @@ class JobStore:
             await self._snapshot(await self.load(job_id))
         return recovered
 
-    async def events(self, job_id: str, *, limit: int = 200) -> list[dict[str, Any]]:
+    async def events(
+        self,
+        job_id: str,
+        *,
+        limit: int = 200,
+        include_deleted: bool = False,
+    ) -> list[dict[str, Any]]:
         if not 1 <= int(limit) <= 500:
             raise JobStoreError("PAGE_LIMIT_INVALID", "event limit is invalid")
-        await self.load(job_id)
+        await (self.load_for_audit(job_id) if include_deleted else self.load(job_id))
         try:
             async with self.database.sessions() as session:
                 rows = list(
@@ -1029,8 +1158,8 @@ class JobStore:
             updated_at=updated_at,
             started_at=created_at if state_name in {"running", *TERMINAL_STATES} else None,
             completed_at=updated_at if state_name in TERMINAL_STATES else None,
-            media_expires_at=now + timedelta(days=7),
-            audit_expires_at=now + timedelta(days=30),
+            media_expires_at=now + self.media_retention,
+            audit_expires_at=now + self.audit_retention,
         )
         try:
             async with self.database.sessions() as session:
@@ -1047,7 +1176,11 @@ class JobStore:
                                 size=item["size"],
                                 sha256=item["sha256"],
                                 availability=item["availability"],
-                                retention_expires_at=row.media_expires_at,
+                                retention_expires_at=self._artifact_expiry(
+                                    row,
+                                    kind=item["kind"],
+                                    relative_path=item["relative_path"],
+                                ),
                             )
                         )
                     await self._append_event(
@@ -1147,6 +1280,9 @@ class JobStore:
                     "kind": artifact.kind,
                     "size": artifact.size,
                     "availability": artifact.availability,
+                    "retention_expires_at": _iso(artifact.retention_expires_at),
+                    "purged_at": _iso(artifact.purged_at),
+                    "purge_reason": artifact.purge_reason,
                 }
                 for artifact in artifacts
             ],
@@ -1155,6 +1291,9 @@ class JobStore:
             "updated_at": _iso(row.updated_at),
             "started_at": _iso(row.started_at),
             "completed_at": _iso(row.completed_at),
+            "deleted_at": _iso(row.deleted_at),
+            "media_expires_at": _iso(row.media_expires_at),
+            "audit_expires_at": _iso(row.audit_expires_at),
             "recovery_count": row.recovery_count,
             "version": row.version,
         }
@@ -1314,6 +1453,7 @@ class JobManager:
                         "verify_job",
                         lambda: self.store.audit.verify_job(job_id),
                     )
+            await self.store._retention_safely(job_id)
         except asyncio.CancelledError:
             raise
         except Exception as exc:
@@ -1326,6 +1466,7 @@ class JobManager:
                     "ingest_job_snapshot",
                     lambda: self.store.audit.ingest_job_snapshot(job_id),
                 )
+            await self.store._retention_safely(job_id)
 
     async def _locks_alive(self) -> bool:
         return await self._connection_alive(
