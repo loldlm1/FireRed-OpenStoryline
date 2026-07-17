@@ -24,6 +24,7 @@ class MVPJobProcessor:
 
     def __init__(self, config: Settings) -> None:
         self.config = config
+        self.stt = MistralSTTClient.from_config(config.remote_asr)
 
     async def __call__(self, job_id: str, store: JobStore) -> dict[str, Any]:
         state = store.load(job_id)
@@ -38,8 +39,7 @@ class MVPJobProcessor:
         audio = await asyncio.to_thread(extract_audio_for_stt, source, work_dir / "audio.mp3")
 
         store.update(job_id, progress=0.28, stage="remote_transcription")
-        stt = MistralSTTClient.from_config(self.config.remote_asr)
-        transcript = await stt.transcribe(audio, language=self.config.remote_asr.language)
+        transcript = await self.stt.transcribe(audio, language=self.config.remote_asr.language)
         transcript_path = output_dir / "transcript.json"
         transcript_path.write_text(json.dumps({
             "model": transcript.model,

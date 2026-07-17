@@ -17,6 +17,9 @@ clips. The MVP is deliberately CPU-first and does not run local AI models.
   than model inference.
 - If a selected provider fails, the job fails closed and persists only
   sanitized attempt metadata.
+- Direct Mistral attempts serialize inside each application process. Key
+  ordinals, categories, latency, cooldown, and request-sent state are retained;
+  credentials, transcripts, audio, and provider response bodies are not logged.
 
 The original OpenStoryline workflow remains available. The new MVP path is
 isolated so upstream behavior can continue to be merged into this fork.

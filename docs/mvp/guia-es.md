@@ -25,6 +25,11 @@ verificados](limites-gratis.md). Para imágenes revisa la
 [guía de generación remota y derechos](imagenes-generadas.md); una cuota
 incluida por un proveedor no equivale a gratuidad garantizada.
 
+La rotación conserva el orden configurado. Un `429` respeta `Retry-After`, una
+key inválida se desactiva para el proceso y un audio/contrato inválido no se
+repite con las demás keys. El primer despliegue usa un solo contenedor porque
+los cooldowns viven en memoria del proceso.
+
 ## 2. Prepara la máquina desde la que desplegarás
 
 Necesitas Git, Docker en ejecución, acceso SSH por clave al VPS, Ruby con
