@@ -92,6 +92,46 @@ class NineRouterClientTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("Bearer ***", serialized)
         self.assertEqual(len(caught.exception.attempts), 1)
 
+    async def test_forbidden_fails_without_retry(self):
+        calls = 0
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            nonlocal calls
+            calls += 1
+            return httpx.Response(403, json={"error": "forbidden"})
+
+        client = NineRouterClient(
+            base_url="https://router.test",
+            api_key="secret",
+            max_retries=2,
+            transport=httpx.MockTransport(handler),
+        )
+        with self.assertRaises(NineRouterError) as caught:
+            await client.complete_json(system_prompt="system", user_prompt="user")
+
+        self.assertEqual(calls, 1)
+        self.assertEqual(caught.exception.attempts[0].status_code, 403)
+
+    async def test_rate_limit_retries_are_bounded(self):
+        calls = 0
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            nonlocal calls
+            calls += 1
+            return httpx.Response(429, json={"error": "quota"})
+
+        client = NineRouterClient(
+            base_url="https://router.test",
+            api_key="secret",
+            max_retries=1,
+            transport=httpx.MockTransport(handler),
+        )
+        with self.assertRaises(NineRouterError) as caught:
+            await client.complete_json(system_prompt="system", user_prompt="user")
+
+        self.assertEqual(calls, 2)
+        self.assertEqual(len(caught.exception.attempts), 2)
+
     def test_environment_overrides_config(self):
         config = SimpleNamespace(
             base_url="https://config.test",

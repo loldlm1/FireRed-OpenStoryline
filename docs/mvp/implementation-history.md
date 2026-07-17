@@ -28,6 +28,7 @@ Each implementation increment was validated before its short commit.
 | 15 | Sprint 1: pinned Kamal toolchain and redacted 9Router/VPS connectivity preflight | Kamal `2.12.0` config, old-version rejection, auth/catalog/SSH/Docker probes and focused tests | `build: align kamal release toolchain` |
 | 16 | Sprint 2: non-disruptive 9Router backup and access observation | Root-only SQLite backup/restore integrity, live process/port/health/auth review, and no runtime mutation | `ops: preserve live 9router during qa` |
 | 17 | Sprint 3: single-model Codex/Mistral contracts and pinned offline 9Router STT adapter | Focused provider tests, config/Kamal validation, live Codex text/vision/image probes, clean patch application, and a recorded red Mistral catalog gate | `fix: lock ninerouter provider contracts` |
+| 18 | Sprint 4: deterministic and live redacted 9Router modality gate | Complete unit suite, local/container catalog checks, live Codex text/vision/image contracts, skipped invalid STT canary, container-to-host route, and incident runbook | `test: add redacted ninerouter qa gate` |
 
 The original pull request targeted `main` in
 `loldlm1/FireRed-OpenStoryline`. Merge and release state belongs in the hosting
