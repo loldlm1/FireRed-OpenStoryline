@@ -32,6 +32,7 @@ Each implementation increment was validated before its short commit.
 | 19 | Sprint 5 release checkpoint: allowlisted remote image and mandatory live provider gate | Remote image build/profile inspection, local `/health` and `/up` smoke, Kamal config, complete deterministic suite, and a recorded deployment block while Mistral STT is absent | `release: gate remote mvp on ninerouter qa` |
 | 20 | Sprint 6: direct Mistral boundary and legacy STT cleanup | Direct timestamp contract, config/Kamal secret tests, public node compatibility, complete deterministic suite, and removal of the obsolete 9Router STT adapter | `refactor: route remote stt directly to mistral` |
 | 21 | Sprint 7: quota-aware Mistral key failover | Ordered key ring, bounded retries, `Retry-After` cooldowns, invalid-input fail-closed behavior, process-local serialization, redacted metadata, and full deterministic suite | `feat: add quota-aware mistral key failover` |
+| 22 | Sprint 8: split provider release gates and VPS canary | Live Codex text/vision/image and direct Voxtral gates, custom-port stop-first deploy, synthetic end-to-end job, artifact security, restart recovery, and retained-version rollback | `release: gate direct mistral stt` |
 
 The original pull request targeted `main` in
 `loldlm1/FireRed-OpenStoryline`. Merge and release state belongs in the hosting

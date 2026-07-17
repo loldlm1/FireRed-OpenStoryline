@@ -76,6 +76,11 @@ KAMAL_HTTP_PORT=8080
 
 La URL será `http://203.0.113.10:8080`. Este modo no cifra la clave durante el
 transporte; úsalo sólo en una red privada, VPN o prueba controlada.
+En este modo el contenedor publica el puerto directamente y no reinicia ni
+reconfigura un `kamal-proxy` compartido que ya exista en el VPS. Los deploys y
+rollbacks detienen sólo el contenedor web actual justo antes de arrancar el
+nuevo, por lo que existe una ventana corta de mantenimiento en la aplicación;
+el proceso de 9Router no se modifica.
 
 Para producción con dominio, crea primero un registro DNS A/AAAA que apunte al
 VPS y configura:
@@ -88,7 +93,8 @@ KAMAL_HTTPS_PORT=443
 
 Kamal-proxy solicitará y renovará el certificado de Let's Encrypt. La URL será
 `https://video.example.com`. El HTTPS automático requiere un solo servidor y
-los puertos 80/443.
+los puertos 80/443. En un VPS con otro `kamal-proxy`, programa una ventana de
+mantenimiento antes de activar este modo.
 
 ## 4. Verifica los proveedores y despliega
 
@@ -151,8 +157,9 @@ Comandos útiles:
 ./bin/kamal-mvp rollback
 ```
 
-Si cambias `KAMAL_HTTP_PORT` o `KAMAL_HTTPS_PORT` después del primer setup,
-ejecuta `./bin/kamal-mvp proxy reboot` para recrear el proxy con esos puertos.
+Si cambias `KAMAL_HTTP_PORT` en modo IP, ejecuta `./bin/kamal-mvp deploy` para
+recrear el contenedor con la nueva publicación directa. Sólo el modo dominio
+usa `./bin/kamal-mvp proxy reboot` al cambiar los puertos del proxy.
 
 ## 5. Entra con la clave y usa la API
 
