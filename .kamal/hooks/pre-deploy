@@ -1,0 +1,29 @@
+#!/usr/bin/env bash
+set -Eeuo pipefail
+
+ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+ENV_FILE="${KAMAL_ENV_FILE:-$ROOT_DIR/.env.kamal}"
+
+[[ -f "$ENV_FILE" ]] || {
+  printf 'Error: Kamal environment file not found: %s\n' "$ENV_FILE" >&2
+  exit 1
+}
+
+set -a
+# shellcheck disable=SC1090
+source "$ENV_FILE"
+set +a
+
+# Direct host-port publishing cannot run old and new containers concurrently.
+[[ -n "${KAMAL_DOMAIN:-}" ]] && exit 0
+
+IFS=',' read -r -a hosts <<< "${KAMAL_HOSTS:?KAMAL_HOSTS is required}"
+for host in "${hosts[@]}"; do
+  printf 'Stopping the current FireRed container on %s before direct-port boot...\n' "$host"
+  ssh \
+    -o BatchMode=yes \
+    -o ConnectTimeout=15 \
+    -p "${KAMAL_SSH_PORT:-22}" \
+    "${KAMAL_SSH_USER:-root}@$host" \
+    'ids=$(docker ps --filter label=service=openstoryline-mvp --filter label=role=web -q); if [ -n "$ids" ]; then docker stop -t 30 $ids >/dev/null; fi'
+done

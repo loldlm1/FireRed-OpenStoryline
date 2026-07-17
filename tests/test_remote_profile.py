@@ -58,6 +58,8 @@ class RemoteProfileTests(unittest.TestCase):
         self.assertIn("EXPOSE 8000", dockerfile)
         self.assertIn("http://127.0.0.1:8000/health", dockerfile)
         self.assertIn('path: /up', deploy)
+        self.assertIn('proxy: false', deploy)
+        self.assertIn('publish: "<%= ENV.fetch("KAMAL_HTTP_PORT", "80") %>:8000"', deploy)
         self.assertRegex(
             app,
             re.compile(
@@ -91,22 +93,39 @@ class RemoteProfileTests(unittest.TestCase):
             ],
         )
 
-    def test_release_commands_require_the_strict_live_ninerouter_gate(self):
+    def test_release_commands_require_both_strict_live_provider_gates(self):
         wrapper = (ROOT / "bin" / "kamal-mvp").read_text(encoding="utf-8")
         release_scan = wrapper.index('for arg in "$@"')
-        gate_call = wrapper.index('run_ninerouter_release_gate "$release_command"')
+        ninerouter_gate = wrapper.index('run_ninerouter_release_gate "$release_command"')
+        mistral_gate = wrapper.index('run_mistral_release_gate "$release_command"')
         kamal_exec = wrapper.index('exec kamal "_${KAMAL_VERSION}_"')
 
-        self.assertLess(release_scan, gate_call)
-        self.assertLess(gate_call, kamal_exec)
+        self.assertLess(release_scan, ninerouter_gate)
+        self.assertLess(ninerouter_gate, mistral_gate)
+        self.assertLess(mistral_gate, kamal_exec)
         self.assertIn("setup|deploy|redeploy", wrapper)
         self.assertIn('for arg in "$@"', wrapper)
         self.assertIn('run_ninerouter_release_gate "$release_command"', wrapper)
+        self.assertIn('run_mistral_release_gate "$release_command"', wrapper)
+        self.assertIn("MISTRAL_QA_STT_AUDIO", wrapper)
+        self.assertIn("qa_mistral_stt.py", wrapper)
+        self.assertIn("--each-key", wrapper)
         self.assertIn("--strict-models", wrapper)
         self.assertIn("--live-inference", wrapper)
         self.assertIn('OPENSTORYLINE_LLM_MODEL "cx/gpt-5.6-sol"', wrapper)
         self.assertIn('OPENSTORYLINE_IMAGE_MODELS "cx/gpt-5.5-image"', wrapper)
         self.assertNotIn("OPENSTORYLINE_STT_MODELS", wrapper)
+
+    def test_direct_port_predeploy_stops_only_the_current_mvp_container(self):
+        hook = (ROOT / ".kamal" / "hooks" / "pre-deploy").read_text(
+            encoding="utf-8"
+        )
+        self.assertIn('[[ -n "${KAMAL_DOMAIN:-}" ]] && exit 0', hook)
+        self.assertIn("label=service=openstoryline-mvp", hook)
+        self.assertIn("label=role=web", hook)
+        self.assertIn("docker stop -t 30", hook)
+        self.assertNotIn("20128", hook)
+        self.assertNotIn("9router", hook.lower())
 
 if __name__ == "__main__":
     unittest.main()
