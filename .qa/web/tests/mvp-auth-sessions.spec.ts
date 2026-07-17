@@ -4,6 +4,8 @@ const password = process.env.QA_PASSWORD;
 if (!password) throw new Error('QA_PASSWORD is required for the local auth smoke test');
 
 test.describe('remote MVP password sessions', () => {
+  test.describe.configure({ mode: 'serial' });
+
   test('desktop login, CSRF request, and logout', async ({ page, context }) => {
     await page.setViewportSize({ width: 1440, height: 900 });
     await page.goto('/');
@@ -22,6 +24,12 @@ test.describe('remote MVP password sessions', () => {
     await page.locator('#password').press('Enter');
     await expect(page.locator('#app-view')).toBeVisible();
     await expect(page.locator('#login-view')).toBeHidden();
+
+    const sessionTitle = `Browser session ${Date.now()}`;
+    await page.locator('#session-title').fill(sessionTitle);
+    await page.locator('#session-submit').click();
+    await expect(page.locator('#session-select')).toHaveValue(/[a-f0-9]{32}/);
+    await expect(page.locator('#session-summary')).toContainText(sessionTitle);
     await expect(page.locator('#video')).toBeFocused();
 
     const cookies = await context.cookies();
@@ -41,7 +49,8 @@ test.describe('remote MVP password sessions', () => {
         .split('; ')
         .find((item) => item.startsWith('openstoryline_csrf='))
         ?.split('=', 2)[1];
-      const response = await fetch('/api/mvp/jobs', {
+      const sessionId = new URL(window.location.href).searchParams.get('session');
+      const response = await fetch(`/api/mvp/sessions/${sessionId}/jobs`, {
         method: 'POST',
         credentials: 'same-origin',
         headers: { 'X-CSRF-Token': decodeURIComponent(csrfCookie || '') },
@@ -49,6 +58,26 @@ test.describe('remote MVP password sessions', () => {
       return response.status;
     });
     expect(protectedStatus).toBe(422);
+
+    for (const name of ['first.mp4', 'second.mp4']) {
+      await page.locator('#video').setInputFiles({
+        name,
+        mimeType: 'video/mp4',
+        buffer: Buffer.from('synthetic-video'),
+      });
+      await page.locator('#prompt').fill(`Create one short from ${name}`);
+      await page.locator('#submit').click();
+      await expect(page.locator('#recent-jobs .recent-job')).toHaveCount(
+        name === 'first.mp4' ? 1 : 2,
+      );
+      await expect(page.locator('#submit')).toBeEnabled({ timeout: 15_000 });
+    }
+
+    const selectedSession = await page.locator('#session-select').inputValue();
+    await page.reload();
+    await expect(page.locator('#app-view')).toBeVisible();
+    await expect(page.locator('#session-select')).toHaveValue(selectedSession);
+    await expect(page.locator('#recent-jobs .recent-job')).toHaveCount(2);
 
     await page.locator('#logout').click();
     await expect(page.locator('#login-view')).toBeVisible();

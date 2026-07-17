@@ -35,7 +35,7 @@ def create_app() -> FastAPI:
         config = load_settings(default_config_path())
         database = Database.from_env()
         auth_service = AuthService(database, AuthSettings.from_env())
-        store = JobStore(Path(config.project.outputs_dir) / "mvp_jobs")
+        store = JobStore(Path(config.project.outputs_dir) / "mvp_jobs", database)
         manager = JobManager(store, MVPJobProcessor(config))
         app.state.config = config
         app.state.database = database

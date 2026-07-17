@@ -36,8 +36,8 @@
         var(--paper);
     }
 
-    button, input, textarea { font: inherit; }
-    button, input, textarea, progress { accent-color: var(--signal); }
+    button, input, select, textarea { font: inherit; }
+    button, input, select, textarea, progress { accent-color: var(--signal); }
     button { touch-action: manipulation; }
     [hidden] { display: none !important; }
 
@@ -132,7 +132,7 @@
 
     label { display: block; margin: 18px 0 8px; color: #34413b; font-weight: 750; }
 
-    input, textarea {
+    input, select, textarea {
       width: 100%;
       min-height: 48px;
       padding: 13px 14px;
@@ -145,7 +145,7 @@
     }
 
     textarea { min-height: 154px; resize: vertical; line-height: 1.5; }
-    input:focus-visible, textarea:focus-visible {
+    input:focus-visible, select:focus-visible, textarea:focus-visible {
       border-color: var(--signal);
       box-shadow: 0 0 0 4px rgb(214 83 55 / 17%);
     }
@@ -192,6 +192,40 @@
 
     .app-hero h1 { font-size: clamp(3.1rem, 8vw, 6rem); }
     .app-note { margin: 0; padding: 18px 0 4px 22px; border-left: 4px solid var(--mint); color: #4c5751; }
+
+    .session-deck {
+      display: grid;
+      grid-template-columns: minmax(180px, .55fr) minmax(260px, .8fr) minmax(260px, 1fr);
+      gap: 24px;
+      margin-bottom: 24px;
+      padding: clamp(22px, 4vw, 32px);
+      box-shadow: none;
+    }
+
+    .session-deck h2 { font-size: clamp(2rem, 4vw, 3rem); }
+    .session-deck form .button { width: 100%; margin-top: 12px; }
+    .session-summary { margin: 10px 0 0; color: var(--muted); font-size: .92rem; }
+
+    .recent-jobs { display: grid; gap: 8px; margin-top: 10px; }
+    .recent-job {
+      display: grid;
+      grid-template-columns: 1fr auto;
+      gap: 10px;
+      width: 100%;
+      min-height: 44px;
+      align-items: center;
+      padding: 9px 12px;
+      border: 1px solid var(--line);
+      border-radius: 12px;
+      color: var(--ink);
+      background: var(--white);
+      text-align: left;
+      cursor: pointer;
+    }
+    .recent-job:hover { border-color: var(--signal); }
+    .recent-job:focus-visible { outline: 3px solid var(--signal); outline-offset: 2px; }
+    .recent-job code { overflow: hidden; text-overflow: ellipsis; }
+    .recent-job span { color: var(--muted); font-size: .82rem; }
 
     .workspace {
       display: grid;
@@ -243,7 +277,7 @@
     @keyframes spin { to { transform: rotate(360deg); } }
 
     @media (max-width: 820px) {
-      .login-layout, .app-hero, .workspace { grid-template-columns: 1fr; }
+      .login-layout, .app-hero, .session-deck, .workspace { grid-template-columns: 1fr; }
       .login-layout { min-height: auto; padding-top: 54px; }
       .login-copy { align-self: auto; }
       .app-note { max-width: 620px; }
@@ -307,6 +341,30 @@
           <p class="app-note">La planificación y la transcripción se ejecutan remotamente. Este servidor conserva el flujo y renderiza con FFmpeg en CPU.</p>
         </div>
 
+        <section class="card session-deck" aria-labelledby="sessions-heading">
+          <div>
+            <p class="eyebrow">Sesión de edición</p>
+            <h2 id="sessions-heading">Retoma el hilo.</h2>
+            <p class="session-summary">Cada sesión agrupa varios trabajos sin convertir este proyecto personal en un sistema multiusuario.</p>
+          </div>
+
+          <form id="session-form">
+            <label for="session-title">Nueva sesión</label>
+            <input id="session-title" name="title" maxlength="160" required placeholder="Podcast de julio">
+            <button id="session-submit" class="button compact" type="submit">Crear sesión</button>
+            <p id="session-error" class="form-error" role="alert" aria-live="assertive"></p>
+          </form>
+
+          <div>
+            <label for="session-select">Sesión activa</label>
+            <select id="session-select" disabled>
+              <option value="">Crea una sesión para empezar</option>
+            </select>
+            <p id="session-summary" class="session-summary" aria-live="polite">No hay una sesión seleccionada.</p>
+            <div id="recent-jobs" class="recent-jobs" aria-label="Trabajos recientes"></div>
+          </div>
+        </section>
+
         <div class="workspace">
           <form id="job-form" class="card job-card">
             <label for="video">Video de entrada</label>
@@ -351,6 +409,13 @@
     const loginButton = document.querySelector('#login-submit');
     const loginError = document.querySelector('#login-error');
     const logoutButton = document.querySelector('#logout');
+    const sessionForm = document.querySelector('#session-form');
+    const sessionTitle = document.querySelector('#session-title');
+    const sessionSubmit = document.querySelector('#session-submit');
+    const sessionError = document.querySelector('#session-error');
+    const sessionSelect = document.querySelector('#session-select');
+    const sessionSummary = document.querySelector('#session-summary');
+    const recentJobs = document.querySelector('#recent-jobs');
     const form = document.querySelector('#job-form');
     const submit = document.querySelector('#submit');
     const jobError = document.querySelector('#job-error');
@@ -358,7 +423,9 @@
     const progress = document.querySelector('#progress');
     const artifactsBox = document.querySelector('#artifacts');
     const bundleButton = document.querySelector('#bundle');
+    let currentSession = '';
     let currentJob = '';
+    let pollTimer = 0;
 
     class ApiError extends Error {
       constructor(response, payload) {
@@ -399,6 +466,7 @@
     };
 
     const showLogin = (message = '') => {
+      window.clearTimeout(pollTimer);
       loadingView.hidden = true;
       appView.hidden = true;
       loginView.hidden = false;
@@ -406,13 +474,17 @@
       window.requestAnimationFrame(() => passwordInput.focus());
     };
 
-    const showApp = () => {
+    const showApp = async () => {
       loadingView.hidden = true;
       loginView.hidden = true;
       appView.hidden = false;
       loginError.textContent = '';
       passwordInput.value = '';
-      window.requestAnimationFrame(() => document.querySelector('#video').focus());
+      try {
+        await loadSessions(new URL(window.location.href).searchParams.get('session'));
+      } catch (error) {
+        sessionError.textContent = error.message;
+      }
     };
 
     const checkSession = async () => {
@@ -420,7 +492,7 @@
         const response = await fetch('/api/mvp/auth/session', { credentials: 'same-origin' });
         if (!response.ok) throw new Error('El servicio de acceso no está disponible.');
         const state = await response.json();
-        if (state.authenticated) showApp();
+        if (state.authenticated) await showApp();
         else showLogin();
       } catch (error) {
         showLogin(error.message);
@@ -438,7 +510,7 @@
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ password: passwordInput.value }),
         });
-        showApp();
+        await showApp();
       } catch (error) {
         if (error.code === 'LOGIN_RATE_LIMITED') {
           const wait = error.retryAfter || 60;
@@ -461,8 +533,112 @@
       catch { /* The local UI still returns to the locked state. */ }
       finally {
         logoutButton.disabled = false;
+        currentSession = '';
+        currentJob = '';
         showLogin();
       }
+    });
+
+    const setSessionUrl = (sessionId) => {
+      const url = new URL(window.location.href);
+      if (sessionId) url.searchParams.set('session', sessionId);
+      else url.searchParams.delete('session');
+      window.history.replaceState({}, '', url);
+    };
+
+    const renderRecentJobs = (jobs) => {
+      recentJobs.replaceChildren();
+      for (const job of jobs) {
+        const button = document.createElement('button');
+        button.type = 'button';
+        button.className = 'recent-job';
+        const identifier = document.createElement('code');
+        identifier.textContent = job.id.slice(0, 12);
+        const state = document.createElement('span');
+        state.textContent = job.state;
+        button.append(identifier, state);
+        button.addEventListener('click', () => {
+          currentJob = job.id;
+          renderJob(job);
+          if (!['completed', 'failed', 'cancelled'].includes(job.state)) poll();
+        });
+        recentJobs.append(button);
+      }
+    };
+
+    const selectSession = async (sessionId) => {
+      const session = await (await api(`/api/mvp/sessions/${sessionId}`)).json();
+      currentSession = session.id;
+      sessionSelect.value = session.id;
+      sessionSummary.textContent = `${session.title} · ${session.jobs.length} trabajo(s) recientes`;
+      setSessionUrl(session.id);
+      renderRecentJobs(session.jobs);
+      submit.disabled = false;
+      const active = session.jobs.find((job) => !['completed', 'failed', 'cancelled'].includes(job.state));
+      const selected = active || session.jobs[0];
+      if (selected) {
+        currentJob = selected.id;
+        renderJob(selected);
+        if (active) poll();
+      } else {
+        currentJob = '';
+        progress.value = 0;
+        statusBox.textContent = 'Todavía no hay un trabajo activo.';
+        artifactsBox.replaceChildren();
+        bundleButton.hidden = true;
+      }
+      window.requestAnimationFrame(() => document.querySelector('#video').focus());
+    };
+
+    const loadSessions = async (preferred = '') => {
+      const response = await api('/api/mvp/sessions?limit=50');
+      const payload = await response.json();
+      sessionSelect.replaceChildren();
+      if (!payload.items.length) {
+        currentSession = '';
+        setSessionUrl('');
+        sessionSelect.disabled = true;
+        sessionSelect.append(new Option('Crea una sesión para empezar', ''));
+        sessionSummary.textContent = 'No hay una sesión seleccionada.';
+        recentJobs.replaceChildren();
+        submit.disabled = true;
+        window.requestAnimationFrame(() => sessionTitle.focus());
+        return;
+      }
+      for (const session of payload.items) {
+        sessionSelect.append(new Option(session.title, session.id));
+      }
+      sessionSelect.disabled = false;
+      const selected = payload.items.some((session) => session.id === preferred)
+        ? preferred
+        : payload.items[0].id;
+      await selectSession(selected);
+    };
+
+    sessionForm.addEventListener('submit', async (event) => {
+      event.preventDefault();
+      sessionError.textContent = '';
+      sessionSubmit.disabled = true;
+      try {
+        const created = await (await api('/api/mvp/sessions', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ title: sessionTitle.value }),
+        })).json();
+        sessionTitle.value = '';
+        await loadSessions(created.id);
+      } catch (error) {
+        sessionError.textContent = error.message;
+      } finally {
+        sessionSubmit.disabled = false;
+      }
+    });
+
+    sessionSelect.addEventListener('change', () => {
+      sessionError.textContent = '';
+      selectSession(sessionSelect.value).catch((error) => {
+        sessionError.textContent = error.message;
+      });
     });
 
     const saveBlob = async (url, filename) => {
@@ -509,13 +685,18 @@
     };
 
     const poll = async () => {
+      window.clearTimeout(pollTimer);
       try {
         const job = await (await api(`/api/mvp/jobs/${currentJob}`)).json();
         renderJob(job);
         if (!['completed', 'failed', 'cancelled'].includes(job.state)) {
-          window.setTimeout(poll, 2000);
+          pollTimer = window.setTimeout(poll, 2000);
         } else {
           submit.disabled = false;
+          if (currentSession) {
+            const session = await (await api(`/api/mvp/sessions/${currentSession}`)).json();
+            renderRecentJobs(session.jobs);
+          }
         }
       } catch (error) {
         statusBox.textContent = error.message;
@@ -526,6 +707,11 @@
     form.addEventListener('submit', async (event) => {
       event.preventDefault();
       jobError.textContent = '';
+      if (!currentSession) {
+        jobError.textContent = 'Crea o selecciona una sesión antes de subir el video.';
+        sessionTitle.focus();
+        return;
+      }
       submit.disabled = true;
       artifactsBox.replaceChildren();
       const body = new FormData();
@@ -533,12 +719,16 @@
       body.append('prompt', document.querySelector('#prompt').value);
       body.append('max_clips', document.querySelector('#max-clips').value);
       try {
-        const job = await (await api('/api/mvp/jobs', { method: 'POST', body })).json();
+        const job = await (await api(`/api/mvp/sessions/${currentSession}/jobs`, { method: 'POST', body })).json();
         currentJob = job.id;
         renderJob(job);
-        window.setTimeout(poll, 800);
+        const session = await (await api(`/api/mvp/sessions/${currentSession}`)).json();
+        renderRecentJobs(session.jobs);
+        pollTimer = window.setTimeout(poll, 800);
       } catch (error) {
-        jobError.textContent = error.message;
+        jobError.textContent = error.code === 'JOB_QUEUE_FULL'
+          ? 'La cola está llena. Espera a que termine un trabajo activo.'
+          : error.message;
         statusBox.textContent = 'El trabajo no pudo iniciarse.';
         submit.disabled = false;
       }
