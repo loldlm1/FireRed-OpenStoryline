@@ -1,0 +1,10 @@
+**
+!.dockerignore
+!Dockerfile.remote
+!requirements-remote.txt
+!config.toml
+!mvp_fastapi.py
+!src/
+!src/**
+!web/
+!web/mvp.html

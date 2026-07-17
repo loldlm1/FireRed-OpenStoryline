@@ -1,9 +1,9 @@
 # Plan: 9Router And Kamal VPS QA Readiness
 
 **Generated**: 2026-07-16
-**Status**: Execution in progress; Sprints 1-4 repository work complete, with
-live Mistral activation and the Sprint 5 canary blocked by the no-restart
-constraint
+**Status**: Repository execution is complete through the Sprint 5 release
+checkpoint. The live canary is intentionally paused by the Mistral catalog gap
+and the no-restart constraint.
 **Estimated Complexity**: High
 
 ## Overview
@@ -629,7 +629,8 @@ restart, package change, firewall change, or workaround is permitted.
 
 - `docker build -f Dockerfile.remote .` completes without local inference
   packages or downloaded model archives.
-- `kamal config` and the live preflight pass before deploy.
+- `kamal config` passes and the wrapper's mandatory live preflight is green
+  before deploy.
 - `/up` and `/health` pass after deploy; Kamal reports the container healthy.
 - An authenticated upload creates a durable job, reaches remote transcription,
   produces a validated clip plan, renders an MP4/subtitles, and registers
@@ -658,6 +659,12 @@ restart, package change, firewall change, or workaround is permitted.
   - `docker build -f Dockerfile.remote .`
   - `PYTHONPATH=src python tests/test_remote_profile.py`
   - Inspect image history and filesystem for secret/model leakage.
+- **Recorded Sprint 5 repository evidence**: the candidate image builds as
+  `openstoryline-mvp:sprint5-local` (229 MB, 798 KB context), its filesystem
+  contains no env/Kamal files or local model packages, and disposable local
+  `/health` plus `/up` checks pass. The image uses the default root user so the
+  existing persistent volume contract is not changed without a separate UID
+  and ownership migration.
 - **Rollback**: Keep the previous image tag and do not publish the candidate.
 
 ### Task 5.2: Deploy A Single Canary And Exercise The API
@@ -687,13 +694,21 @@ restart, package change, firewall change, or workaround is permitted.
 
 ### Sprint 5 Gate
 
-- [ ] Canary build, deploy, health, job, artifact, restart, and rollback checks
-  are recorded.
-- [ ] No provider token, private media, or raw transcript appears in evidence.
-- [ ] Exactly one Sprint 5 commit is created with the proposed message.
+- [x] Local canary image build, filesystem inspection, and disposable health
+  checks are recorded.
+- [ ] VPS canary deploy, health, job, artifact, restart, and rollback checks
+  are recorded; deployment is blocked until Mistral STT is catalog-advertised.
+- [x] No provider token, private media, or raw transcript appears in evidence.
+- [x] Exactly one Sprint 5 commit is created with the proposed message.
 - [ ] The deployed image and rollback point are recorded.
-- [ ] Production/personal-server rollout remains paused if any modality gate is
+- [x] Production/personal-server rollout remains paused if any modality gate is
   red.
+
+The final live preflight is red only for `catalog:stt=catalog_mismatch`; text,
+vision, image, endpoint-key, SSH, and remote Docker checks pass. STT inference
+is skipped because the exact configured model is absent from `/v1/models/stt`.
+No Kamal deploy, 9Router restart, package mutation, port change, user change,
+or firewall change is performed in this sprint.
 
 ## Testing Strategy
 
