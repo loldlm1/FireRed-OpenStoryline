@@ -1,7 +1,7 @@
 # Plan: 9Router And Kamal VPS QA Readiness
 
 **Generated**: 2026-07-16
-**Status**: Execution in progress; Sprint 1 complete
+**Status**: Execution in progress; Sprints 1-2 complete
 **Estimated Complexity**: High
 
 ## Overview
@@ -102,8 +102,7 @@ FireRed job state, or logs.
   `docs/mvp/api-keys.md`, `docs/mvp/imagenes-generadas.md`.
 - **VPS resources**: `/home/admin/.9router/db/data.sqlite`, its WAL/SHM files,
   `/home/admin/.9router/jwt-secret`, `/home/admin/.9router/auth/cli-secret`,
-  the current `9router -n -l` process, and the future systemd unit
-  `/etc/systemd/system/9router.service`.
+  and the current `admin`-owned `9router -n -l` process on port `20128`.
 - **Current official references**:
   - [9Router STT skill](https://github.com/decolua/9router/blob/master/skills/9router-stt/SKILL.md)
   - [9Router image skill](https://github.com/decolua/9router/blob/master/skills/9router-image/SKILL.md)
@@ -172,7 +171,7 @@ that any sprint validation has passed:
 | Repository config/tests/docs/preflight | Yes | None; provider policy is approved |
 | Kamal version selection and config validation | Yes | Approve installation if the required gem is absent |
 | Read-only SSH/log/database metadata inspection | Yes | None while existing SSH access remains valid |
-| 9Router backup, permissions, systemd, UFW | Yes, but only after explicit remote-mutation approval | Approve restart/firewall window |
+| 9Router backup and read-only process/UFW inspection | Yes | None while the live process remains untouched |
 | Codex OAuth model setup and health verification | Yes | Complete interactive provider login/consent only if Codex requests it |
 | Mistral STT model setup and health verification | Yes with the existing 9Router connection | Replace/re-enter the key only if it is invalid, revoked, or expired |
 | 9Router Mistral STT adapter or pinned upgrade | Yes, using a maintained source/package path | Approve the service restart window; no hand-edit of the global package |
@@ -267,110 +266,104 @@ from the Sprint 1 commit; no remote state is changed by the validation.
 - [x] The rollback point is recorded.
 - [x] Sprint 2 has not started before this gate completes.
 
-## Sprint 2: Supervise And Protect 9Router On The VPS
+## Sprint 2: Non-Disruptive 9Router Protection And Observation
 
-**Goal**: Make 9Router restartable, observable, and protected independently of
-the user's XFCE/RDP session.
+**Goal**: Protect and document the live 9Router process without restarting it,
+changing its `admin` user, changing port `20128`, replacing its manual launch,
+or changing its UFW exposure during an active inference session.
 
 **Dependencies**: Sprint 1 gate; root access; a verified database backup.
 
-**Tracked scope**: A service template/runbook under `docs/mvp/` and any
-operator script needed to validate it. External state includes the systemd
-unit, service user, file modes, and UFW rules.
+**Tracked scope**: A live-process backup/access runbook under `docs/mvp/` and
+read-only validation evidence. No systemd unit, process supervisor, port,
+user, or UFW mutation is in scope for this sprint.
 
-**Commit**: `ops: supervise 9router on qa vps`
+**Commit**: `ops: preserve live 9router during qa`
 
 **Demo/Validation**:
 
 - Capture a root-only backup of `/home/admin/.9router/db` and verify it can be
   opened read-only.
-- Start 9Router through systemd as the `admin` user, then verify
-  `/api/health`, `/v1/models`, and recent journal entries.
-- Confirm a process restart does not require an RDP/XFCE terminal.
-- Confirm UFW rules expose only the intended dashboard/API access; keep the
-  personal HTTP requirement documented.
+- Verify the existing `admin` process, port `20128`, `/api/health`,
+  `/v1/models`, and current launch command without restarting it.
+- Capture a root-only SQLite backup and read-only restore/integrity evidence.
+- Record current UFW and file-mode state without changing either.
 
 **Rollback point**: Preserve the current process command (`9router -n -l`),
-  current data directory, and UFW rule snapshot. If the unit fails, stop/disable
-  it and restore the previous interactive process only as a temporary recovery
-  measure.
+the current data directory, backup identifier, and UFW rule snapshot. No
+service rollback is performed because the live process is not replaced.
 
 ### Task 2.1: Back Up And Tighten 9Router Data Permissions
 
 - **Location**: VPS paths under `/home/admin/.9router` and a new operator
   runbook in `docs/mvp/`.
 - **Description**: Back up `data.sqlite`, `data.sqlite-wal`, and
-  `data.sqlite-shm`; set directories to owner-only traversal and database/
-  credential files to owner-only read/write where compatible with the running
-  `admin` process. Do not print database contents.
+  `data.sqlite-shm` with a consistent SQLite snapshot; test a disposable
+  read-only restore; record current directory/database/credential modes; and
+  do not print database contents or change live permissions.
 - **Dependencies**: Sprint 1 gate.
 - **Acceptance criteria**:
   - Restore procedure is documented and tested against a copy, not the live
     database.
-  - No non-owner read permission remains on provider credential storage.
-  - The running 9Router process can still read/write its database.
+  - The backup is root-only and passes `PRAGMA integrity_check` both before and
+    after copying it to a disposable restore path.
+  - Current permissions are recorded for a later maintenance window rather
+    than changed while the process is serving inference.
 - **Validation**:
   - `stat` checks for directory/database/secret modes.
   - Read-only SQLite integrity query against the backup.
-  - Authenticated text and catalog smoke checks after permission changes.
-- **Rollback**: Restore the previous modes only if the service cannot operate;
-  keep the backup and record the reason before continuing.
+  - Authenticated catalog and health checks while the existing process remains
+    untouched.
+- **Rollback**: No live state rollback is needed; preserve the backup and
+  discard only disposable restore copies.
 
-### Task 2.2: Create A Supervised Service And Log Path
+### Task 2.2: Document The Existing Manual Service And Log Path
 
-- **Location**: `/etc/systemd/system/9router.service` on the VPS and a tracked
-  runbook/template under `docs/mvp/`.
-- **Description**: Run the pinned Node/9Router installation as `admin`, with a
-  fixed working directory, port `20128`, restart policy, resource limits, and
-  journald output. Avoid an `asdf`-interactive shell dependency by pinning the
-  resolved executable or using an explicit wrapper with a health check.
+- **Location**: The current process metadata and a tracked runbook under
+  `docs/mvp/`.
+- **Description**: Record the resolved Node/9Router command, `admin` owner,
+  working directory, port `20128`, parent/child process relationship, and
+  available journal/terminal evidence. Do not install, enable, restart, or
+  replace the manual launch process.
 - **Dependencies**: Task 2.1.
 - **Acceptance criteria**:
-  - `systemctl is-enabled 9router` and `systemctl is-active 9router` are
-    successful after a reboot-equivalent restart test.
-  - `journalctl -u 9router` contains startup and failure evidence without
-    tokens, prompts, or authorization headers.
-  - Dashboard/API health remains available after the current terminal session
-    is closed or disconnected.
+  - The current process is owned by `admin`, listens on `20128`, and keeps
+    `/api/health` available during read-only inspection.
+  - Any captured logs are checked for tokens, prompts, and authorization
+    headers without exposing their contents.
+  - The runbook records that a future supervisor requires a separate
+    maintenance window and is not part of this active inference run.
 - **Validation**:
-  - `systemctl daemon-reload`, `systemctl restart 9router`, and authenticated
-    `/api/health`/model probes after explicit user authorization.
-  - `systemctl show 9router` confirms `User=admin`, restart policy, and port
-    environment without exposing secrets.
-- **Rollback**: `systemctl disable --now 9router`, restore the previous launch
-  command only for recovery, and use the database backup if startup migration
-  changes are observed.
+  - `ps`, `ss`, `/api/health`, authenticated catalog probes, and redacted
+    process/log metadata.
+- **Rollback**: None; the existing launch command remains authoritative.
 
-### Task 2.3: Separate App Connectivity From Public Dashboard Exposure
+### Task 2.3: Record Existing App Connectivity And Public Access
 
 - **Location**: VPS UFW rules, 9Router bind/proxy settings, and
   `docs/mvp/9router-vps-runbook.md`.
-- **Description**: Keep the application-to-9Router path on the VPS host gateway
-  (`host.docker.internal`) where possible. Restrict public port `20128` to the
-  user's VPN/admin source or use an SSH tunnel for the dashboard; do not expose
-  provider credentials or the dashboard unnecessarily.
+- **Description**: Record the current public/VPS/container access paths and
+  endpoint-key behavior. Do not alter UFW, bind addresses, port `20128`, or
+  the public HTTP workflow during this active inference session.
 - **Dependencies**: Task 2.2.
 - **Acceptance criteria**:
-  - The FireRed container route reaches 9Router without relying on public-IP
-    hairpin routing.
-  - The dashboard remains usable through the documented personal access path.
+  - The existing FireRed/container route and dashboard access path are
+    documented without changing the live route.
   - `/v1` requests still require the endpoint key.
 - **Validation**:
-  - `docker run`/temporary app-container curl probe to `host.docker.internal`.
-  - UFW rule review and unauthenticated/authenticated HTTP checks.
-  - Public-path failure or restricted-source check from a non-allowed source,
-    if the user's VPN policy permits it.
-- **Rollback**: Restore the prior UFW rule snapshot and endpoint URL only if
-  the documented dashboard/app route becomes unavailable.
+  - Read-only UFW rule review and unauthenticated/authenticated HTTP checks.
+  - Existing container route probe only if it does not restart or reconfigure
+    9Router.
+- **Rollback**: No firewall or endpoint rollback is performed in this sprint.
 
 ### Sprint 2 Gate
 
-- [ ] Database backup and restore evidence are recorded.
-- [ ] 9Router is supervised and survives session/restart testing.
-- [ ] Permissions, logs, endpoint auth, and firewall scope are reviewed.
-- [ ] Exactly one Sprint 2 commit is created with the proposed message.
-- [ ] The rollback point and UFW/service snapshots are recorded.
-- [ ] Sprint 3 has not started before this gate completes.
+- [x] Database backup and disposable restore evidence are recorded.
+- [x] The existing `admin`/`20128` manual process remains healthy and untouched.
+- [x] Current permissions, logs, endpoint auth, and firewall scope are reviewed.
+- [x] Exactly one Sprint 2 commit is created with the proposed message.
+- [x] The backup identifier and UFW/process snapshots are recorded.
+- [x] Sprint 3 has not started before this gate completes.
 
 ## Sprint 3: Codex And Mistral Model Contract Setup
 
@@ -730,9 +723,9 @@ service restarts, firewall changes, and provider calls.
 
 - **Sprint 1**: Restore the prior version-check/config files; no remote state is
   changed by config validation.
-- **Sprint 2**: Disable the systemd unit, restore the prior launch command only
-  for emergency access, restore the recorded UFW rules, and use the root-only
-  SQLite backup if a service migration affects startup.
+- **Sprint 2**: No live rollback is expected because the process, user, port,
+  permissions, and UFW rules remain unchanged. Preserve the root-only SQLite
+  backup and discard only disposable restore-test copies.
 - **Sprint 3**: Restore the recorded 9Router package/service and model lists,
   use the protected database backup if required, and pause deployment until
   the three approved contracts pass. Do not enable an alternative provider.
