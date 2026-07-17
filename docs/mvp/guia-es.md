@@ -235,7 +235,34 @@ anterior quede rechazada y que el login nuevo funcione. Conserva el antiguo
 `OPENSTORYLINE_WEB_TOKEN` sólo fuera de la configuración activa y únicamente
 durante la ventana de rollback al release anterior.
 
-## 6. Activa ComfyUI-FFMPEGA, si lo deseas
+## 6. Audita trabajos y calidad estructural
+
+PostgreSQL conserva el historial autoritativo: eventos ordenados, snapshots
+versionados de `job.json`, todos los JSON/SRT registrados dentro del límite,
+hashes, disponibilidad del medio y revisiones. No guarda bytes de video, audio,
+frames ni ZIP. Para revisar un trabajo desde otra sesión de agente:
+
+```bash
+./bin/kamal-mvp audit list --since 24h --limit 50 --format json
+./bin/kamal-mvp audit show JOB_ID --limit 200 --format json
+./bin/kamal-mvp audit events JOB_ID --limit 200 --format json
+./bin/kamal-mvp audit documents JOB_ID --limit 200 --format ndjson
+./bin/kamal-mvp audit verify JOB_ID --format json
+```
+
+`audit verify` usa FFprobe y reglas deterministas sobre duración, streams,
+cantidad de salidas y orden de subtítulos. El veredicto sólo confirma estructura;
+no evalúa creatividad, narrativa ni calidad visual. Para trabajos importados,
+ejecuta primero `audit backfill --dry-run` y luego `audit backfill --apply` en
+lotes acotados.
+
+Las notas privadas de una revisión se entregan con `--input archivo.json` o
+`--input -` por stdin, nunca como argumento directo. `./bin/kamal-mvp app logs`
+sirve para diagnóstico reciente y correlación; sus logs rotan y no sustituyen
+el historial PostgreSQL. Los logs no incluyen prompts, transcripciones, SRT,
+bodies de proveedores, cookies ni secretos.
+
+## 7. Activa ComfyUI-FFMPEGA, si lo deseas
 
 El despliegue base ya incluye todos los componentes obligatorios. FFMPEGA es un
 servicio opcional separado: instala ComfyUI y
@@ -259,7 +286,7 @@ prohíbe descargas de modelos y falla todo el trabajo si FFMPEGA falla.
 En un VPS sin GPU esta ruta determinista puede correr en CPU. Los efectos que
 requieran modelos de ComfyUI quedan fuera de este MVP remoto-only.
 
-## 7. Diagnóstico rápido
+## 8. Diagnóstico rápido
 
 ```bash
 curl -fsS https://video.example.com/up

@@ -98,8 +98,64 @@ PYTHONPATH=src python -m open_storyline.mvp.admin import-legacy-jobs \
 The command reports counts only. Re-running `--apply` is idempotent, does not
 move or rewrite media, and groups jobs under one `Imported legacy jobs` session.
 Corrupt job JSON, invalid IDs, traversal-like artifact names, and missing files
-are skipped or recorded without trusting their content. Sprint 4 parses the
-registered JSON/SRT evidence into complete audit documents.
+are skipped or recorded without trusting their content. Backfill the imported
+job snapshots and registered JSON/SRT evidence after the import:
+
+```bash
+./bin/kamal-mvp audit backfill --dry-run --limit 100 --format json
+./bin/kamal-mvp audit backfill --apply --limit 100 --format json
+```
+
+The backfill is bounded and idempotent. Missing or invalid evidence is recorded
+as an audit outcome instead of aborting the batch, and it never reprocesses
+media or contacts an external provider.
+
+## Persistent video audit
+
+PostgreSQL is the audit history source. Each job keeps sanitized ordered events,
+versioned `job.json` snapshots, every registered JSON/SRT document up to
+`OPENSTORYLINE_AUDIT_MAX_DOCUMENT_BYTES`, artifact hashes and availability,
+deterministic structural reviews, and optional agent/human reviews. Video,
+audio, frame, thumbnail, and ZIP bytes never enter PostgreSQL.
+
+Use bounded JSON or NDJSON output when another agent will inspect the result:
+
+```bash
+./bin/kamal-mvp audit list --since 24h --limit 50 --format json
+./bin/kamal-mvp audit show JOB_ID --limit 200 --format json
+./bin/kamal-mvp audit events JOB_ID --limit 200 --format json
+./bin/kamal-mvp audit documents JOB_ID --limit 200 --format ndjson
+./bin/kamal-mvp audit verify JOB_ID --format json
+```
+
+`audit list` also filters by editing session, state, stage, latest verdict,
+error code, media availability, and audit hold. Follow its `next_cursor` for
+the next bounded page. `audit verify` uses FFprobe plus manifest/subtitle checks
+to assess decodability, stream metadata, duration/count agreement, and cue
+ordering. Its verdict is structural evidence only; it does not claim creative,
+semantic, or visual quality.
+
+Record a private agent or human review through stdin or a file so notes do not
+enter shell history:
+
+```bash
+./bin/kamal-mvp audit review JOB_ID --input review.json --format json
+printf '%s' "$REVIEW_JSON" | \
+  ./bin/kamal-mvp audit review JOB_ID --input - --format json
+```
+
+The JSON object must provide `verdict` (`approved`, `rejected`, or
+`needs_review`), `source` (`agent` or `human`), optional descriptive
+`reviewer_label`/`notes`, and structured `findings`. The label is audit metadata,
+not authenticated personal identity, because the application still uses one
+shared password.
+
+Application stdout emits compact correlation-only JSON with request/job/session
+IDs, stage, duration, outcome, and sanitized error codes. Use
+`kamal app logs` for recent diagnosis, never as audit history: Docker rotates
+those logs, while the PostgreSQL events and documents remain authoritative.
+Prompts, transcripts, subtitle text, provider bodies, cookies, CSRF values, and
+secrets are deliberately absent from stdout.
 
 ## Password and session operations
 

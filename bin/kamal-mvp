@@ -187,6 +187,16 @@ if [[ "${1:-}" == "db" ]]; then
   run_database_command "${1:-}"
 fi
 
+if [[ "${1:-}" == "audit" ]]; then
+  shift
+  require_value KAMAL_HOST
+  ensure_kamal
+  ensure_secrets_file
+  cd "$ROOT_DIR"
+  exec kamal "_${KAMAL_VERSION}_" app exec --primary --reuse \
+    env PYTHONPATH=/app/src python -m open_storyline.mvp.admin audit "$@"
+fi
+
 require_value KAMAL_HOST
 require_value DATABASE_URL
 require_value POSTGRES_PASSWORD

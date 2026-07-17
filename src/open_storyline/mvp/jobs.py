@@ -3,7 +3,7 @@ from __future__ import annotations
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from pathlib import Path
-from typing import Any, Awaitable, Callable, Optional
+from typing import Any, Awaitable, Callable, Optional, Protocol
 import asyncio
 import base64
 import binascii
@@ -21,6 +21,7 @@ from sqlalchemy.ext.asyncio import AsyncConnection, AsyncSession
 
 from open_storyline.mvp.database import Database
 from open_storyline.mvp.models import Artifact, EditingSession, JobEvent, VideoJob
+from open_storyline.mvp.observability import emit_event
 from open_storyline.mvp.security import sanitize_for_persistence, sanitize_text
 
 
@@ -31,6 +32,14 @@ WORKER_ADVISORY_LOCK = 7_303_110_792_761
 CAPACITY_ADVISORY_LOCK = 7_303_110_792_762
 WORKER_EXECUTION_ADVISORY_LOCK = 7_303_110_792_763
 Processor = Callable[[str, "JobStore"], Awaitable[dict[str, Any] | None]]
+
+
+class AuditObserver(Protocol):
+    async def ingest_artifact(self, job_id: str, artifact_name: str) -> dict[str, Any]: ...
+
+    async def ingest_job_snapshot(self, job_id: str) -> dict[str, Any]: ...
+
+    async def verify_job(self, job_id: str) -> dict[str, Any]: ...
 
 
 class JobStoreError(RuntimeError):
@@ -127,6 +136,41 @@ class JobStore:
         self.max_active_jobs = max_active_jobs or _bounded_int(
             "OPENSTORYLINE_MAX_ACTIVE_JOBS", 20, 1, 1000
         )
+        self.audit: AuditObserver | None = None
+
+    def attach_audit(self, observer: AuditObserver) -> None:
+        self.audit = observer
+
+    async def _audit_safely(
+        self,
+        job_id: str,
+        operation: str,
+        action: Callable[[], Awaitable[Any]],
+    ) -> None:
+        try:
+            await action()
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            code = sanitize_text(
+                getattr(exc, "code", "AUDIT_OPERATION_FAILED"),
+                limit=120,
+            )
+            emit_event(
+                "audit_operation_failed",
+                job_id=job_id,
+                outcome="error",
+                error_code=code,
+                operation=operation,
+            )
+            try:
+                await self.record_event(
+                    job_id,
+                    "audit_operation_failed",
+                    {"operation": operation, "code": code},
+                )
+            except Exception:
+                pass
 
     def _job_dir(self, job_id: str) -> Path:
         if not JOB_ID_PATTERN.fullmatch(str(job_id or "")):
@@ -614,6 +658,12 @@ class JobStore:
             raise JobStoreError("DATABASE_UNAVAILABLE", "artifact storage is unavailable") from None
         state = await self.load(job_id)
         await self._snapshot(state)
+        if self.audit is not None and artifact_path.suffix.lower() in {".json", ".srt"}:
+            await self._audit_safely(
+                job_id,
+                "ingest_artifact",
+                lambda: self.audit.ingest_artifact(job_id, artifact_path.name),
+            )
         return state
 
     async def resolve_artifact(self, job_id: str, name: str) -> Path:
@@ -768,6 +818,28 @@ class JobStore:
             }
             for row in rows
         ]
+
+    async def record_event(
+        self,
+        job_id: str,
+        event_type: str,
+        payload: Any,
+    ) -> None:
+        try:
+            async with self.database.sessions() as session:
+                async with session.begin():
+                    row = await session.scalar(
+                        select(VideoJob)
+                        .where(VideoJob.id == job_id, VideoJob.deleted_at.is_(None))
+                        .with_for_update()
+                    )
+                    if row is None:
+                        raise JobStoreError("JOB_NOT_FOUND", "job not found")
+                    await self._append_event(session, row, event_type, payload)
+        except JobStoreError:
+            raise
+        except SQLAlchemyError:
+            raise JobStoreError("DATABASE_UNAVAILABLE", "job event storage is unavailable") from None
 
     async def import_legacy_jobs(
         self,
@@ -1015,6 +1087,18 @@ class JobStore:
                 payload=clean_payload,
             )
         )
+        emit_event(
+            event_type,
+            editing_session_id=row.editing_session_id,
+            job_id=row.id,
+            stage=row.stage,
+            outcome=row.state,
+            error_code=(
+                str((row.error_data or {}).get("code") or "") or None
+                if isinstance(row.error_data, dict)
+                else None
+            ),
+        )
 
     async def _snapshot(self, state: dict[str, Any]) -> None:
         try:
@@ -1211,19 +1295,37 @@ class JobManager:
             result = await self.processor(job_id, self.store) if self.processor else None
             current = await self.store.load(job_id)
             if current.get("state") not in TERMINAL_STATES:
-                await self.store.update(
+                current = await self.store.update(
                     job_id,
                     state="completed",
                     progress=1.0,
                     event_type="job_completed",
                     **(result or {}),
                 )
+            if self.store.audit is not None:
+                await self.store._audit_safely(
+                    job_id,
+                    "ingest_job_snapshot",
+                    lambda: self.store.audit.ingest_job_snapshot(job_id),
+                )
+                if current.get("state") == "completed":
+                    await self.store._audit_safely(
+                        job_id,
+                        "verify_job",
+                        lambda: self.store.audit.verify_job(job_id),
+                    )
         except asyncio.CancelledError:
             raise
         except Exception as exc:
             code = str(getattr(exc, "code", "JOB_PROCESSING_FAILED"))
             details = getattr(exc, "to_dict", lambda: None)()
             await self.store.fail(job_id, code=code, message=str(exc), details=details)
+            if self.store.audit is not None:
+                await self.store._audit_safely(
+                    job_id,
+                    "ingest_job_snapshot",
+                    lambda: self.store.audit.ingest_job_snapshot(job_id),
+                )
 
     async def _locks_alive(self) -> bool:
         return await self._connection_alive(
