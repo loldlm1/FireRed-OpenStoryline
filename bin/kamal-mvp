@@ -18,6 +18,42 @@ require_value() {
   [[ "$value" != replace-* ]] || fail "$name still contains an example value"
 }
 
+require_exact_value() {
+  local name="$1"
+  local expected="$2"
+  local value="${!name:-}"
+  [[ "$value" == "$expected" ]] \
+    || fail "$name must be $expected for the approved no-fallback release"
+}
+
+run_ninerouter_release_gate() {
+  local command_name="$1"
+  local stt_audio="${NINEROUTER_QA_STT_AUDIO:-}"
+  local timeout="${NINEROUTER_QA_TIMEOUT:-240}"
+  local python_bin="${PYTHON_BIN:-python3}"
+
+  [[ -n "$stt_audio" ]] \
+    || fail "NINEROUTER_QA_STT_AUDIO is required before kamal $command_name"
+  [[ -f "$stt_audio" ]] \
+    || fail "NINEROUTER_QA_STT_AUDIO must point to a non-private speech fixture"
+  [[ "$timeout" =~ ^[1-9][0-9]*$ ]] \
+    || fail "NINEROUTER_QA_TIMEOUT must be a positive integer"
+  command -v "$python_bin" >/dev/null 2>&1 \
+    || fail "$python_bin is required to run the 9Router release gate"
+
+  require_exact_value OPENSTORYLINE_LLM_MODEL "cx/gpt-5.6-sol"
+  require_exact_value OPENSTORYLINE_IMAGE_MODELS "cx/gpt-5.5-image"
+  require_exact_value OPENSTORYLINE_STT_MODELS "mistral/voxtral-mini-2602"
+
+  printf 'Running mandatory redacted 9Router release gate before kamal %s...\n' "$command_name"
+  "$python_bin" "$ROOT_DIR/scripts/qa_ninerouter.py" \
+    --strict-models \
+    --live-inference \
+    --stt-audio "$stt_audio" \
+    --timeout "$timeout" \
+    || fail "9Router release gate failed; kamal $command_name was not started"
+}
+
 [[ -f "$ENV_FILE" ]] || fail "copy .env.kamal.example to .env.kamal and edit it first"
 
 set -a
@@ -54,6 +90,19 @@ gem list --installed --exact kamal --version "$KAMAL_VERSION" >/dev/null 2>&1 \
 reported_version="$(kamal "_${KAMAL_VERSION}_" version 2>/dev/null | tail -n 1 | tr -d '[:space:]')"
 [[ "$reported_version" == "$KAMAL_VERSION" ]] \
   || fail "Kamal $KAMAL_VERSION could not be selected (reported ${reported_version:-unknown})"
+
+release_command=""
+for arg in "$@"; do
+  case "$arg" in
+    setup|deploy|redeploy)
+      release_command="$arg"
+      break
+      ;;
+  esac
+done
+if [[ -n "$release_command" ]]; then
+  run_ninerouter_release_gate "$release_command"
+fi
 
 mkdir -p "$ROOT_DIR/.kamal"
 if [[ ! -f "$ROOT_DIR/.kamal/secrets" ]]; then

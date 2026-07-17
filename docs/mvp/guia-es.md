@@ -113,11 +113,19 @@ y opciones con
 el modelo no lo acepta, cambia `OPENSTORYLINE_IMAGE_SIZE` por un valor anunciado
 en ese endpoint.
 
-Ejecuta el preflight estricto antes de cualquier despliegue:
+Guarda fuera del repositorio un audio corto, sintético y no privado. Configura
+su ruta absoluta en el `.env.kamal` ignorado:
 
 ```bash
-python scripts/qa_ninerouter.py --strict-models
+NINEROUTER_QA_STT_AUDIO=/ruta/absoluta/openstoryline-qa-speech.wav
+NINEROUTER_QA_TIMEOUT=240
 ```
+
+`./bin/kamal-mvp setup`, `deploy` y `redeploy` ejecutan automáticamente el
+preflight estricto con inferencia real de texto, visión, imagen y STT. Cualquier
+fallo de catálogo, autenticación, transporte, cuota o contrato detiene el
+comando antes de iniciar Kamal. Los comandos de diagnóstico y `rollback` siguen
+disponibles cuando el gate está rojo.
 
 La instalación actual de 9Router `0.5.35` no expone todavía Mistral STT. El
 adaptador versionado está preparado en `patches/9router/`, pero requiere una
