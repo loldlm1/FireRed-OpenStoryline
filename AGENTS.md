@@ -47,6 +47,30 @@ conventions:
 Reusable guidance stays in installed skills. Keep only project-specific facts
 and invariants in this repository.
 
+## GitHub Repository Routing
+
+- The authenticated GitHub MCP is available for remote repository, branch,
+  commit, issue, and pull-request operations. Use local Git for checkout,
+  history, status, and diffs; use GitHub MCP when authoritative remote state or
+  an authenticated GitHub write is required.
+- The writable repository for this project is the fork
+  `loldlm1/FireRed-OpenStoryline`. Local `origin` must fetch from and push to
+  that fork. Treat `FireRedTeam/FireRed-OpenStoryline` as a read-only upstream
+  unless the user explicitly authorizes a write to the parent repository.
+- Before any GitHub write, call the GitHub MCP identity check and confirm the
+  authenticated login is `loldlm1`. Verify the destination owner, repository,
+  head branch, and base branch before creating or updating remote state.
+- Create pull requests in `loldlm1/FireRed-OpenStoryline`, not in the
+  `FireRedTeam` parent repository, unless the user explicitly requests an
+  upstream contribution. GitHub's automatic fork comparison may default to the
+  parent repository, so never accept its base repository without checking it.
+- For work based on `agent/remote-video-mvp`, use that branch as the pull-request
+  base in the fork unless the user specifies another integration branch. Read
+  the created pull request back through GitHub MCP and confirm both repositories
+  and branches after creation.
+- Never print, log, or persist `GITHUB_PAT_TOKEN`. Report only whether GitHub MCP
+  authentication and the requested operation succeeded.
+
 ## Local-First Workflow
 
 - Start with `rtk git status`, then inspect nearby code, tests, docs, and history before editing.
