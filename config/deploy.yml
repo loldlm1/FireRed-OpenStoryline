@@ -1,6 +1,7 @@
 service: openstoryline-mvp
 image: openstoryline-mvp
 minimum_version: 2.12.0
+secrets_path: <%= ENV.fetch("KAMAL_SECRETS_PATH", ".kamal/secrets") %>
 
 servers:
   web:
@@ -62,6 +63,10 @@ env:
     OPENSTORYLINE_IMAGE_SIZE: <%= ENV.fetch("OPENSTORYLINE_IMAGE_SIZE", "1024x1024") %>
     MISTRAL_STT_TIMEOUT: <%= ENV.fetch("MISTRAL_STT_TIMEOUT", "180") %>
     OPENSTORYLINE_MAX_UPLOAD_BYTES: <%= ENV.fetch("OPENSTORYLINE_MAX_UPLOAD_BYTES", "8589934592") %>
+    OPENSTORYLINE_DATABASE_CONNECT_TIMEOUT: <%= ENV.fetch("OPENSTORYLINE_DATABASE_CONNECT_TIMEOUT", "10") %>
+    OPENSTORYLINE_DATABASE_QUERY_TIMEOUT: <%= ENV.fetch("OPENSTORYLINE_DATABASE_QUERY_TIMEOUT", "5") %>
+    OPENSTORYLINE_DATABASE_POOL_SIZE: <%= ENV.fetch("OPENSTORYLINE_DATABASE_POOL_SIZE", "5") %>
+    OPENSTORYLINE_DATABASE_MAX_OVERFLOW: <%= ENV.fetch("OPENSTORYLINE_DATABASE_MAX_OVERFLOW", "5") %>
     OPENSTORYLINE_AUTH_RPM: <%= ENV.fetch("OPENSTORYLINE_AUTH_RPM", "20") %>
     OPENSTORYLINE_AUTH_RPD: <%= ENV.fetch("OPENSTORYLINE_AUTH_RPD", "200") %>
     OPENSTORYLINE_AUTH_GLOBAL_RPM: <%= ENV.fetch("OPENSTORYLINE_AUTH_GLOBAL_RPM", "600") %>
@@ -76,9 +81,44 @@ env:
     FFMPEGA_LOCAL_OUTPUT_ROOT: /app/outputs
     FFMPEGA_REMOTE_OUTPUT_ROOT: "<%= ENV.fetch("FFMPEGA_REMOTE_OUTPUT_ROOT", "") %>"
   secret:
+    - DATABASE_URL
     - OPENSTORYLINE_WEB_TOKEN
     - NINEROUTER_KEY
     - MISTRAL_API_KEYS
+
+accessories:
+  db:
+    image: postgres:17-bookworm@sha256:4f736ae292687621d4dbe0d499ffd024a36bd2ee7d8ca6f2ccd4c800f047b394
+    host: <%= ENV.fetch("KAMAL_HOST") %>
+    network: kamal
+    env:
+      clear:
+        POSTGRES_DB: openstoryline
+        POSTGRES_USER: postgres
+        POSTGRES_INITDB_ARGS: "--auth-host=scram-sha-256"
+      secret:
+        - OPENSTORYLINE_DATABASE_PASSWORD
+        - POSTGRES_PASSWORD
+    files:
+      - local: scripts/mvp-postgres-init.sh
+        remote: /docker-entrypoint-initdb.d/10-openstoryline-app.sh
+        mode: "0755"
+        owner: "999:999"
+    options:
+      restart: unless-stopped
+      health-cmd: "pg_isready -U postgres -d openstoryline"
+      health-interval: 10s
+      health-timeout: 5s
+      health-retries: 5
+    directories:
+      - local: <%= ENV.fetch("KAMAL_POSTGRES_DATA_DIR", "/var/lib/openstoryline/postgres") %>
+        remote: /var/lib/postgresql/data
+        mode: "0700"
+        owner: "999:999"
+      - local: <%= ENV.fetch("KAMAL_POSTGRES_BACKUP_DIR", "/var/lib/openstoryline/backups") %>
+        remote: /backups
+        mode: "0700"
+        owner: "999:999"
 
 volumes:
   - <%= ENV.fetch("KAMAL_OUTPUTS_DIR", "/var/lib/openstoryline/outputs") %>:/app/outputs

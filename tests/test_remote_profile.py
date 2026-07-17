@@ -40,6 +40,9 @@ class RemoteProfileTests(unittest.TestCase):
                 "!requirements-remote.txt",
                 "!config.toml",
                 "!mvp_fastapi.py",
+                "!alembic.ini",
+                "!migrations/",
+                "!migrations/**",
                 "!src/",
                 "!src/**",
                 "!web/",
@@ -73,12 +76,23 @@ class RemoteProfileTests(unittest.TestCase):
         )
         self.assertIn('"renderer": "ffmpeg-cpu"', app)
 
+    def test_remote_image_contains_database_migrations_without_init_secrets(self):
+        dockerfile = (ROOT / "Dockerfile.remote").read_text(encoding="utf-8")
+        requirements = (ROOT / "requirements-remote.txt").read_text(encoding="utf-8")
+
+        self.assertIn("COPY migrations/ ./migrations/", dockerfile)
+        self.assertIn("COPY config.toml mvp_fastapi.py alembic.ini ./", dockerfile)
+        self.assertNotIn("mvp-postgres-init.sh", dockerfile)
+        for dependency in ("SQLAlchemy", "psycopg[binary]", "alembic", "argon2-cffi"):
+            with self.subTest(dependency=dependency):
+                self.assertIn(dependency, requirements)
+
     def test_kamal_keeps_provider_secrets_out_of_clear_environment(self):
         deploy = (ROOT / "config" / "deploy.yml").read_text(encoding="utf-8")
         secrets = (ROOT / ".kamal" / "secrets.example").read_text(encoding="utf-8")
 
         self.assertIn(
-            "  secret:\n    - OPENSTORYLINE_WEB_TOKEN\n    - NINEROUTER_KEY\n    - MISTRAL_API_KEYS",
+            "  secret:\n    - DATABASE_URL\n    - OPENSTORYLINE_WEB_TOKEN\n    - NINEROUTER_KEY\n    - MISTRAL_API_KEYS",
             deploy,
         )
         self.assertNotRegex(deploy, r"(?m)^\s+NINEROUTER_KEY:")
@@ -87,6 +101,9 @@ class RemoteProfileTests(unittest.TestCase):
         self.assertEqual(
             secrets.splitlines()[1:],
             [
+                "DATABASE_URL=$DATABASE_URL",
+                "OPENSTORYLINE_DATABASE_PASSWORD=$OPENSTORYLINE_DATABASE_PASSWORD",
+                "POSTGRES_PASSWORD=$POSTGRES_PASSWORD",
                 "OPENSTORYLINE_WEB_TOKEN=$OPENSTORYLINE_WEB_TOKEN",
                 "NINEROUTER_KEY=$NINEROUTER_KEY",
                 "MISTRAL_API_KEYS=$MISTRAL_API_KEYS",
@@ -98,7 +115,7 @@ class RemoteProfileTests(unittest.TestCase):
         release_scan = wrapper.index('for arg in "$@"')
         ninerouter_gate = wrapper.index('run_ninerouter_release_gate "$release_command"')
         mistral_gate = wrapper.index('run_mistral_release_gate "$release_command"')
-        kamal_exec = wrapper.index('exec kamal "_${KAMAL_VERSION}_"')
+        kamal_exec = wrapper.rindex('exec kamal "_${KAMAL_VERSION}_"')
 
         self.assertLess(release_scan, ninerouter_gate)
         self.assertLess(ninerouter_gate, mistral_gate)

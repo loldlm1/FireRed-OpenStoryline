@@ -1,0 +1,272 @@
+from __future__ import annotations
+
+import asyncio
+import os
+from pathlib import Path
+import subprocess
+import sys
+from tempfile import TemporaryDirectory
+import unittest
+from unittest.mock import patch
+
+from sqlalchemy import text
+from sqlalchemy.engine import make_url
+from sqlalchemy.exc import SQLAlchemyError
+
+from open_storyline.mvp.database import (
+    EXPECTED_SCHEMA_REVISION,
+    Database,
+    DatabaseConfigurationError,
+    normalize_database_url,
+)
+
+
+ROOT = Path(__file__).resolve().parents[1]
+REQUIRED_TABLES = {
+    "alembic_version",
+    "artifacts",
+    "audit_documents",
+    "audit_reviews",
+    "auth_sessions",
+    "editing_sessions",
+    "job_events",
+    "login_attempt_buckets",
+    "video_jobs",
+}
+
+
+class DatabaseConfigurationTests(unittest.TestCase):
+    def test_normalizes_standard_postgres_urls_for_psycopg(self):
+        normalized = normalize_database_url(
+            "postgresql://openstoryline:secret@db:5432/openstoryline"
+        )
+        self.assertTrue(normalized.startswith("postgresql+psycopg://"))
+
+    def test_missing_or_non_postgres_urls_fail_closed(self):
+        for value in ("", "sqlite:///tmp/test.db", "postgresql+psycopg:///missing-user"):
+            with self.subTest(value=value):
+                with self.assertRaises(DatabaseConfigurationError):
+                    normalize_database_url(value)
+
+    def test_configuration_errors_do_not_retain_secret_bearing_causes(self):
+        secret = "do-not-leak-this-password"
+        with self.assertRaises(DatabaseConfigurationError) as raised:
+            normalize_database_url(f"mysql://user:{secret}@db/example")
+        self.assertNotIn(secret, str(raised.exception))
+        self.assertIsNone(raised.exception.__cause__)
+
+    def test_pool_settings_are_bounded(self):
+        environment = {
+            "OPENSTORYLINE_DATABASE_POOL_SIZE": "1000",
+            "OPENSTORYLINE_DATABASE_MAX_OVERFLOW": "0",
+        }
+        with patch.dict(os.environ, environment, clear=False):
+            with self.assertRaises(DatabaseConfigurationError) as raised:
+                Database("postgresql+psycopg://user:password@db/example")
+        self.assertNotIn("password", str(raised.exception))
+
+
+class _FakeConnection:
+    def __init__(self, revision: str | None, delay: float = 0) -> None:
+        self.revision = revision
+        self.delay = delay
+
+    async def execute(self, _statement):
+        if self.delay:
+            await asyncio.sleep(self.delay)
+
+    async def scalar(self, _statement):
+        return self.revision
+
+
+class _ConnectionContext:
+    def __init__(self, connection=None, error: Exception | None = None) -> None:
+        self.connection = connection
+        self.error = error
+
+    async def __aenter__(self):
+        if self.error is not None:
+            raise self.error
+        return self.connection
+
+    async def __aexit__(self, *_args):
+        return False
+
+
+class _FakeEngine:
+    def __init__(self, context: _ConnectionContext) -> None:
+        self.context = context
+
+    def connect(self):
+        return self.context
+
+
+def _database_with_engine(engine, *, timeout: float = 1) -> Database:
+    database = object.__new__(Database)
+    database.engine = engine
+    database.query_timeout = timeout
+    return database
+
+
+class DatabaseReadinessTests(unittest.IsolatedAsyncioTestCase):
+    async def test_current_schema_is_ready(self):
+        database = _database_with_engine(
+            _FakeEngine(_ConnectionContext(_FakeConnection(EXPECTED_SCHEMA_REVISION)))
+        )
+        readiness = await database.readiness()
+        self.assertTrue(readiness.ready)
+        self.assertEqual(readiness.code, "DATABASE_READY")
+
+    async def test_schema_mismatch_is_not_ready(self):
+        database = _database_with_engine(
+            _FakeEngine(_ConnectionContext(_FakeConnection("older_revision")))
+        )
+        readiness = await database.readiness()
+        self.assertFalse(readiness.ready)
+        self.assertEqual(readiness.code, "DATABASE_SCHEMA_OUTDATED")
+
+    async def test_database_errors_and_timeouts_are_sanitized(self):
+        failing = _database_with_engine(
+            _FakeEngine(
+                _ConnectionContext(error=SQLAlchemyError("secret-bearing backend error"))
+            )
+        )
+        timed_out = _database_with_engine(
+            _FakeEngine(_ConnectionContext(_FakeConnection(EXPECTED_SCHEMA_REVISION, 0.1))),
+            timeout=0.01,
+        )
+        for database in (failing, timed_out):
+            with self.subTest(database=database):
+                readiness = await database.readiness()
+                self.assertFalse(readiness.ready)
+                self.assertEqual(readiness.code, "DATABASE_UNAVAILABLE")
+
+
+class BackupScriptTests(unittest.TestCase):
+    def test_failed_dump_keeps_the_previous_backup(self):
+        with TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            backup_dir = root / "backups"
+            command_dir = root / "bin"
+            backup_dir.mkdir()
+            command_dir.mkdir()
+            target = backup_dir / "openstoryline.latest.dump"
+            target.write_bytes(b"previous-valid-backup")
+
+            pg_dump = command_dir / "pg_dump"
+            pg_dump.write_text(
+                "#!/bin/sh\n"
+                "previous=\n"
+                "for argument in \"$@\"; do\n"
+                "  if [ \"$previous\" = --file ]; then file=$argument; fi\n"
+                "  case \"$argument\" in --file=*) file=${argument#--file=};; esac\n"
+                "  previous=$argument\n"
+                "done\n"
+                "printf partial > \"$file\"\n"
+                "exit 1\n",
+                encoding="utf-8",
+            )
+            pg_dump.chmod(0o755)
+            pg_restore = command_dir / "pg_restore"
+            pg_restore.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+            pg_restore.chmod(0o755)
+
+            environment = {
+                **os.environ,
+                "PATH": f"{command_dir}:{os.environ['PATH']}",
+                "OPENSTORYLINE_POSTGRES_ADMIN_MODE": "local",
+                "OPENSTORYLINE_POSTGRES_BACKUP_DIR": str(backup_dir),
+                "PGDATABASE": "openstoryline_test",
+            }
+            result = subprocess.run(
+                [str(ROOT / "scripts" / "mvp-postgres-backup.sh")],
+                cwd=ROOT,
+                env=environment,
+                check=False,
+                capture_output=True,
+                text=True,
+            )
+
+            self.assertNotEqual(result.returncode, 0)
+            self.assertEqual(target.read_bytes(), b"previous-valid-backup")
+
+
+def _integration_url() -> str:
+    raw = os.getenv("TEST_DATABASE_URL", "").strip()
+    if not raw:
+        return ""
+    url = make_url(normalize_database_url(raw))
+    if not str(url.database or "").startswith("openstoryline_test"):
+        raise RuntimeError("TEST_DATABASE_URL must use an openstoryline_test database")
+    return raw
+
+
+@unittest.skipUnless(os.getenv("TEST_DATABASE_URL"), "TEST_DATABASE_URL is not configured")
+class MigrationTests(unittest.IsolatedAsyncioTestCase):
+    @classmethod
+    def setUpClass(cls):
+        super().setUpClass()
+        cls.database_url = _integration_url()
+        environment = {**os.environ, "DATABASE_URL": cls.database_url}
+        subprocess.run(
+            [sys.executable, "-m", "alembic", "upgrade", "head"],
+            cwd=ROOT,
+            env=environment,
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+        subprocess.run(
+            [sys.executable, "-m", "alembic", "upgrade", "head"],
+            cwd=ROOT,
+            env=environment,
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+
+    async def test_empty_database_upgrades_to_current_schema(self):
+        database = Database(self.database_url)
+        try:
+            readiness = await database.readiness()
+            async with database.engine.connect() as connection:
+                table_names = set(
+                    await connection.scalars(
+                        text(
+                            "SELECT table_name FROM information_schema.tables "
+                            "WHERE table_schema = 'public'"
+                        )
+                    )
+                )
+                constraints = set(
+                    await connection.scalars(
+                        text(
+                            "SELECT conname FROM pg_constraint "
+                            "WHERE connamespace = 'public'::regnamespace"
+                        )
+                    )
+                )
+        finally:
+            await database.dispose()
+
+        self.assertTrue(readiness.ready)
+        self.assertTrue(REQUIRED_TABLES.issubset(table_names))
+        self.assertIn("ck_video_jobs_progress", constraints)
+        self.assertIn("uq_job_events_job_sequence", constraints)
+        self.assertIn("ck_audit_reviews_verdict", constraints)
+
+    async def test_migration_matches_orm_metadata(self):
+        environment = {**os.environ, "DATABASE_URL": self.database_url}
+        result = subprocess.run(
+            [sys.executable, "-m", "alembic", "check"],
+            cwd=ROOT,
+            env=environment,
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+        self.assertEqual(result.returncode, 0, result.stderr or result.stdout)
+
+
+if __name__ == "__main__":
+    unittest.main()

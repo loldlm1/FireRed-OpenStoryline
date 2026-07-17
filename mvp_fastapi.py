@@ -18,6 +18,7 @@ if str(SRC_DIR) not in sys.path:
 
 from open_storyline.config import default_config_path, load_settings
 from open_storyline.mvp.api import create_mvp_router
+from open_storyline.mvp.database import Database
 from open_storyline.mvp.jobs import JobManager, JobStore
 from open_storyline.mvp.pipeline import MVPJobProcessor
 from open_storyline.mvp.rate_limit import PersistentRateLimiter, RateDecision, RatePolicy
@@ -69,21 +70,24 @@ def create_app() -> FastAPI:
         if len(token) < 16:
             raise RuntimeError("OPENSTORYLINE_WEB_TOKEN must contain at least 16 characters")
         config = load_settings(default_config_path())
+        database = Database.from_env()
         store = JobStore(Path(config.project.outputs_dir) / "mvp_jobs")
         manager = JobManager(store, MVPJobProcessor(config))
         limiter_path = os.getenv("OPENSTORYLINE_RATE_LIMIT_DB", "").strip()
         if not limiter_path:
             limiter_path = str(Path(config.project.outputs_dir) / "mvp_rate_limits.sqlite3")
         app.state.config = config
+        app.state.database = database
         app.state.mvp_jobs = store
         app.state.mvp_manager = manager
         app.state.rate_limiter = PersistentRateLimiter(limiter_path)
         app.state.rate_policy = RatePolicy.from_env()
-        await manager.start()
         try:
+            await manager.start()
             yield
         finally:
             await manager.stop()
+            await database.dispose()
 
     app = FastAPI(
         title="OpenStoryline Remote Video MVP",
@@ -92,6 +96,7 @@ def create_app() -> FastAPI:
     )
     app.state.rate_limiter = None
     app.state.rate_policy = None
+    app.state.database = None
 
     @app.middleware("http")
     async def require_access_token(request: Request, call_next):
@@ -178,6 +183,18 @@ def create_app() -> FastAPI:
 
     @app.get("/up", include_in_schema=False)
     async def kamal_healthcheck():
+        database = app.state.database
+        if database is None:
+            return JSONResponse(
+                {"status": "unavailable", "code": "DATABASE_NOT_INITIALIZED"},
+                status_code=503,
+            )
+        readiness = await database.readiness()
+        if not readiness.ready:
+            return JSONResponse(
+                {"status": "unavailable", "code": readiness.code},
+                status_code=503,
+            )
         return {"status": "ok"}
 
     app.include_router(create_mvp_router(

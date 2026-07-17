@@ -79,12 +79,107 @@ run_mistral_release_gate() {
     || fail "direct-Mistral STT gate failed; kamal $command_name was not started"
 }
 
-[[ -f "$ENV_FILE" ]] || fail "copy .env.kamal.example to .env.kamal and edit it first"
+ensure_kamal() {
+  command -v gem >/dev/null 2>&1 \
+    || fail "RubyGems is required; install Ruby, then run: gem install kamal -v $KAMAL_VERSION"
+  command -v kamal >/dev/null 2>&1 \
+    || fail "Kamal is required; run: gem install kamal -v $KAMAL_VERSION"
 
-set -a
-# shellcheck disable=SC1090
-source "$ENV_FILE"
-set +a
+  local oldest
+  oldest="$(printf '%s\n%s\n' "$MINIMUM_KAMAL_VERSION" "$KAMAL_VERSION" | sort -V | head -n 1)"
+  [[ "$oldest" == "$MINIMUM_KAMAL_VERSION" ]] \
+    || fail "Kamal $KAMAL_VERSION is too old; run: gem install kamal -v $MINIMUM_KAMAL_VERSION"
+
+  gem list --installed --exact kamal --version "$KAMAL_VERSION" >/dev/null 2>&1 \
+    || fail "Kamal $KAMAL_VERSION is not installed; run: gem install kamal -v $KAMAL_VERSION"
+
+  local reported_version
+  reported_version="$(kamal "_${KAMAL_VERSION}_" version 2>/dev/null | tail -n 1 | tr -d '[:space:]')"
+  [[ "$reported_version" == "$KAMAL_VERSION" ]] \
+    || fail "Kamal $KAMAL_VERSION could not be selected (reported ${reported_version:-unknown})"
+}
+
+ensure_secrets_file() {
+  mkdir -p "$ROOT_DIR/.kamal"
+  if [[ ! -f "$ROOT_DIR/.kamal/secrets" ]]; then
+    cp "$ROOT_DIR/.kamal/secrets.example" "$ROOT_DIR/.kamal/secrets"
+    chmod 600 "$ROOT_DIR/.kamal/secrets"
+  fi
+}
+
+run_database_command() {
+  local action="${1:-}"
+  local mode="${OPENSTORYLINE_POSTGRES_ADMIN_MODE:-kamal}"
+  local python_bin
+
+  case "$action" in
+    migrate|current|backup|restore-check)
+      ;;
+    *)
+      fail "usage: bin/kamal-mvp db {migrate|current|backup|restore-check}"
+      ;;
+  esac
+
+  if [[ "$mode" == "local" ]]; then
+    case "$action" in
+      migrate|current)
+        require_value DATABASE_URL
+        python_bin="$(resolve_python)"
+        cd "$ROOT_DIR"
+        if [[ "$action" == "migrate" ]]; then
+          exec "$python_bin" -m alembic upgrade head
+        fi
+        exec "$python_bin" -m alembic current
+        ;;
+      backup)
+        exec "$ROOT_DIR/scripts/mvp-postgres-backup.sh"
+        ;;
+      restore-check)
+        exec "$ROOT_DIR/scripts/mvp-postgres-restore-check.sh"
+        ;;
+    esac
+  fi
+
+  [[ "$mode" == "kamal" ]] \
+    || fail "OPENSTORYLINE_POSTGRES_ADMIN_MODE must be local or kamal"
+  require_value KAMAL_HOST
+  require_value DATABASE_URL
+  require_value POSTGRES_PASSWORD
+  require_value OPENSTORYLINE_DATABASE_PASSWORD
+  [[ "${KAMAL_SSH_PORT:-22}" =~ ^[0-9]+$ ]] || fail "KAMAL_SSH_PORT must be numeric"
+  ensure_kamal
+  ensure_secrets_file
+  cd "$ROOT_DIR"
+
+  case "$action" in
+    migrate)
+      exec kamal "_${KAMAL_VERSION}_" app exec --primary alembic upgrade head
+      ;;
+    current)
+      exec kamal "_${KAMAL_VERSION}_" app exec --primary --reuse alembic current
+      ;;
+    backup)
+      exec "$ROOT_DIR/scripts/mvp-postgres-backup.sh"
+      ;;
+    restore-check)
+      exec "$ROOT_DIR/scripts/mvp-postgres-restore-check.sh"
+      ;;
+  esac
+}
+
+if [[ -f "$ENV_FILE" ]]; then
+  set -a
+  # shellcheck disable=SC1090
+  source "$ENV_FILE"
+  set +a
+elif [[ "${OPENSTORYLINE_POSTGRES_ADMIN_MODE:-kamal}" != "local" ]]; then
+  fail "copy .env.kamal.example to .env.kamal and edit it first"
+fi
+
+if [[ "${1:-}" == "db" ]]; then
+  shift
+  run_database_command "${1:-}"
+fi
 
 require_value KAMAL_HOST
 require_value NINEROUTER_URL
@@ -103,19 +198,7 @@ if [[ -n "${KAMAL_DOMAIN:-}" ]]; then
 fi
 
 command -v docker >/dev/null 2>&1 || fail "Docker is required on the deploy machine to build the image"
-command -v gem >/dev/null 2>&1 || fail "RubyGems is required; install Ruby, then run: gem install kamal -v $KAMAL_VERSION"
-command -v kamal >/dev/null 2>&1 || fail "Kamal is required; run: gem install kamal -v $KAMAL_VERSION"
-
-oldest="$(printf '%s\n%s\n' "$MINIMUM_KAMAL_VERSION" "$KAMAL_VERSION" | sort -V | head -n 1)"
-[[ "$oldest" == "$MINIMUM_KAMAL_VERSION" ]] \
-  || fail "Kamal $KAMAL_VERSION is too old; run: gem install kamal -v $MINIMUM_KAMAL_VERSION"
-
-gem list --installed --exact kamal --version "$KAMAL_VERSION" >/dev/null 2>&1 \
-  || fail "Kamal $KAMAL_VERSION is not installed; run: gem install kamal -v $KAMAL_VERSION"
-
-reported_version="$(kamal "_${KAMAL_VERSION}_" version 2>/dev/null | tail -n 1 | tr -d '[:space:]')"
-[[ "$reported_version" == "$KAMAL_VERSION" ]] \
-  || fail "Kamal $KAMAL_VERSION could not be selected (reported ${reported_version:-unknown})"
+ensure_kamal
 
 release_command=""
 for arg in "$@"; do
@@ -131,11 +214,7 @@ if [[ -n "$release_command" ]]; then
   run_mistral_release_gate "$release_command"
 fi
 
-mkdir -p "$ROOT_DIR/.kamal"
-if [[ ! -f "$ROOT_DIR/.kamal/secrets" ]]; then
-  cp "$ROOT_DIR/.kamal/secrets.example" "$ROOT_DIR/.kamal/secrets"
-  chmod 600 "$ROOT_DIR/.kamal/secrets"
-fi
+ensure_secrets_file
 
 cd "$ROOT_DIR"
 exec kamal "_${KAMAL_VERSION}_" "$@"
