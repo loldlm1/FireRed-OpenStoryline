@@ -1,10 +1,10 @@
 # Guía de producción del MVP remoto con Kamal
 
-Este perfil no instala ni ejecuta modelos de IA locales. 9Router realiza toda
-la inferencia; FFmpeg/FFprobe sólo procesan audio y video de forma determinista
-en CPU. Texto, visión e imágenes usan Codex OAuth; STT usa Mistral. Si alguno
-de esos contratos falla, el trabajo falla y guarda razones sanitizadas en
-`failure.json`.
+Este perfil no instala ni ejecuta modelos de IA locales. Texto, visión e
+imágenes usan Codex OAuth mediante 9Router; STT usa Voxtral directamente con
+Mistral. FFmpeg/FFprobe sólo procesan audio y video de forma determinista en
+CPU. Si alguno de esos contratos falla, el trabajo guarda razones sanitizadas
+en `failure.json`.
 
 Kamal reemplaza el flujo manual con Docker Compose, pero usa Docker
 internamente. `kamal setup` entra al VPS por SSH, instala Docker si falta,
@@ -15,12 +15,13 @@ mano en el VPS.
 ## 1. Prepara las credenciales remotas
 
 1. Conserva activas las conexiones Codex OAuth de 9Router.
-2. Agrega la key Free de Mistral en 9Router y prueba la conexión.
-3. Crea una endpoint key de 9Router sólo para OpenStoryline.
+2. Crea una endpoint key de 9Router sólo para OpenStoryline.
+3. Conserva una o más keys válidas de Mistral para `MISTRAL_API_KEYS`.
 
-Las credenciales de Codex y Mistral quedan en 9Router. Este repositorio sólo
-recibe la URL y la endpoint key de 9Router. Revisa la [guía de keys](api-keys.md) y los
-[límites gratuitos verificados](limites-gratis.md). Para imágenes revisa la
+Las credenciales Codex quedan en 9Router. FireRed recibe la URL/key del endpoint
+de 9Router y la key ring directa de Mistral como secretos Kamal independientes.
+Revisa la [guía de keys](api-keys.md) y los [límites gratuitos
+verificados](limites-gratis.md). Para imágenes revisa la
 [guía de generación remota y derechos](imagenes-generadas.md); una cuota
 incluida por un proveedor no equivale a gratuidad garantizada.
 
@@ -51,6 +52,7 @@ KAMAL_HOST=203.0.113.10
 KAMAL_SSH_USER=root
 NINEROUTER_URL=https://tu-9router.example.com
 NINEROUTER_KEY=clave-del-endpoint-de-9router
+MISTRAL_API_KEYS=key-directa-de-mistral
 OPENSTORYLINE_WEB_TOKEN=token-aleatorio-de-64-caracteres
 ```
 
@@ -83,9 +85,9 @@ Kamal-proxy solicitará y renovará el certificado de Let's Encrypt. La URL ser�
 `https://video.example.com`. El HTTPS automático requiere un solo servidor y
 los puertos 80/443.
 
-## 4. Verifica 9Router y despliega
+## 4. Verifica los proveedores y despliega
 
-Antes del despliegue, carga el archivo y comprueba el catálogo STT:
+Antes del despliegue, carga el archivo y comprueba los catálogos Codex:
 
 ```bash
 set -a
@@ -94,14 +96,8 @@ set +a
 
 curl -fsS \
   -H "Authorization: Bearer $NINEROUTER_KEY" \
-  "$NINEROUTER_URL/v1/models/stt"
-```
+  "$NINEROUTER_URL/v1/models"
 
-Confirma que aparece exactamente `mistral/voxtral-mini-2602`. No cambies el ID
-ni agregues fallback si falta; el despliegue debe quedar bloqueado. Después
-ejecuta:
-
-```bash
 curl -fsS \
   -H "Authorization: Bearer $NINEROUTER_KEY" \
   "$NINEROUTER_URL/v1/models/image"
@@ -117,20 +113,15 @@ Guarda fuera del repositorio un audio corto, sintético y no privado. Configura
 su ruta absoluta en el `.env.kamal` ignorado:
 
 ```bash
-NINEROUTER_QA_STT_AUDIO=/ruta/absoluta/openstoryline-qa-speech.wav
+MISTRAL_QA_STT_AUDIO=/ruta/absoluta/openstoryline-qa-speech.wav
 NINEROUTER_QA_TIMEOUT=240
 ```
 
-`./bin/kamal-mvp setup`, `deploy` y `redeploy` ejecutan automáticamente el
-preflight estricto con inferencia real de texto, visión, imagen y STT. Cualquier
-fallo de catálogo, autenticación, transporte, cuota o contrato detiene el
-comando antes de iniciar Kamal. Los comandos de diagnóstico y `rollback` siguen
-disponibles cuando el gate está rojo.
-
-La instalación actual de 9Router `0.5.35` no expone todavía Mistral STT. El
-adaptador versionado está preparado en `patches/9router/`, pero requiere una
-ventana de mantenimiento separada; no reinicies el proceso manual mientras
-esté sirviendo inferencia Codex.
+`./bin/kamal-mvp setup`, `deploy` y `redeploy` ejecutan gates separados: 9Router
+para texto/visión/imagen y Mistral directo para STT. Cualquier fallo de catálogo,
+autenticación, transporte, cuota o contrato detiene el comando antes de iniciar
+Kamal. Los comandos de diagnóstico y `rollback` siguen disponibles cuando un
+gate está rojo. No reinicies ni reconfigures el proceso manual de 9Router.
 
 ```bash
 ./bin/kamal-mvp setup
@@ -216,8 +207,8 @@ curl -fsS https://video.example.com/up
 ./bin/kamal-mvp proxy logs --lines 200
 ```
 
-- `STT_ALL_PROVIDERS_FAILED`: revisa `failure.json`, el catálogo Mistral STT y
-  la cuota de la conexión seleccionada.
+- `STT_ALL_PROVIDERS_FAILED`: revisa `failure.json`, la key ring directa de
+  Mistral y la cuota de la organización.
 - `RATE_LIMIT_EXCEEDED`: espera el valor de `Retry-After` o ajusta la cuota.
 - `RATE_LIMITER_UNAVAILABLE`: revisa permisos y espacio libre del volumen de
   outputs.

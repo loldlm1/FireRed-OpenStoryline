@@ -1,8 +1,8 @@
 # 9Router VPS Runbook
 
-This runbook applies to the personal QA VPS at `82.39.186.26`. It keeps
-provider credentials inside 9Router and documents the existing manual gateway
-process. During an active Codex inference session, do not restart 9Router,
+This runbook applies to the personal QA VPS at `82.39.186.26`. It documents the
+existing manual Codex gateway process. During an active Codex inference session,
+do not restart 9Router,
 change its `admin` user, change port `20128`, replace its launch command, or
 change its UFW exposure.
 
@@ -27,10 +27,10 @@ process arguments or captured logs.
 | --- | --- | --- |
 | Text and vision | `cx/gpt-5.6-sol` | Codex OAuth |
 | Image generation | `cx/gpt-5.5-image` | Codex OAuth |
-| Speech-to-text | `mistral/voxtral-mini-2602` | Mistral API key |
 
-There are no fallbacks. FireRed stores only the 9Router endpoint URL/key.
-Provider access/refresh tokens and the Mistral key remain in 9Router.
+There are no fallbacks. FireRed uses the 9Router endpoint URL/key only for these
+Codex layers. Direct Mistral STT is documented separately and does not require
+a 9Router model, connection, patch, package change, or restart.
 
 ## Database Backup And Restore
 
@@ -77,16 +77,14 @@ set +a
 python scripts/qa_ninerouter.py --strict-models
 ```
 
-Use `--live-inference --stt-audio /tmp/non-private-speech.wav --timeout 240`
-only for an authorized synthetic canary. The command keeps image bytes in
-memory and reports no raw model response.
+Use `--live-inference --timeout 240` only for an authorized synthetic Codex
+canary. The command keeps image bytes in memory and reports no raw model
+response.
 
-The Kamal wrapper makes this a mandatory release gate for `setup`, `deploy`,
-and `redeploy`. Set `NINEROUTER_QA_STT_AUDIO` in the ignored `.env.kamal` to an
-absolute path on the deploy machine. The fixture must be short, synthetic, and
-non-private. `NINEROUTER_QA_TIMEOUT` defaults to 240 seconds. Do not bypass the
-gate when a catalog or contract is red; use read-only diagnostics or `rollback`
-while the incident is investigated.
+The Kamal wrapper makes this a mandatory Codex release gate for `setup`,
+`deploy`, and `redeploy`. Direct Mistral STT has its own gate and non-private
+fixture. Do not bypass either gate when a catalog or contract is red; use
+read-only diagnostics or `rollback` while the incident is investigated.
 
 For the container route, set `NINEROUTER_PROBE_IMAGE` to an image already on
 the VPS that contains `curl` or `wget`, then add `--container-host-probe`.
@@ -113,25 +111,16 @@ replacement access path.
 - `auth`: verify the FireRed endpoint key reference and the router's endpoint
   key policy. Rotate the endpoint key only in a planned window, update the
   Kamal secret source, and rerun missing/invalid/valid auth probes.
-- `catalog_mismatch`: do not substitute another model. For Codex, verify the
-  exact text/image catalog and reconnect OAuth interactively only if the
-  selected connection has expired. For Mistral, confirm the key record is
-  active and that the pinned STT adapter is installed.
-- `rate_limited`: stop new QA jobs and wait for the provider reset. Mistral
-  Free-mode capacity is not an SLA and a dash in the monthly field is not
-  treated as unlimited usage.
+- `catalog_mismatch`: do not substitute another model. Verify the exact Codex
+  text/image catalog and reconnect OAuth interactively only if the selected
+  connection has expired.
+- `rate_limited`: stop new QA jobs and wait for the provider reset.
 - `contract_invalid`: preserve only the summary JSON. Text/vision must return a
-  JSON object, image must decode as PNG/JPEG/WebP, and STT must contain
-  non-empty finite segments with `end > start`.
+  JSON object and image must decode as PNG/JPEG/WebP. Direct STT contract
+  failures belong to the Mistral gate.
 - `transport`: compare host health, authenticated catalogs, SSH, remote Docker,
   and the disposable container route. Do not change port `20128`, UFW, the
   `admin` owner, or the manual launch command during active inference.
-
-The current `0.5.35` package has no Mistral STT registry entry. The offline
-patch is pinned to upstream commit `bc252ea80298d4879dc6b3c69585af1610d2c76f`
-under `patches/9router/`. Applying it requires a separate maintenance window,
-a source build, the root-only database backup, a recorded original package,
-and an approved restart. Never hand-edit the compiled global package.
 
 Because the service currently writes to its launch terminal, inspect only
 sanitized recent terminal output while it is running. If a future maintenance
