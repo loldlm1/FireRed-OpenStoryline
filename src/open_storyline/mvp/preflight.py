@@ -57,6 +57,7 @@ def build_preflight(
     *,
     available_capabilities: Iterable[str],
     asset_policy: AssetPolicy,
+    stock_policy: AssetPolicy = "off",
     resolved_asset_ids: Iterable[str] = (),
     pending_asset_ids: Iterable[str] = (),
     known_region_ids: Iterable[str] = (),
@@ -205,7 +206,13 @@ def build_preflight(
 
         for asset in clip.asset_requests:
             source = f"clips.{clip.clip_index}.asset_requests.{asset.id}"
-            if asset_policy == "off":
+            policy_blocked = (
+                asset.kind == "generated_image" and asset_policy == "off"
+            ) or (
+                asset.kind in {"stock_image", "stock_video"}
+                and stock_policy == "off"
+            )
+            if policy_blocked:
                 findings.append(PreflightFinding(
                     "block",
                     "ASSET_POLICY_BLOCKED",

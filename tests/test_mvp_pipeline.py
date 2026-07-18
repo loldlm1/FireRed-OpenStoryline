@@ -23,6 +23,7 @@ from open_storyline.mvp.pipeline import MVPJobProcessor
 from open_storyline.mvp.render import AgenticRenderResult, MediaInfo, RenderedShort
 from open_storyline.mvp.scene_boundaries import build_scene_boundaries
 from open_storyline.mvp.shorts import ShortCandidate, ShortsPlan
+from open_storyline.mvp.stock import PexelsAsset, PexelsAttempt
 from open_storyline.utils.remote_image import ImageAttempt, RemoteImageResult
 
 
@@ -209,6 +210,49 @@ class FakeGeneratedEditPlanner:
         )
 
 
+class FakeStockEditPlanner:
+    def __init__(self, _client):
+        pass
+
+    async def plan(self, *, shorts_plan, source_duration_ms, **_kwargs):
+        clip = shorts_plan.clips[0]
+        asset_window = TimeWindow(start_ms=1000, end_ms=3000)
+        return EditPlan(
+            planner_version="agentic-editor.v1",
+            source_duration_ms=source_duration_ms,
+            requested_capabilities=("fit", "hard_cut", "image_overlay", "subtitles"),
+            clips=(ClipEditPlan(
+                clip_index=1,
+                source_window=TimeWindow(start_ms=clip.start_ms, end_ms=clip.end_ms),
+                output_name="short-01.mp4",
+                segments=(EditSegment(
+                    id="segment-1",
+                    source_window=TimeWindow(start_ms=clip.start_ms, end_ms=clip.end_ms),
+                    timeline_window=TimeWindow(start_ms=0, end_ms=clip.duration_ms),
+                    layout=LayoutSpec(mode="fit"),
+                    overlays=(OverlaySpec(
+                        id="stock-overlay",
+                        kind="image",
+                        timeline_window=asset_window,
+                        asset_id="stock-1",
+                        position="top_right",
+                    ),),
+                    reason="insert one justified stock cutaway",
+                ),),
+                asset_requests=(AssetRequest(
+                    id="stock-1",
+                    kind="stock_image",
+                    provider="pexels",
+                    timeline_window=asset_window,
+                    visual_gap="the source lacks a neutral supporting cutaway",
+                    purpose="clarify the spoken example",
+                    rationale="a brief stock image closes the visual gap",
+                    prompt="remote planning meeting",
+                ),),
+            ),),
+        )
+
+
 class FakeAssetCascade:
     def __init__(self):
         self.calls = []
@@ -221,6 +265,32 @@ class FakeAssetCascade:
             extension="png",
             content_type="image/png",
             attempts=[ImageAttempt("cx/gpt-5.5-image", True, 200, "ok")],
+        )
+
+
+class FakePexelsClient:
+    def __init__(self):
+        self.calls = []
+
+    async def acquire(self, request):
+        self.calls.append(request.id)
+        attempt = PexelsAttempt(1, "search", 200, "ok")
+        return PexelsAsset(
+            provider_id=42,
+            kind=request.kind,
+            content=PNG,
+            extension="png",
+            content_type="image/png",
+            creator="Example Creator",
+            creator_url="https://www.pexels.com/@example",
+            source_url="https://www.pexels.com/photo/example-42/",
+            media_url="https://images.pexels.com/photos/42/example.png",
+            width=1080,
+            height=1920,
+            duration_seconds=None,
+            file_size=len(PNG),
+            retrieved_at="2026-07-18T00:00:00+00:00",
+            attempts=(attempt,),
         )
 
 
@@ -285,7 +355,7 @@ class FakeStore:
         self.registered.append((Path(path).name, kind))
 
 
-def config(mode: str, *, generated_assets: bool = False):
+def config(mode: str, *, generated_assets: bool = False, pexels_assets: bool = False):
     return SimpleNamespace(
         remote_asr=SimpleNamespace(language=""),
         ninerouter=SimpleNamespace(),
@@ -297,6 +367,14 @@ def config(mode: str, *, generated_assets: bool = False):
             max_assets_per_clip=4,
             generated_assets_enabled=generated_assets,
             max_generated_assets_per_clip=2,
+            pexels_enabled=pexels_assets,
+            max_stock_assets_per_clip=2,
+            pexels_license_reviewed_at="2026-07-18",
+            pexels_search_limit=8,
+            pexels_timeout=30.0,
+            pexels_max_retries=2,
+            pexels_max_bytes=80 * 1024 * 1024,
+            pexels_max_video_duration_seconds=60,
             creative_qa_enabled=False,
             creative_qa_strict=True,
             semantic_qa_enabled=False,
@@ -388,7 +466,7 @@ class MVPAgenticPipelineTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(manifest["agentic"]["edit_planner"]["schema_version"], "edit_plan.v1")
             self.assertEqual(
                 manifest["agentic"]["edit_planner"]["prompt_version"],
-                "mvp-agentic-edit-plan.v2",
+                "mvp-agentic-edit-plan.v3",
             )
             registered_names = [name for name, _kind in store.registered]
             self.assertLess(
@@ -581,6 +659,72 @@ class MVPAgenticPipelineTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(asset_manifest["resolved_count"], 1)
             self.assertEqual(manifest["agentic"]["assets"]["provider_calls"], 1)
             self.assertEqual(manifest["agentic"]["asset_manifest"], "asset_manifest.json")
+
+    async def test_render_mode_resolves_opt_in_pexels_without_generated_fallback(self):
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            store = FakeStore(
+                root,
+                server_request={
+                    "max_clips": 1,
+                    "edit_mode": "agentic",
+                    "asset_policy": "off",
+                    "max_generated_assets_per_clip": 0,
+                    "stock_policy": "auto",
+                    "max_stock_assets_per_clip": 1,
+                },
+            )
+            processor = object.__new__(MVPJobProcessor)
+            processor.config = config("render", pexels_assets=True)
+            processor.stt = FakeSTT()
+            scene_report = build_scene_boundaries([], source_duration_ms=30_000, threshold=0.35)
+            frame_manifest = FrameManifest(
+                source_duration_ms=30_000,
+                source_width=1920,
+                source_height=1080,
+                frames=(SampledFrame(
+                    id="frame-001",
+                    timestamp_ms=250,
+                    scene_id="scene-001",
+                    width=512,
+                    height=288,
+                    extraction_reason="scene_opening",
+                    encoded_bytes=4,
+                    data_url="data:image/jpeg;base64,ZmFrZQ==",
+                ),),
+            )
+            pexels = FakePexelsClient()
+            FakeAssetAwareRenderer.resolved_assets = {}
+
+            with (
+                patch("open_storyline.mvp.pipeline.probe_media", return_value=MediaInfo(30_000, 1920, 1080, True)),
+                patch("open_storyline.mvp.pipeline.extract_audio_for_stt", side_effect=lambda _source, target: target),
+                patch("open_storyline.mvp.pipeline.detect_scene_boundaries", return_value=scene_report),
+                patch("open_storyline.mvp.pipeline.sample_frames", return_value=frame_manifest),
+                patch("open_storyline.mvp.pipeline.VisualUnderstandingPlanner", FakeVisualPlanner),
+                patch("open_storyline.mvp.pipeline.AgenticEditPlanner", FakeStockEditPlanner),
+                patch("open_storyline.mvp.pipeline.NineRouterClient.from_config", return_value=FakeRemoteClient()),
+                patch("open_storyline.mvp.pipeline.PexelsClient.from_config", return_value=pexels),
+                patch(
+                    "open_storyline.mvp.pipeline.RemoteImageCascade.from_config",
+                    side_effect=AssertionError("generated fallback called"),
+                ),
+                patch("open_storyline.mvp.pipeline.ShortsPlanner", FakePlanner),
+                patch("open_storyline.mvp.pipeline.AgenticShortRenderer", FakeAssetAwareRenderer),
+                patch("open_storyline.mvp.pipeline.CPUShortRenderer", side_effect=AssertionError("legacy renderer called")),
+            ):
+                await processor("f" * 32, store)
+
+            registered = dict(store.registered)
+            manifest = json.loads((root / "output" / "manifest.json").read_text(encoding="utf-8"))
+            asset_manifest = json.loads(
+                (root / "output" / "asset_manifest.json").read_text(encoding="utf-8")
+            )
+            self.assertEqual(pexels.calls, ["stock-1"])
+            self.assertEqual(registered["asset-stock-1.png"], "stock_image")
+            self.assertTrue(FakeAssetAwareRenderer.resolved_assets["stock-1"].is_file())
+            self.assertEqual(asset_manifest["provider_call_counts"], {"9router": 0, "pexels": 1})
+            self.assertEqual(manifest["agentic"]["asset_policy"]["stock_effective"], "auto")
 
 
 if __name__ == "__main__":

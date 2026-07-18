@@ -203,8 +203,8 @@ class AssetRequest(PlanModel):
             raise ValueError("generated images must use 9router")
         if self.kind.startswith("stock_") and self.provider != "pexels":
             raise ValueError("stock assets must use pexels")
-        if self.kind == "generated_image" and not self.prompt:
-            raise ValueError("generated images require a prompt")
+        if not self.prompt:
+            raise ValueError("external assets require a generation prompt or search query")
         return self
 
 
@@ -565,6 +565,9 @@ class AgenticEditPlanner:
         max_segments_per_clip: int,
         max_overlays_per_clip: int,
         max_assets_per_clip: int,
+        max_generated_assets_per_clip: int | None = None,
+        max_stock_assets_per_clip: int = 0,
+        stock_policy: AssetPolicy = "off",
         renderer_capabilities: Iterable[str] = SUPPORTED_CAPABILITIES,
     ) -> EditPlan:
         available_capabilities = frozenset(str(value) for value in renderer_capabilities)
@@ -572,6 +575,22 @@ class AgenticEditPlanner:
             raise EditPlanError(
                 "EDIT_PLAN_CAPABILITY_CONFIG_INVALID",
                 "renderer capabilities must be a non-empty supported subset",
+            )
+        generated_limit = (
+            max_assets_per_clip
+            if max_generated_assets_per_clip is None
+            else int(max_generated_assets_per_clip)
+        )
+        stock_limit = int(max_stock_assets_per_clip)
+        if not 0 <= generated_limit <= 8 or not 0 <= stock_limit <= 8:
+            raise EditPlanError(
+                "EDIT_PLAN_ASSET_BUDGET_INVALID",
+                "generated and stock asset budgets must be between 0 and 8",
+            )
+        if stock_policy not in {"off", "auto"}:
+            raise EditPlanError(
+                "EDIT_PLAN_ASSET_POLICY_INVALID",
+                "stock_policy must be off or auto",
             )
         clip_contexts = [
             _clip_context(
@@ -593,6 +612,16 @@ class AgenticEditPlanner:
                 "max_segments_per_clip": max_segments_per_clip,
                 "max_overlays_per_clip": max_overlays_per_clip,
                 "max_assets_per_clip": max_assets_per_clip,
+                "max_generated_assets_per_clip": generated_limit,
+                "max_stock_assets_per_clip": stock_limit,
+            },
+            "stock_policy": stock_policy,
+            "asset_providers": {
+                "generated_image": (
+                    ["9router"] if asset_policy == "auto" and generated_limit else []
+                ),
+                "stock_image": ["pexels"] if stock_policy == "auto" and stock_limit else [],
+                "stock_video": ["pexels"] if stock_policy == "auto" and stock_limit else [],
             },
             "rules": [
                 "Preserve every selected clip source window exactly.",
@@ -600,6 +629,7 @@ class AgenticEditPlanner:
                 "Use evidence IDs and semantic targets only from the supplied clip context.",
                 "Use source evidence when it satisfies the visual intent.",
                 "Request an asset only for a specific unresolved visual gap and only when policy is auto.",
+                "Use only the asset kinds and providers explicitly available in asset_providers.",
                 "Never return FFmpeg expressions, commands, paths, or unsupported operations.",
             ],
             "clips": clip_contexts,
@@ -616,22 +646,46 @@ class AgenticEditPlanner:
             "source_duration_ms": source_duration_ms,
         })
         plan = validate_edit_plan(payload, source_duration_ms=source_duration_ms)
-        if asset_policy == "off" and any(clip.asset_requests for clip in plan.clips):
-            raise EditPlanError(
-                "EDIT_PLAN_ASSET_POLICY_BLOCKED",
-                "the planner requested external assets while the job asset policy is off",
-            )
-        unsupported_assets = [
+        generated_assets = [
             asset
             for clip in plan.clips
             for asset in clip.asset_requests
-            if asset.kind != "generated_image" or asset.provider != "9router"
+            if asset.kind == "generated_image"
         ]
-        if unsupported_assets:
+        stock_assets = [
+            asset
+            for clip in plan.clips
+            for asset in clip.asset_requests
+            if asset.kind in {"stock_image", "stock_video"}
+        ]
+        if asset_policy == "off" and generated_assets:
             raise EditPlanError(
-                "EDIT_PLAN_ASSET_PROVIDER_UNAVAILABLE",
-                "only 9Router generated images are available in this editing profile",
+                "EDIT_PLAN_ASSET_POLICY_BLOCKED",
+                "the planner requested generated images while that job policy is off",
             )
+        if stock_policy == "off" and stock_assets:
+            raise EditPlanError(
+                "EDIT_PLAN_STOCK_POLICY_BLOCKED",
+                "the planner requested Pexels stock while that job policy is off",
+            )
+        for clip in plan.clips:
+            generated_count = sum(
+                asset.kind == "generated_image" for asset in clip.asset_requests
+            )
+            stock_count = sum(
+                asset.kind in {"stock_image", "stock_video"}
+                for asset in clip.asset_requests
+            )
+            if generated_count > generated_limit:
+                raise EditPlanError(
+                    "EDIT_PLAN_GENERATED_ASSET_BUDGET_EXCEEDED",
+                    f"clip {clip.clip_index} exceeds the generated image budget",
+                )
+            if stock_count > stock_limit:
+                raise EditPlanError(
+                    "EDIT_PLAN_STOCK_ASSET_BUDGET_EXCEEDED",
+                    f"clip {clip.clip_index} exceeds the Pexels stock budget",
+                )
         unavailable = sorted(set(plan.requested_capabilities) - available_capabilities)
         if unavailable:
             raise EditPlanError(
@@ -715,6 +769,23 @@ def validate_generated_asset_limit(value: int) -> int:
         raise EditPlanError(
             "GENERATED_ASSET_LIMIT_INVALID",
             "max_generated_assets_per_clip must be between 0 and 8",
+        )
+    return limit
+
+
+def validate_stock_policy(value: str) -> AssetPolicy:
+    normalized = str(value or "off").strip().lower()
+    if normalized not in {"off", "auto"}:
+        raise EditPlanError("STOCK_POLICY_INVALID", "stock_policy must be off or auto")
+    return normalized  # type: ignore[return-value]
+
+
+def validate_stock_asset_limit(value: int) -> int:
+    limit = int(value)
+    if not 0 <= limit <= 8:
+        raise EditPlanError(
+            "STOCK_ASSET_LIMIT_INVALID",
+            "max_stock_assets_per_clip must be between 0 and 8",
         )
     return limit
 

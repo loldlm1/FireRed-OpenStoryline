@@ -101,6 +101,7 @@ class KamalConfigTests(unittest.TestCase):
                 "OPENSTORYLINE_SECURITY_PEPPER",
                 "NINEROUTER_KEY",
                 "MISTRAL_API_KEYS",
+                "PEXELS_API_KEY",
             ],
         )
         self.assertEqual(
@@ -122,6 +123,10 @@ class KamalConfigTests(unittest.TestCase):
         )
         self.assertEqual(config["env"]["clear"]["OPENSTORYLINE_RETENTION_BATCH_SIZE"], 100)
         self.assertEqual(config["env"]["clear"]["OPENSTORYLINE_IMAGE_SIZE"], "1024x1024")
+        self.assertEqual(
+            config["env"]["clear"]["OPENSTORYLINE_AGENTIC_EDITING_MODE"],
+            "off",
+        )
         self.assertIs(
             config["env"]["clear"]["OPENSTORYLINE_GENERATED_ASSETS_ENABLED"],
             False,
@@ -130,6 +135,17 @@ class KamalConfigTests(unittest.TestCase):
             config["env"]["clear"]["OPENSTORYLINE_MAX_GENERATED_ASSETS_PER_CLIP"],
             2,
         )
+        self.assertIs(config["env"]["clear"]["OPENSTORYLINE_PEXELS_ENABLED"], False)
+        self.assertEqual(
+            config["env"]["clear"]["OPENSTORYLINE_MAX_STOCK_ASSETS_PER_CLIP"],
+            2,
+        )
+        self.assertEqual(
+            config["env"]["clear"]["OPENSTORYLINE_PEXELS_LICENSE_REVIEWED_AT"],
+            "",
+        )
+        self.assertEqual(config["env"]["clear"]["OPENSTORYLINE_PEXELS_SEARCH_LIMIT"], 8)
+        self.assertEqual(config["env"]["clear"]["OPENSTORYLINE_PEXELS_MAX_BYTES"], 83886080)
         self.assertIs(config["env"]["clear"]["OPENSTORYLINE_CREATIVE_QA_ENABLED"], True)
         self.assertIs(config["env"]["clear"]["OPENSTORYLINE_CREATIVE_QA_STRICT"], True)
         self.assertIs(config["env"]["clear"]["OPENSTORYLINE_SEMANTIC_QA_ENABLED"], False)
@@ -151,8 +167,24 @@ class KamalConfigTests(unittest.TestCase):
         )
         self.assertIn("POSTGRES_PASSWORD=$POSTGRES_PASSWORD", secrets)
         self.assertIn("MISTRAL_API_KEYS=$MISTRAL_API_KEYS", secrets)
+        self.assertIn("PEXELS_API_KEY=$PEXELS_API_KEY", secrets)
         self.assertNotIn("replace-with", secrets)
         self.assertIn("MISTRAL_QA_STT_AUDIO=", kamal_env)
+        self.assertIn("OPENSTORYLINE_PEXELS_ENABLED=false", kamal_env)
+        self.assertIn("OPENSTORYLINE_PEXELS_LICENSE_REVIEWED_AT=", kamal_env)
+
+    def test_pexels_release_gate_is_conditional_and_offline(self):
+        wrapper = (ROOT / "bin" / "kamal-mvp").read_text(encoding="utf-8")
+        release_scan = wrapper.index('for arg in "$@"')
+        pexels_gate = wrapper.index('validate_pexels_release_config "$release_command"')
+        ninerouter_gate = wrapper.index('run_ninerouter_release_gate "$release_command"')
+
+        self.assertLess(release_scan, pexels_gate)
+        self.assertLess(pexels_gate, ninerouter_gate)
+        self.assertIn("require_value PEXELS_API_KEY", wrapper)
+        self.assertIn("require_value OPENSTORYLINE_PEXELS_LICENSE_REVIEWED_AT", wrapper)
+        self.assertIn("PexelsClient.from_config", wrapper)
+        self.assertNotIn("api.pexels.com/v1/search", wrapper)
 
     def test_postgres_accessory_is_private_persistent_and_health_checked(self):
         config = yaml.safe_load(render_sample())

@@ -322,6 +322,88 @@ class CPUShortRendererTests(unittest.TestCase):
             self.assertGreater(red, blue + 80)
             self.assertGreater(green, blue + 80)
 
+    def test_agentic_renderer_accepts_a_bounded_stock_video_overlay(self):
+        with TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            source = root / "source.mp4"
+            stock = root / "stock.mp4"
+            generated = subprocess.run([
+                "ffmpeg", "-y", "-v", "error",
+                "-f", "lavfi", "-i", "color=c=blue:size=640x360:rate=24:duration=3",
+                "-f", "lavfi", "-i", "sine=frequency=440:sample_rate=16000:duration=3",
+                "-shortest", "-c:v", "libx264", "-preset", "ultrafast",
+                "-pix_fmt", "yuv420p", "-c:a", "aac", str(source),
+            ], capture_output=True, text=True, check=False, timeout=120)
+            self.assertEqual(generated.returncode, 0, generated.stderr)
+            generated_stock = subprocess.run([
+                "ffmpeg", "-y", "-v", "error",
+                "-f", "lavfi", "-i", "color=c=red:size=240x320:rate=24:duration=2",
+                "-c:v", "libx264", "-preset", "ultrafast", "-pix_fmt", "yuv420p",
+                str(stock),
+            ], capture_output=True, text=True, check=False, timeout=120)
+            self.assertEqual(generated_stock.returncode, 0, generated_stock.stderr)
+
+            window = TimeWindow(start_ms=500, end_ms=2500)
+            plan = EditPlan(
+                planner_version="test.v1",
+                source_duration_ms=3000,
+                requested_capabilities=("fit", "hard_cut", "image_overlay", "subtitles"),
+                clips=(ClipEditPlan(
+                    clip_index=1,
+                    source_window=TimeWindow(start_ms=0, end_ms=3000),
+                    output_name="short-01.mp4",
+                    segments=(EditSegment(
+                        id="segment-1",
+                        source_window=TimeWindow(start_ms=0, end_ms=3000),
+                        timeline_window=TimeWindow(start_ms=0, end_ms=3000),
+                        layout=LayoutSpec(mode="fit"),
+                        overlays=(OverlaySpec(
+                            id="stock-overlay",
+                            kind="image",
+                            timeline_window=window,
+                            asset_id="stock-1",
+                            width_ratio=0.45,
+                            position="center",
+                        ),),
+                        reason="insert one justified stock-video cutaway",
+                    ),),
+                    asset_requests=(AssetRequest(
+                        id="stock-1",
+                        kind="stock_video",
+                        provider="pexels",
+                        timeline_window=window,
+                        visual_gap="the source lacks a supporting cutaway",
+                        purpose="support the spoken example",
+                        rationale="a bounded stock clip closes the visual gap",
+                        prompt="a generic planning meeting",
+                    ),),
+                ),),
+            )
+            result = AgenticShortRenderer(RenderSettings(
+                width=180,
+                height=320,
+                fps=24,
+                preset="ultrafast",
+                crf=30,
+                timeout=120,
+            )).render_plan(
+                source=source,
+                edit_plan=plan,
+                selected_clips=[ShortCandidate(0, 3000, "Synthetic", "Hook", "Reason", 1.0)],
+                visual_understanding=SimpleNamespace(regions=(), tracks=()),
+                transcript_segments=[],
+                destination_dir=root / "agentic-stock",
+                resolved_assets={"stock-1": stock},
+            )
+
+            info = probe_media(result.rendered[0].video_path)
+            self.assertEqual((info.width, info.height), (180, 320))
+            self.assertTrue(info.has_audio)
+            self.assertEqual(
+                result.execution["clips"][0]["asset_kinds"],
+                {"stock-1": "stock_video"},
+            )
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -10,7 +10,7 @@ from open_storyline.mvp.assets import (
     generated_asset_server_cap,
     generated_asset_size,
     generated_assets_enabled,
-    resolve_generated_assets,
+    resolve_assets,
     write_asset_manifest,
 )
 from open_storyline.mvp.edit_plan import (
@@ -48,6 +48,7 @@ from open_storyline.mvp.render import (
 from open_storyline.mvp.preflight import build_preflight
 from open_storyline.mvp.scene_boundaries import detect_scene_boundaries
 from open_storyline.mvp.shorts import ShortsPlanner, build_shorts_plan_artifact
+from open_storyline.mvp.stock import PexelsClient, pexels_enabled, pexels_server_cap
 from open_storyline.mvp.visual_understanding import VisualUnderstandingPlanner
 from open_storyline.utils.remote_stt import MistralSTTClient, RemoteSTTError, extract_audio_for_stt
 from open_storyline.utils.remote_image import RemoteImageCascade
@@ -67,6 +68,9 @@ class MVPJobProcessor:
         server_mode = None
         effective_asset_policy = "off"
         effective_generated_asset_cap = 0
+        effective_stock_policy = "off"
+        effective_stock_asset_cap = 0
+        pexels_client = None
         if agentic_requested:
             server_mode = resolve_agentic_server_mode(self.config.agentic_editing)
             if server_mode == "off":
@@ -91,6 +95,24 @@ class MVPJobProcessor:
                 and effective_generated_asset_cap > 0
             ):
                 effective_asset_policy = "auto"
+            stock_server_cap = pexels_server_cap(self.config.agentic_editing)
+            job_stock_cap = int(
+                request.get("max_stock_assets_per_clip")
+                if request.get("max_stock_assets_per_clip") is not None
+                else stock_server_cap
+            )
+            effective_stock_asset_cap = min(
+                max(0, job_stock_cap),
+                stock_server_cap,
+                self.config.agentic_editing.max_assets_per_clip,
+            )
+            if (
+                str(request.get("stock_policy") or "off") == "auto"
+                and pexels_enabled(self.config.agentic_editing)
+                and effective_stock_asset_cap > 0
+            ):
+                pexels_client = PexelsClient.from_config(self.config.agentic_editing)
+                effective_stock_policy = "auto"
         source = await store.source_path(job_id)
         work_dir = store.work_dir(job_id)
         output_dir = store.output_dir(job_id)
@@ -219,7 +241,13 @@ class MVPJobProcessor:
                 asset_policy=effective_asset_policy,
                 max_segments_per_clip=self.config.agentic_editing.max_segments_per_clip,
                 max_overlays_per_clip=self.config.agentic_editing.max_overlays_per_clip,
-                max_assets_per_clip=effective_generated_asset_cap,
+                max_assets_per_clip=min(
+                    self.config.agentic_editing.max_assets_per_clip,
+                    effective_generated_asset_cap + effective_stock_asset_cap,
+                ),
+                max_generated_assets_per_clip=effective_generated_asset_cap,
+                max_stock_assets_per_clip=effective_stock_asset_cap,
+                stock_policy=effective_stock_policy,
                 renderer_capabilities=REFRAME_RENDER_CAPABILITIES,
             )
             edit_planner_attempts = [
@@ -240,13 +268,17 @@ class MVPJobProcessor:
             }
             pending_asset_ids = (
                 planned_asset_ids
-                if effective_asset_policy == "auto"
+                if (
+                    effective_asset_policy == "auto"
+                    or effective_stock_policy == "auto"
+                )
                 else set()
             )
             preliminary_preflight = build_preflight(
                 edit_plan,
                 available_capabilities=REFRAME_RENDER_CAPABILITIES,
                 asset_policy=effective_asset_policy,
+                stock_policy=effective_stock_policy,
                 pending_asset_ids=pending_asset_ids,
                 known_region_ids=(region.id for region in visual_understanding.regions),
                 known_track_ids=(track.id for track in visual_understanding.tracks),
@@ -267,20 +299,30 @@ class MVPJobProcessor:
 
             if server_mode == "render":
                 if planned_asset_ids:
-                    await store.update(job_id, progress=0.66, stage="generating_assets")
-                asset_result = await resolve_generated_assets(
+                    await store.update(job_id, progress=0.66, stage="resolving_assets")
+                generated_asset_ids = {
+                    asset.id
+                    for clip in edit_plan.clips
+                    for asset in clip.asset_requests
+                    if asset.kind == "generated_image"
+                }
+                stock_asset_ids = planned_asset_ids - generated_asset_ids
+                asset_result = await resolve_assets(
                     edit_plan,
                     output_dir=output_dir,
                     asset_policy=effective_asset_policy,
+                    stock_policy=effective_stock_policy,
                     max_generated_assets_per_clip=effective_generated_asset_cap,
+                    max_stock_assets_per_clip=effective_stock_asset_cap,
                     cascade=(
                         RemoteImageCascade.from_config(self.config.remote_image)
-                        if planned_asset_ids
+                        if generated_asset_ids
                         else None
                     ),
+                    pexels=(pexels_client if stock_asset_ids else None),
                     size=(
                         generated_asset_size(self.config.remote_image)
-                        if planned_asset_ids
+                        if generated_asset_ids
                         else "1024x1024"
                     ),
                 )
@@ -289,6 +331,7 @@ class MVPJobProcessor:
                     edit_plan,
                     available_capabilities=REFRAME_RENDER_CAPABILITIES,
                     asset_policy=effective_asset_policy,
+                    stock_policy=effective_stock_policy,
                     resolved_asset_ids=resolved_asset_ids,
                     known_region_ids=(region.id for region in visual_understanding.regions),
                     known_track_ids=(track.id for track in visual_understanding.tracks),
@@ -307,12 +350,22 @@ class MVPJobProcessor:
                     edit_plan,
                     output_dir=output_dir,
                     asset_policy=effective_asset_policy,
+                    stock_policy=effective_stock_policy,
                     status="shadow_planned" if planned_asset_ids else "no_requests",
                 )
                 preflight = preliminary_preflight
 
-            for path in asset_result.paths.values():
-                await store.register_artifact(job_id, path, kind="generated_image")
+            asset_kinds = {
+                asset.id: asset.kind
+                for clip in edit_plan.clips
+                for asset in clip.asset_requests
+            }
+            for asset_id, path in asset_result.paths.items():
+                await store.register_artifact(
+                    job_id,
+                    path,
+                    kind=asset_kinds[asset_id],
+                )
             await store.register_artifact(
                 job_id,
                 asset_result.manifest_path,
@@ -348,6 +401,9 @@ class MVPJobProcessor:
                     "requested": str(request.get("asset_policy") or "auto"),
                     "effective": effective_asset_policy,
                     "max_generated_assets_per_clip": effective_generated_asset_cap,
+                    "stock_requested": str(request.get("stock_policy") or "off"),
+                    "stock_effective": effective_stock_policy,
+                    "max_stock_assets_per_clip": effective_stock_asset_cap,
                 },
                 "assets": {
                     "requested": int(asset_result.manifest["requested_count"]),

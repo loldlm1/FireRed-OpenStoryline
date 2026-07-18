@@ -26,12 +26,21 @@ test.describe('remote MVP password sessions', () => {
     await expect(page.locator('#login-view')).toBeHidden();
     await expect(page.locator('#edit-mode')).toHaveValue('legacy');
     await expect(page.locator('#asset-policy')).toBeDisabled();
+    await expect(page.locator('#stock-policy')).toBeDisabled();
     await expect(page.locator('#asset-policy-help')).toContainText(
       'No se genera una imagen por defecto',
+    );
+    await expect(page.locator('#stock-policy-help')).toContainText(
+      'Pexels es una fuente separada y opt-in',
     );
     await page.locator('#edit-mode').selectOption('agentic');
     await expect(page.locator('#asset-policy')).toBeEnabled();
     await expect(page.locator('#max-generated-assets')).toBeEnabled();
+    await expect(page.locator('#stock-policy')).toBeEnabled();
+    await expect(page.locator('#max-stock-assets')).toBeDisabled();
+    await page.locator('#stock-policy').selectOption('auto');
+    await expect(page.locator('#max-stock-assets')).toBeEnabled();
+    await page.locator('#stock-policy').selectOption('off');
     await page.locator('#asset-policy').selectOption('off');
     await expect(page.locator('#max-generated-assets')).toBeDisabled();
     await page.locator('#edit-mode').selectOption('legacy');
@@ -140,9 +149,15 @@ test.describe('remote MVP password sessions', () => {
     await expect(page.locator('#edit-mode')).toBeVisible();
     await expect(page.locator('#asset-policy-help')).toBeVisible();
     await expect(page.locator('#asset-policy')).toBeDisabled();
+    await expect(page.locator('#stock-policy')).toBeDisabled();
     await page.locator('#edit-mode').selectOption('agentic');
     await expect(page.locator('#asset-policy')).toBeEnabled();
     await expect(page.locator('#max-generated-assets')).toBeEnabled();
+    await expect(page.locator('#stock-policy')).toBeEnabled();
+    await expect(page.locator('#max-stock-assets')).toBeDisabled();
+    await page.locator('#stock-policy').selectOption('auto');
+    await expect(page.locator('#max-stock-assets')).toBeEnabled();
+    await page.locator('#stock-policy').selectOption('off');
     await page.locator('#asset-policy').selectOption('off');
     await expect(page.locator('#max-generated-assets')).toBeDisabled();
     await expect(page.locator('#logout')).toBeVisible();
