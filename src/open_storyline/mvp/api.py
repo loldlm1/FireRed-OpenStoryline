@@ -110,6 +110,8 @@ def create_mvp_router(
         file: UploadFile = File(...),
         prompt: str = Form(...),
         max_clips: int = Form(8),
+        edit_mode: str = Form("legacy"),
+        asset_policy: str = Form("auto"),
     ):
         suffix = Path(file.filename or "").suffix.lower()
         if suffix not in ALLOWED_VIDEO_SUFFIXES:
@@ -127,6 +129,8 @@ def create_mvp_router(
                 prompt=prompt,
                 filename=file.filename or "video.mp4",
                 max_clips=max_clips,
+                edit_mode=edit_mode,
+                asset_policy=asset_policy,
             )
         except JobStoreError as exc:
             await file.close()

@@ -20,6 +20,7 @@ from sqlalchemy.exc import IntegrityError, SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncConnection, AsyncSession
 
 from open_storyline.mvp.database import Database
+from open_storyline.mvp.edit_plan import EditPlanError, validate_job_controls
 from open_storyline.mvp.models import Artifact, EditingSession, JobEvent, VideoJob
 from open_storyline.mvp.observability import emit_event
 from open_storyline.mvp.security import sanitize_for_persistence, sanitize_text
@@ -367,6 +368,8 @@ class JobStore:
         prompt: str,
         filename: str,
         max_clips: int = 8,
+        edit_mode: str = "legacy",
+        asset_policy: str = "auto",
         job_id: str | None = None,
     ) -> dict[str, Any]:
         clean_prompt = str(prompt or "").strip()
@@ -374,6 +377,13 @@ class JobStore:
             raise JobStoreError("PROMPT_REQUIRED", "an editing prompt is required")
         if not 1 <= int(max_clips) <= 50:
             raise JobStoreError("MAX_CLIPS_INVALID", "max_clips must be between 1 and 50")
+        try:
+            normalized_edit_mode, normalized_asset_policy = validate_job_controls(
+                edit_mode,
+                asset_policy,
+            )
+        except EditPlanError as exc:
+            raise JobStoreError(exc.code, str(exc)) from exc
         await self.get_session(editing_session_id)
         identifier = job_id or uuid.uuid4().hex
         if not JOB_ID_PATTERN.fullmatch(identifier):
@@ -386,7 +396,11 @@ class JobStore:
             state="uploading",
             progress=Decimal("0"),
             prompt=clean_prompt[:12000],
-            request_data={"max_clips": int(max_clips)},
+            request_data={
+                "max_clips": int(max_clips),
+                "edit_mode": normalized_edit_mode,
+                "asset_policy": normalized_asset_policy,
+            },
             input_data={
                 "original_filename": _safe_filename(filename),
                 "stored_filename": "",

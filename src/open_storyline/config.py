@@ -177,6 +177,13 @@ class MVPConfig(ConfigBaseModel):
     render_crf: int = Field(default=23, ge=0, le=51)
 
 
+class AgenticEditingConfig(ConfigBaseModel):
+    mode: Literal["off", "shadow", "render"] = "off"
+    max_segments_per_clip: int = Field(default=24, ge=1, le=48)
+    max_overlays_per_clip: int = Field(default=12, ge=0, le=16)
+    max_assets_per_clip: int = Field(default=4, ge=0, le=8)
+
+
 class FFMPEGAConfig(ConfigBaseModel):
     enabled: bool = False
     base_url: str = "http://127.0.0.1:8188"
@@ -300,6 +307,7 @@ class Settings(ConfigBaseModel):
     ninerouter: NineRouterConfig = Field(default_factory=NineRouterConfig)
     remote_image: RemoteImageConfig = Field(default_factory=RemoteImageConfig)
     mvp: MVPConfig = Field(default_factory=MVPConfig)
+    agentic_editing: AgenticEditingConfig = Field(default_factory=AgenticEditingConfig)
     ffmpega: FFMPEGAConfig = Field(default_factory=FFMPEGAConfig)
     group_clips: GroupClipsConfig = Field(default_factory=GroupClipsConfig)
     script_template: RecommendScriptTemplateConfig

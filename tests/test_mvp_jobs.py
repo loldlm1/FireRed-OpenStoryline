@@ -484,13 +484,20 @@ class JobAPITests(PostgresTestCase):
 
             created = await client.post(
                 f"/api/mvp/sessions/{session_id}/jobs",
-                data={"prompt": "make four vertical clips", "max_clips": "4"},
+                data={
+                    "prompt": "make four vertical clips",
+                    "max_clips": "4",
+                    "edit_mode": "agentic",
+                    "asset_policy": "off",
+                },
                 files={"file": ("talk.mp4", b"fake-video", "video/mp4")},
             )
             self.assertEqual(created.status_code, 202)
             job = created.json()
             self.assertEqual(job["state"], "queued")
             self.assertEqual(job["editing_session_id"], session_id)
+            self.assertEqual(job["request"]["edit_mode"], "agentic")
+            self.assertEqual(job["request"]["asset_policy"], "off")
 
             resumed = await client.get(f"/api/mvp/sessions/{session_id}")
             self.assertEqual(resumed.status_code, 200)
