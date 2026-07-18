@@ -5,6 +5,7 @@ from open_storyline.mvp.edit_plan import (
     ClipEditPlan,
     EditPlan,
     EditSegment,
+    FocalTarget,
     LayoutSpec,
     TimeWindow,
     build_shadow_edit_plan,
@@ -21,7 +22,7 @@ class EditPreflightTests(unittest.TestCase):
         )
         report = build_preflight(
             plan,
-            available_capabilities={"crop", "subtitles"},
+            available_capabilities={"crop", "hard_cut", "subtitles"},
             asset_policy="auto",
         )
 
@@ -69,15 +70,16 @@ class EditPreflightTests(unittest.TestCase):
         plan = EditPlan(
             planner_version="test.v1",
             source_duration_ms=20_000,
-            requested_capabilities=("fit",),
+            requested_capabilities=("fit", "hard_cut", "subtitles"),
             clips=(clip,),
         )
 
-        off = build_preflight(plan, available_capabilities={"fit"}, asset_policy="off")
-        unresolved = build_preflight(plan, available_capabilities={"fit"}, asset_policy="auto")
+        capabilities = {"fit", "hard_cut", "subtitles"}
+        off = build_preflight(plan, available_capabilities=capabilities, asset_policy="off")
+        unresolved = build_preflight(plan, available_capabilities=capabilities, asset_policy="auto")
         resolved = build_preflight(
             plan,
-            available_capabilities={"fit"},
+            available_capabilities=capabilities,
             asset_policy="auto",
             resolved_asset_ids={"generated-1"},
         )
@@ -85,6 +87,38 @@ class EditPreflightTests(unittest.TestCase):
         self.assertEqual(off.status, "blocked")
         self.assertEqual(unresolved.status, "blocked")
         self.assertEqual(resolved.status, "ready")
+
+    def test_blocks_unknown_visual_and_evidence_references(self):
+        clip = ClipEditPlan(
+            clip_index=1,
+            source_window=TimeWindow(start_ms=0, end_ms=20_000),
+            output_name="short.mp4",
+            segments=(EditSegment(
+                id="segment",
+                source_window=TimeWindow(start_ms=0, end_ms=20_000),
+                timeline_window=TimeWindow(start_ms=0, end_ms=20_000),
+                layout=LayoutSpec(
+                    mode="crop",
+                    focal_target=FocalTarget(region_id="region-missing"),
+                ),
+                reason="track visible evidence",
+                evidence_ids=("evidence-missing",),
+            ),),
+        )
+        plan = EditPlan(
+            planner_version="test.v1",
+            source_duration_ms=20_000,
+            requested_capabilities=("crop", "hard_cut", "subtitles"),
+            clips=(clip,),
+        )
+        report = build_preflight(
+            plan,
+            available_capabilities={"crop", "hard_cut", "subtitles"},
+            asset_policy="auto",
+        )
+        codes = {finding.code for finding in report.findings}
+        self.assertIn("REGION_REFERENCE_UNKNOWN", codes)
+        self.assertIn("EVIDENCE_REFERENCE_UNKNOWN", codes)
 
 
 if __name__ == "__main__":

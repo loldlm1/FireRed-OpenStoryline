@@ -179,6 +179,7 @@ class MVPConfig(ConfigBaseModel):
 
 class AgenticEditingConfig(ConfigBaseModel):
     mode: Literal["off", "shadow", "render"] = "off"
+    shadow_allow_blocked_plans: bool = True
     max_segments_per_clip: int = Field(default=24, ge=1, le=48)
     max_overlays_per_clip: int = Field(default=12, ge=0, le=16)
     max_assets_per_clip: int = Field(default=4, ge=0, le=8)

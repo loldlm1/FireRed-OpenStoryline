@@ -7,10 +7,10 @@ import json
 
 from open_storyline.config import Settings
 from open_storyline.mvp.edit_plan import (
+    AgenticEditPlanner,
     AgenticArtifactNames,
     EditPlanError,
     SUPPORTED_CAPABILITIES,
-    build_shadow_edit_plan,
     resolve_agentic_server_mode,
 )
 from open_storyline.mvp.ffmpega import EffectsPlanner, FFMPEGAClient, ffmpega_enabled
@@ -25,7 +25,7 @@ from open_storyline.mvp.render import (
 )
 from open_storyline.mvp.preflight import build_preflight
 from open_storyline.mvp.scene_boundaries import detect_scene_boundaries
-from open_storyline.mvp.shorts import ShortsPlanner
+from open_storyline.mvp.shorts import ShortsPlanner, build_shorts_plan_artifact
 from open_storyline.mvp.visual_understanding import VisualUnderstandingPlanner
 from open_storyline.utils.remote_stt import MistralSTTClient, RemoteSTTError, extract_audio_for_stt
 
@@ -79,6 +79,9 @@ class MVPJobProcessor:
         scene_report = None
         frame_manifest = None
         visual_understanding = None
+        visual_attempts: list[dict[str, Any]] = []
+        shorts_attempts: list[dict[str, Any]] = []
+        edit_planner_attempts: list[dict[str, Any]] = []
         remote_client = NineRouterClient.from_config(self.config.ninerouter)
         if agentic_requested:
             agentic_config = self.config.agentic_editing
@@ -117,6 +120,10 @@ class MVPJobProcessor:
                 editing_prompt=state["prompt"],
                 transcript_text=transcript.text,
             )
+            visual_attempts = [
+                attempt.to_dict()
+                for attempt in getattr(remote_client, "last_attempts", ())
+            ]
             visual_path = output_dir / names.visual_understanding
             visual_path.write_text(
                 json.dumps(visual_understanding.to_dict(), ensure_ascii=False, indent=2),
@@ -143,20 +150,44 @@ class MVPJobProcessor:
             max_clips=int((state.get("request") or {}).get("max_clips") or 8),
             frame_data_urls=frames,
         )
+        shorts_attempts = [
+            attempt.to_dict()
+            for attempt in getattr(remote_client, "last_attempts", ())
+        ]
 
         agentic_manifest = None
         if agentic_requested:
+            shorts_plan_artifact = build_shorts_plan_artifact(
+                plan,
+                transcript_segments=transcript.segments,
+                scene_report=scene_report,
+                visual_understanding=visual_understanding,
+            )
             shorts_plan_path = output_dir / names.shorts_plan
             shorts_plan_path.write_text(
-                json.dumps(plan.to_dict(), ensure_ascii=False, indent=2),
+                json.dumps(shorts_plan_artifact, ensure_ascii=False, indent=2),
                 encoding="utf-8",
             )
             await store.register_artifact(job_id, shorts_plan_path, kind="shorts_plan")
 
-            edit_plan = build_shadow_edit_plan(
-                plan.clips,
+            await store.update(job_id, progress=0.62, stage="planning_agentic_edit")
+            edit_plan = await AgenticEditPlanner(remote_client).plan(
+                editing_prompt=state["prompt"],
+                shorts_plan=plan,
+                shorts_plan_artifact=shorts_plan_artifact,
+                transcript_segments=transcript.segments,
+                scene_report=scene_report,
+                visual_understanding=visual_understanding,
                 source_duration_ms=media.duration_ms,
+                asset_policy=str(request.get("asset_policy") or "auto"),
+                max_segments_per_clip=self.config.agentic_editing.max_segments_per_clip,
+                max_overlays_per_clip=self.config.agentic_editing.max_overlays_per_clip,
+                max_assets_per_clip=self.config.agentic_editing.max_assets_per_clip,
             )
+            edit_planner_attempts = [
+                attempt.to_dict()
+                for attempt in getattr(remote_client, "last_attempts", ())
+            ]
             edit_plan_path = output_dir / names.edit_plan
             edit_plan_path.write_text(
                 json.dumps(edit_plan.to_dict(), ensure_ascii=False, indent=2),
@@ -168,6 +199,15 @@ class MVPJobProcessor:
                 edit_plan,
                 available_capabilities=SUPPORTED_CAPABILITIES,
                 asset_policy=str(request.get("asset_policy") or "auto"),
+                known_region_ids=(region.id for region in visual_understanding.regions),
+                known_track_ids=(track.id for track in visual_understanding.tracks),
+                known_evidence_ids_by_clip={
+                    int(clip["clip_index"]): clip["evidence_ids"]
+                    for clip in shorts_plan_artifact["clips"]
+                },
+                max_segments_per_clip=self.config.agentic_editing.max_segments_per_clip,
+                max_overlays_per_clip=self.config.agentic_editing.max_overlays_per_clip,
+                max_assets_per_clip=self.config.agentic_editing.max_assets_per_clip,
             )
             preflight_path = output_dir / names.preflight
             preflight_path.write_text(
@@ -175,7 +215,11 @@ class MVPJobProcessor:
                 encoding="utf-8",
             )
             await store.register_artifact(job_id, preflight_path, kind="edit_preflight")
-            if preflight.blocking:
+            shadow_allows_blocked = (
+                server_mode == "shadow"
+                and self.config.agentic_editing.shadow_allow_blocked_plans
+            )
+            if preflight.blocking and not shadow_allows_blocked:
                 raise EditPlanError("EDIT_PREFLIGHT_BLOCKED", "agentic edit preflight is blocked")
             agentic_manifest = {
                 "mode": server_mode,
@@ -183,9 +227,19 @@ class MVPJobProcessor:
                 "visual_understanding": names.visual_understanding,
                 "vision_frame_count": len(frame_manifest.frames) if frame_manifest else 0,
                 "vision_call_count": 1 if visual_understanding else 0,
+                "visual_attempts": visual_attempts,
+                "shorts_attempts": shorts_attempts,
                 "edit_plan": names.edit_plan,
+                "edit_planner": {
+                    "model": remote_client.model,
+                    "schema_version": edit_plan.version,
+                    "planner_version": edit_plan.planner_version,
+                    "prompt_version": edit_plan.prompt_version,
+                    "attempts": edit_planner_attempts,
+                },
                 "preflight": names.preflight,
                 "preflight_status": preflight.status,
+                "shadow_blocked": bool(preflight.blocking and shadow_allows_blocked),
             }
 
         await store.update(job_id, progress=0.68, stage="rendering")

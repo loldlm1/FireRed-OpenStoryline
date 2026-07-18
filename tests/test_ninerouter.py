@@ -37,6 +37,8 @@ class NineRouterClientTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(captured["reasoning_effort"], "medium")
         self.assertEqual(captured["response_format"], {"type": "json_object"})
         self.assertEqual(captured["messages"][1]["content"][1]["type"], "image_url")
+        self.assertEqual(client.last_attempts[0].status_code, 200)
+        self.assertEqual(client.last_attempts[0].reason, "ok")
 
     async def test_accepts_fenced_json_and_content_parts(self):
         def handler(request: httpx.Request) -> httpx.Response:

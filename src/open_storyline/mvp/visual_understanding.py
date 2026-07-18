@@ -192,7 +192,7 @@ def validate_visual_understanding(
     region_ids: set[str] = set()
     regions_by_id: dict[str, RegionObservation] = {}
     for region in understanding.regions:
-        if region.id in region_ids:
+        if region.id in region_ids or region.id in frames or region.id in scene_ids or region.id.startswith("transcript-"):
             raise VisualUnderstandingError("VISUAL_REGION_DUPLICATE", f"duplicate region {region.id}")
         frame = frames.get(region.frame_id)
         if frame is None:
@@ -210,7 +210,13 @@ def validate_visual_understanding(
 
     track_ids: set[str] = set()
     for track in understanding.tracks:
-        if track.id in track_ids:
+        if (
+            track.id in track_ids
+            or track.id in region_ids
+            or track.id in frames
+            or track.id in scene_ids
+            or track.id.startswith("transcript-")
+        ):
             raise VisualUnderstandingError("VISUAL_TRACK_DUPLICATE", f"duplicate track {track.id}")
         if track.end_ms > frame_manifest.source_duration_ms:
             raise VisualUnderstandingError(

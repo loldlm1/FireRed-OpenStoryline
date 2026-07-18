@@ -103,6 +103,7 @@ class NineRouterClient:
         self.timeout = float(timeout)
         self.max_retries = int(max_retries)
         self.transport = transport
+        self.last_attempts: tuple[NineRouterAttempt, ...] = ()
         if not self.base_url:
             raise NineRouterError("NINEROUTER_CONFIG_INVALID", "NINEROUTER_URL is required")
         if not self.api_key:
@@ -145,6 +146,7 @@ class NineRouterClient:
         user_prompt: str,
         image_data_urls: Sequence[str] = (),
     ) -> dict[str, Any]:
+        self.last_attempts = ()
         user_content: Any = user_prompt
         if image_data_urls:
             user_content = [{"type": "text", "text": user_prompt}]
@@ -184,7 +186,10 @@ class NineRouterClient:
                 try:
                     payload = response.json()
                     content = payload["choices"][0]["message"]["content"]
-                    return parse_json_object(_message_text(content))
+                    parsed = parse_json_object(_message_text(content))
+                    attempts.append(NineRouterAttempt(number, response.status_code, "ok"))
+                    self.last_attempts = tuple(attempts)
+                    return parsed
                 except (KeyError, IndexError, TypeError, ValueError, json.JSONDecodeError) as exc:
                     attempts.append(NineRouterAttempt(
                         number,
@@ -195,4 +200,5 @@ class NineRouterClient:
         last_status = attempts[-1].status_code if attempts else None
         code = "NINEROUTER_RESPONSE_INVALID" if last_status == 200 else "NINEROUTER_REQUEST_FAILED"
         summary = "; ".join(f"attempt {item.number}: {item.reason}" for item in attempts)
+        self.last_attempts = tuple(attempts)
         raise NineRouterError(code, summary or "9Router request failed", attempts=attempts)

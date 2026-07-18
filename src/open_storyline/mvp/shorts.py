@@ -11,6 +11,7 @@ from open_storyline.mvp.ninerouter import NineRouterClient
 
 MIN_SHORT_MS = 18_000
 MAX_SHORT_MS = 25_000
+SHORTS_PLAN_VERSION = "shorts_plan.v1"
 
 
 class ShortsPlanError(RuntimeError):
@@ -54,6 +55,117 @@ class ShortsPlan:
         }
 
 
+def build_shorts_plan_artifact(
+    plan: ShortsPlan,
+    *,
+    transcript_segments: Sequence[dict[str, Any]],
+    scene_report: Any,
+    visual_understanding: Any,
+) -> dict[str, Any]:
+    transcript_evidence = [
+        {
+            "id": f"transcript-{index:04d}",
+            "kind": "transcript",
+            "start_ms": int(segment.get("start") or 0),
+            "end_ms": int(segment.get("end") or 0),
+        }
+        for index, segment in enumerate(transcript_segments, start=1)
+        if int(segment.get("end") or 0) > int(segment.get("start") or 0)
+    ]
+    frames = {
+        frame["id"]: frame
+        for frame in (visual_understanding.frame_manifest.get("frames") or [])
+        if isinstance(frame, dict) and frame.get("id")
+    }
+    clips: list[dict[str, Any]] = []
+    for index, clip in enumerate(plan.clips, start=1):
+        evidence: list[dict[str, Any]] = []
+        for item in transcript_evidence:
+            if item["end_ms"] > clip.start_ms and item["start_ms"] < clip.end_ms:
+                evidence.append(item)
+        for scene in scene_report.scenes:
+            if scene.end_ms > clip.start_ms and scene.start_ms < clip.end_ms:
+                evidence.append({
+                    "id": scene.id,
+                    "kind": "scene",
+                    "start_ms": scene.start_ms,
+                    "end_ms": scene.end_ms,
+                })
+        for frame in frames.values():
+            timestamp_ms = int(frame.get("timestamp_ms") or 0)
+            if clip.start_ms <= timestamp_ms < clip.end_ms:
+                evidence.append({
+                    "id": str(frame["id"]),
+                    "kind": "frame",
+                    "timestamp_ms": timestamp_ms,
+                })
+        for region in visual_understanding.regions:
+            frame = frames.get(region.frame_id)
+            timestamp_ms = int((frame or {}).get("timestamp_ms") or -1)
+            if clip.start_ms <= timestamp_ms < clip.end_ms:
+                evidence.append({
+                    "id": region.id,
+                    "kind": "region",
+                    "frame_id": region.frame_id,
+                    "timestamp_ms": timestamp_ms,
+                    "role": region.role,
+                })
+        for track in visual_understanding.tracks:
+            if track.end_ms > clip.start_ms and track.start_ms < clip.end_ms:
+                evidence.append({
+                    "id": track.id,
+                    "kind": "track",
+                    "start_ms": track.start_ms,
+                    "end_ms": track.end_ms,
+                    "role": track.role,
+                })
+
+        evidence_by_id = {item["id"]: item for item in evidence}
+        ordered_by_kind: dict[str, list[dict[str, Any]]] = {}
+        for item in evidence_by_id.values():
+            ordered_by_kind.setdefault(str(item["kind"]), []).append(item)
+        for values in ordered_by_kind.values():
+            values.sort(key=lambda item: (
+                int(item.get("start_ms", item.get("timestamp_ms", 0))),
+                str(item["id"]),
+            ))
+        quotas = {"region": 24, "track": 12, "frame": 8, "scene": 8, "transcript": 12}
+        evidence = [
+            item
+            for kind, count in quotas.items()
+            for item in _select_evenly(ordered_by_kind.get(kind, []), count)
+        ]
+        if len(evidence) < 64:
+            selected_ids = {item["id"] for item in evidence}
+            remaining = [
+                item
+                for item in evidence_by_id.values()
+                if item["id"] not in selected_ids
+            ]
+            remaining.sort(key=lambda item: (
+                int(item.get("start_ms", item.get("timestamp_ms", 0))),
+                str(item["kind"]),
+                str(item["id"]),
+            ))
+            evidence.extend(remaining[:64 - len(evidence)])
+        evidence.sort(key=lambda item: (
+            int(item.get("start_ms", item.get("timestamp_ms", 0))),
+            str(item["kind"]),
+            str(item["id"]),
+        ))
+        clips.append({
+            "clip_index": index,
+            **clip.to_dict(),
+            "evidence_ids": [item["id"] for item in evidence],
+            "evidence": evidence,
+        })
+    return {
+        "version": SHORTS_PLAN_VERSION,
+        "clips": clips,
+        "rejected": plan.rejected,
+    }
+
+
 def _clean_text(value: Any, *, fallback: str = "", limit: int = 240) -> str:
     text = re.sub(r"\s+", " ", str(value or "")).strip()
     return (text or fallback)[:limit]
@@ -71,6 +183,18 @@ def _number(value: Any, *, integer: bool = False) -> float | int:
 def _overlap_ratio(left: ShortCandidate, right: ShortCandidate) -> float:
     overlap = max(0, min(left.end_ms, right.end_ms) - max(left.start_ms, right.start_ms))
     return overlap / max(1, min(left.duration_ms, right.duration_ms))
+
+
+def _select_evenly(values: Sequence[dict[str, Any]], count: int) -> list[dict[str, Any]]:
+    if len(values) <= count:
+        return list(values)
+    if count <= 1:
+        return [values[len(values) // 2]] if count == 1 else []
+    indexes = {
+        int(round(index * (len(values) - 1) / (count - 1)))
+        for index in range(count)
+    }
+    return [values[index] for index in sorted(indexes)]
 
 
 def validate_candidates(
