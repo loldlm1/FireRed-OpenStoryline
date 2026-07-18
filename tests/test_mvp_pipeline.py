@@ -17,7 +17,7 @@ from open_storyline.mvp.edit_plan import (
 )
 from open_storyline.mvp.frame_sampling import FrameManifest, SampledFrame
 from open_storyline.mvp.pipeline import MVPJobProcessor
-from open_storyline.mvp.render import MediaInfo, RenderedShort
+from open_storyline.mvp.render import AgenticRenderResult, MediaInfo, RenderedShort
 from open_storyline.mvp.scene_boundaries import build_scene_boundaries
 from open_storyline.mvp.shorts import ShortCandidate, ShortsPlan
 
@@ -53,6 +53,23 @@ class FakeRenderer:
         path = Path(destination_dir) / "short-01.mp4"
         path.write_bytes(b"legacy-render")
         return [RenderedShort(path, None, clips[0])]
+
+
+class FakeAgenticRenderer:
+    def __init__(self, _settings):
+        pass
+
+    def render_plan(self, *, selected_clips, destination_dir, **_kwargs):
+        path = Path(destination_dir) / "short-01.mp4"
+        path.write_bytes(b"agentic-render")
+        return AgenticRenderResult(
+            rendered=(RenderedShort(path, None, selected_clips[0]),),
+            execution={
+                "version": "render_execution.v1",
+                "summary": {"clips": 1, "encodes": 1, "fallbacks": 0},
+                "clips": [{"video": "short-01.mp4", "encode_count": 1}],
+            },
+        )
 
 
 class FakeVisualUnderstanding:
@@ -181,6 +198,9 @@ def config(mode: str):
             vision_frame_max_width=512,
             vision_frame_max_height=512,
             vision_frame_max_bytes=1_500_000,
+            crop_hysteresis_ratio=0.03,
+            crop_smoothing_alpha=0.65,
+            max_crop_velocity_ratio_per_second=0.45,
         ),
         mvp=SimpleNamespace(
             frame_count=0,
@@ -331,6 +351,53 @@ class MVPAgenticPipelineTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(manifest["agentic"]["preflight_status"], "blocked")
             self.assertTrue(manifest["agentic"]["shadow_blocked"])
             self.assertEqual((root / "output" / "short-01.mp4").read_bytes(), b"legacy-render")
+
+    async def test_render_mode_uses_agentic_renderer_and_registers_execution(self):
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            store = FakeStore(
+                root,
+                server_request={"max_clips": 1, "edit_mode": "agentic", "asset_policy": "off"},
+            )
+            processor = object.__new__(MVPJobProcessor)
+            processor.config = config("render")
+            processor.stt = FakeSTT()
+            scene_report = build_scene_boundaries([], source_duration_ms=30_000, threshold=0.35)
+            frame_manifest = FrameManifest(
+                source_duration_ms=30_000,
+                source_width=1920,
+                source_height=1080,
+                frames=(SampledFrame(
+                    id="frame-001",
+                    timestamp_ms=250,
+                    scene_id="scene-001",
+                    width=512,
+                    height=288,
+                    extraction_reason="scene_opening",
+                    encoded_bytes=4,
+                    data_url="data:image/jpeg;base64,ZmFrZQ==",
+                ),),
+            )
+
+            with (
+                patch("open_storyline.mvp.pipeline.probe_media", return_value=MediaInfo(30_000, 1920, 1080, True)),
+                patch("open_storyline.mvp.pipeline.extract_audio_for_stt", side_effect=lambda _source, target: target),
+                patch("open_storyline.mvp.pipeline.detect_scene_boundaries", return_value=scene_report),
+                patch("open_storyline.mvp.pipeline.sample_frames", return_value=frame_manifest),
+                patch("open_storyline.mvp.pipeline.VisualUnderstandingPlanner", FakeVisualPlanner),
+                patch("open_storyline.mvp.pipeline.AgenticEditPlanner", FakeEditPlanner),
+                patch("open_storyline.mvp.pipeline.NineRouterClient.from_config", return_value=FakeRemoteClient()),
+                patch("open_storyline.mvp.pipeline.ShortsPlanner", FakePlanner),
+                patch("open_storyline.mvp.pipeline.AgenticShortRenderer", FakeAgenticRenderer),
+                patch("open_storyline.mvp.pipeline.CPUShortRenderer", side_effect=AssertionError("legacy renderer called")),
+            ):
+                await processor("d" * 32, store)
+
+            names = {name for name, _kind in store.registered}
+            manifest = json.loads((root / "output" / "manifest.json").read_text(encoding="utf-8"))
+            self.assertIn("render_execution.json", names)
+            self.assertEqual(manifest["agentic"]["render_execution"], "render_execution.json")
+            self.assertEqual((root / "output" / "short-01.mp4").read_bytes(), b"agentic-render")
 
 
 if __name__ == "__main__":

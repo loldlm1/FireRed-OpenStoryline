@@ -190,6 +190,9 @@ class AgenticEditingConfig(ConfigBaseModel):
     vision_frame_max_width: int = Field(default=512, ge=128, le=2048)
     vision_frame_max_height: int = Field(default=512, ge=128, le=2048)
     vision_frame_max_bytes: int = Field(default=1_500_000, ge=16_384, le=8_388_608)
+    crop_hysteresis_ratio: float = Field(default=0.03, ge=0, le=0.25)
+    crop_smoothing_alpha: float = Field(default=0.65, ge=0, le=1)
+    max_crop_velocity_ratio_per_second: float = Field(default=0.45, gt=0, le=2)
 
 
 class FFMPEGAConfig(ConfigBaseModel):

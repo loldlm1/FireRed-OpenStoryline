@@ -116,6 +116,9 @@ vision_frame_count = 12
 vision_frame_max_width = 512
 vision_frame_max_height = 512
 vision_frame_max_bytes = 1500000
+crop_hysteresis_ratio = 0.03
+crop_smoothing_alpha = 0.65
+max_crop_velocity_ratio_per_second = 0.45
 
 # ============= Optional ComfyUI-FFMPEGA tool ===================
 [ffmpega]

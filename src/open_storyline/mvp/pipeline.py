@@ -10,14 +10,15 @@ from open_storyline.mvp.edit_plan import (
     AgenticEditPlanner,
     AgenticArtifactNames,
     EditPlanError,
-    SUPPORTED_CAPABILITIES,
     resolve_agentic_server_mode,
 )
 from open_storyline.mvp.ffmpega import EffectsPlanner, FFMPEGAClient, ffmpega_enabled
 from open_storyline.mvp.frame_sampling import sample_frames
+from open_storyline.mvp.compositor import REFRAME_RENDER_CAPABILITIES
 from open_storyline.mvp.jobs import JobStore
 from open_storyline.mvp.ninerouter import NineRouterClient
 from open_storyline.mvp.render import (
+    AgenticShortRenderer,
     CPUShortRenderer,
     RenderSettings,
     extract_frame_data_urls,
@@ -48,11 +49,6 @@ class MVPJobProcessor:
                 raise EditPlanError(
                     "AGENTIC_EDITING_DISABLED",
                     "agentic editing is disabled on this server",
-                )
-            if server_mode == "render":
-                raise EditPlanError(
-                    "AGENTIC_RENDER_UNAVAILABLE",
-                    "agentic rendering is not available until the compositor sprint",
                 )
         source = await store.source_path(job_id)
         work_dir = store.work_dir(job_id)
@@ -183,6 +179,7 @@ class MVPJobProcessor:
                 max_segments_per_clip=self.config.agentic_editing.max_segments_per_clip,
                 max_overlays_per_clip=self.config.agentic_editing.max_overlays_per_clip,
                 max_assets_per_clip=self.config.agentic_editing.max_assets_per_clip,
+                renderer_capabilities=REFRAME_RENDER_CAPABILITIES,
             )
             edit_planner_attempts = [
                 attempt.to_dict()
@@ -197,7 +194,7 @@ class MVPJobProcessor:
 
             preflight = build_preflight(
                 edit_plan,
-                available_capabilities=SUPPORTED_CAPABILITIES,
+                available_capabilities=REFRAME_RENDER_CAPABILITIES,
                 asset_policy=str(request.get("asset_policy") or "auto"),
                 known_region_ids=(region.id for region in visual_understanding.regions),
                 known_track_ids=(track.id for track in visual_understanding.tracks),
@@ -243,20 +240,49 @@ class MVPJobProcessor:
             }
 
         await store.update(job_id, progress=0.68, stage="rendering")
-        renderer = CPUShortRenderer(RenderSettings(
+        render_settings = RenderSettings(
             width=self.config.mvp.render_width,
             height=self.config.mvp.render_height,
             fps=self.config.mvp.render_fps,
             preset=self.config.mvp.render_preset,
             crf=self.config.mvp.render_crf,
-        ))
-        rendered = await asyncio.to_thread(
-            renderer.render_plan,
-            source=source,
-            clips=plan.clips,
-            transcript_segments=transcript.segments,
-            destination_dir=output_dir,
         )
+        if agentic_requested and server_mode == "render":
+            agentic_result = await asyncio.to_thread(
+                AgenticShortRenderer(render_settings).render_plan,
+                source=source,
+                edit_plan=edit_plan,
+                selected_clips=plan.clips,
+                visual_understanding=visual_understanding,
+                transcript_segments=transcript.segments,
+                destination_dir=output_dir,
+                source_media=media,
+                crop_hysteresis_ratio=self.config.agentic_editing.crop_hysteresis_ratio,
+                crop_smoothing_alpha=self.config.agentic_editing.crop_smoothing_alpha,
+                max_crop_velocity_ratio_per_second=(
+                    self.config.agentic_editing.max_crop_velocity_ratio_per_second
+                ),
+            )
+            rendered = list(agentic_result.rendered)
+            render_execution_path = output_dir / names.render_execution
+            render_execution_path.write_text(
+                json.dumps(agentic_result.execution, ensure_ascii=False, indent=2),
+                encoding="utf-8",
+            )
+            await store.register_artifact(
+                job_id,
+                render_execution_path,
+                kind="render_execution",
+            )
+            agentic_manifest["render_execution"] = names.render_execution
+        else:
+            rendered = await asyncio.to_thread(
+                CPUShortRenderer(render_settings).render_plan,
+                source=source,
+                clips=plan.clips,
+                transcript_segments=transcript.segments,
+                destination_dir=output_dir,
+            )
         effects_plan = None
         final_outputs = []
         ffmpega = None

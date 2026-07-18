@@ -13,6 +13,7 @@ reuse its CLI, local-model, or file-authoritative architecture.
 | `src/open_storyline/mvp/scene_boundaries.py` | `scripts/scene_boundaries.py` | Reimplemented FFmpeg scene-score parsing, minimum-gap deduplication, and interval artifacts with bounded output and sanitized errors. |
 | `src/open_storyline/mvp/frame_sampling.py` | `scripts/video_understanding.py` | Adapted scene-plus-uniform sampling ideas into an in-memory, byte-bounded frame manifest with stable IDs and no local detector. |
 | `src/open_storyline/mvp/visual_understanding.py` | `scripts/video_understanding.py` | Replaced local YOLO/class logic with validated, general-purpose remote observations and tracklets grounded in ordered frame IDs and timestamps. |
+| `src/open_storyline/mvp/compositor.py` | `scripts/smart_reframe.py` | Reimplemented subject-union portrait framing with typed visual evidence, fit/letterbox decisions, bounded crop motion, and explicit fallback evidence. |
 
 Future sprints must append materially adapted reference paths here. Provider,
 platform, local-inference, and niche-specific logic must not be copied into the
