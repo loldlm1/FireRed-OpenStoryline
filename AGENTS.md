@@ -1,210 +1,216 @@
 # FireRed-OpenStoryline Agent Rules
 
-This file defines repository-specific engineering instructions for Codex and
-other coding agents. Product runtime skills live under `.claude/skills/` and
-`.storyline/skills/`; they do not replace these engineering rules.
+This file contains repository-specific engineering instructions. Operator
+skills live under `.claude/skills/` and are exposed to Codex through
+`.agents/skills/`; product runtime editing skills live under
+`.storyline/skills/`.
 
 ## Instruction Precedence
 
 When instructions conflict, use this order:
 
 1. Explicit user instructions for the current task.
-2. This `AGENTS.md` and any more specific nested `AGENTS.md`.
+2. This `AGENTS.md` and any closer nested `AGENTS.md`.
 3. Project documentation and established tests.
-4. Applicable installed skills under `/home/loldlm/.codex/skills`.
+4. Applicable installed skill guidance selected for the task.
 5. Existing local code conventions.
-6. Official, current framework/provider documentation for version-sensitive behavior.
+6. Current official framework or provider documentation.
 
 ## Project Context
 
-FireRed-OpenStoryline is a Python 3.11+ conversational video-editing system.
-It contains two intentionally separate runtime profiles:
+FireRed-OpenStoryline is a Python 3.11+ conversational video-editing system
+with two intentionally separate runtime profiles:
 
 | Profile | Entry points | Purpose |
 | --- | --- | --- |
-| Full local agent | `src/open_storyline/agent.py`, `src/open_storyline/mcp/server.py`, `cli.py`, `run.sh` | LangChain agent plus MCP video-editing nodes, runtime Storyline skills, local resources, and configurable external model providers. |
-| Remote-only social-clips MVP | `mvp_fastapi.py`, `src/open_storyline/mvp/`, `Dockerfile.remote`, `config/deploy.yml` | Authenticated upload/job API using Codex inference through 9Router, direct Mistral STT, and deterministic CPU FFmpeg rendering. |
+| Full local agent | `src/open_storyline/agent.py`, `src/open_storyline/mcp/server.py`, `cli.py`, `run.sh` | LangChain agent, MCP editing nodes, runtime Storyline skills, local resources, and configurable model providers. |
+| Remote-only social-clips MVP | `mvp_fastapi.py`, `src/open_storyline/mvp/`, `Dockerfile.remote`, `config/deploy.yml` | Password-authenticated upload/job API using 9Router, direct Mistral STT, PostgreSQL, and deterministic CPU FFmpeg rendering. |
 
 Do not merge the profiles, dependencies, containers, or runtime assumptions as
-an incidental refactor. The remote MVP is isolated so upstream full-agent work
-can continue to merge cleanly.
-
-Read [the engineering guide](docs/agent-engineering.md) for the architecture
-map, contract matrix, and validation rationale. Read
-`docs/mvp/architecture.md` before changing the remote MVP.
+an incidental refactor. Read `docs/agent-engineering.md` for the contract map
+and `docs/mvp/architecture.md` before changing the remote MVP.
 
 ## Skill Routing
 
-Use the smallest applicable installed skill guidance while preserving local
-conventions:
+Use the smallest applicable installed skill while preserving local contracts:
 
-- `token-saver-orchestrator`: use RTK first for noisy shell, Git, search, and test output.
-- `python-django-production-engineering`: apply its general Python/ASGI, testing, security, and git discipline; this project is FastAPI, not Django.
-- `ai-agent-app-production-engineering`: use for MCP, LangChain agent loops, prompts, tool schemas, structured model output, state, privacy, and eval-like regression work.
-- `devops-release-production-engineering`: use for Docker, Kamal, env/secrets, health checks, rollout, and rollback.
-- `premium-product-ui-builder` and `token-efficient-web-qa`: use for substantial changes under `web/` or browser-visible flows.
+- `token-saver-orchestrator`: RTK-first Git, search, and test output.
+- `python-django-production-engineering`: general Python/ASGI, testing,
+  security, and Git discipline; this repository uses FastAPI, not Django.
+- `ai-agent-app-production-engineering`: MCP, LangChain loops, prompts, tool
+  schemas, structured model output, agent state, privacy, and eval regressions.
+- `postgres-production-engineering`: migrations, transactions, locking,
+  backup/restore, roles, query behavior, and database operational safety.
+- `devops-release-production-engineering`: Docker, Kamal, env/secrets, health
+  checks, persistent volumes, rollout, and rollback.
+- `premium-product-ui-builder`: substantial product UI or UX changes under
+  `web/`; do not route ordinary browser verification through it.
+- `token-efficient-web-qa`: Playwright or other browser-runner verification,
+  failure artifacts, and browser regression triage only.
 
-Reusable guidance stays in installed skills. Keep only project-specific facts
-and invariants in this repository.
+Reusable guidance stays in installed skills. Keep only FireRed paths,
+contracts, commands, and known hazards in this file.
 
 ## GitHub Repository Routing
 
-- The authenticated GitHub MCP is available for remote repository, branch,
-  commit, issue, and pull-request operations. Use local Git for checkout,
-  history, status, and diffs; use GitHub MCP when authoritative remote state or
-  an authenticated GitHub write is required.
-- The writable repository for this project is the fork
-  `loldlm1/FireRed-OpenStoryline`. Local `origin` must fetch from and push to
-  that fork. Treat `FireRedTeam/FireRed-OpenStoryline` as a read-only upstream
-  unless the user explicitly authorizes a write to the parent repository.
-- Configure local Git with `remote.pushDefault=origin` and
-  `push.default=current` so a plain push publishes the current branch to the
-  fork. Do not infer a push or pull-request destination from GitHub's fork UI.
-- Before any GitHub write, call the GitHub MCP identity check and confirm the
-  authenticated login is `loldlm1`. Verify the destination owner, repository,
-  head branch, and base branch before creating or updating remote state.
-- Create pull requests in `loldlm1/FireRed-OpenStoryline`, not in the
-  `FireRedTeam` parent repository, unless the user explicitly requests an
-  upstream contribution. GitHub's automatic fork comparison may default to the
-  parent repository, so never accept its base repository without checking it.
-- For work based on `agent/remote-video-mvp`, use that branch as the pull-request
-  base in the fork unless the user specifies another integration branch. Read
-  the created pull request back through GitHub MCP and confirm both repositories
-  and branches after creation.
-- GitHub MCP permissions depend on its token. If an authorized write returns
-  `403 Resource not accessible by personal access token`, keep all refs in the
-  fork, report that the token needs the corresponding repository write
-  permission, and do not retry against `FireRedTeam`.
-- Never print, log, or persist `GITHUB_PAT_TOKEN`. Report only whether GitHub MCP
-  authentication and the requested operation succeeded.
+- The writable repository is `loldlm1/FireRed-OpenStoryline`; treat
+  `FireRedTeam/FireRed-OpenStoryline` as read-only unless the user explicitly
+  requests an upstream contribution.
+- Local `origin` must fetch from and push to the fork, with
+  `remote.pushDefault=origin` and `push.default=current`.
+- Use local Git for checkout, history, status, and diffs. Use authenticated
+  GitHub tooling only for authoritative remote state or an authorized write.
+- Before a GitHub write, confirm the authenticated login is `loldlm1` and
+  verify the destination owner, repository, head branch, and base branch.
+- Create fork pull requests against `main` by default. Use another maintained
+  integration base only when the user requests it or the work has an unmerged
+  dependency branch; read the created pull request back and verify both refs.
+- If a write returns `403 Resource not accessible by personal access token`,
+  keep refs in the fork and report the missing permission. Do not retry against
+  `FireRedTeam`.
+- Never expose `GITHUB_PAT_TOKEN`; report only authentication and operation
+  success or failure.
 
-## Local-First Workflow
+## Repository Map And Contracts
 
-- Start with `rtk git status`, then inspect nearby code, tests, docs, and history before editing.
-- Use `rtk grep`, `rtk find`, and `rtk git diff` for noisy output when available; rerun the smallest raw command when exact evidence matters.
-- Preserve unrelated user changes in a dirty worktree. Stop if files change unexpectedly while you work.
-- Prefer existing dependencies, helpers, and direct implementations. Do not add packages, abstractions, or broad refactors unless the task requires them.
-- Preserve public contracts unless the request explicitly changes them: MCP tool names and schemas, prompt keys, node names, HTTP routes/status/error shapes, job state, artifact names, config keys, environment variables, and WebSocket messages.
-- Do not commit, push, deploy, publish, rotate credentials, or contact production/provider services unless the user explicitly requests it.
-
-## Repository Map And Ownership
-
-- `src/open_storyline/agent.py`: constructs the LangChain agent, model clients, MCP client, tools, skills, and middleware.
-- `src/open_storyline/mcp/`: MCP server, dynamically registered node tools, sampling, and tool-call hooks.
-- `src/open_storyline/nodes/`: editing workflow nodes and Pydantic input/output contracts.
-- `src/open_storyline/storage/`: session and artifact persistence; corruption and cross-session access must fail closed.
-- `src/open_storyline/mvp/`: remote-only job API, durable state, provider clients, validation, rate limiting, and CPU rendering.
+- `src/open_storyline/agent.py`: LangChain agent, model clients, MCP client,
+  tools, skills, and middleware.
+- `src/open_storyline/mcp/`: MCP server and dynamically registered node tools.
+- `src/open_storyline/nodes/`: editing nodes and Pydantic input/output contracts.
+- `src/open_storyline/storage/`: full-agent session and artifact persistence;
+  corruption and cross-session access must fail closed.
+- `src/open_storyline/mvp/`: remote API, PostgreSQL state, provider clients,
+  validation, authentication, throttling, retention, audit, and CPU rendering.
+- `src/open_storyline/mvp/database.py`, `models.py`, `auth.py`, `jobs.py`,
+  `audit.py`, and `retention.py`: remote database and lifecycle boundaries.
+- `migrations/` and `alembic.ini`: explicit remote MVP schema history.
+- `scripts/mvp-postgres-init.sh`, `scripts/mvp-postgres-backup.sh`, and
+  `scripts/mvp-postgres-restore-check.sh`: database bootstrap and recovery
+  helpers used through the Kamal workflow.
 - `prompts/tasks/`: bilingual model prompt contracts used by named nodes.
-- `.storyline/skills/`: product-visible runtime editing skills loaded by `skillkit`; changes alter agent behavior.
-- `.claude/skills/`: install/use automation distributed to compatible agents; changes alter operator workflows.
-- `web/`: original agent UI plus remote MVP UI.
-- `config.toml`: validated application configuration and local secret placeholders.
-- `.env.mvp.example`, `.env.kamal.example`, `.kamal/secrets.example`: committed variable-name templates only.
-- `outputs/`, `resource/`, downloaded models, caches, and local env files: runtime/generated data, not source.
+- `.storyline/skills/`: product-visible editing behavior loaded by `skillkit`.
+- `.claude/skills/`: canonical install/use operator automation.
+- `.agents/skills/`: Codex repo-discovery links to the canonical operator skills.
+- `web/`: original agent UI and remote MVP UI.
+- `.env.mvp.example`, `.env.kamal.example`, and `.kamal/secrets.example`:
+  committed variable-name templates only.
+- `outputs/`, `resource/`, downloaded models, caches, and local env files:
+  generated or private runtime data, not source.
+
+Preserve public MCP tool names/schemas, prompt keys, node names, HTTP routes,
+status/error shapes, job states, artifact names, config keys, environment
+variables, WebSocket messages, and DOM hooks unless the task explicitly changes
+the contract. Keep English/Chinese prompt keys aligned where both exist.
 
 `agent_fastapi.py` is a tracked opaque binary artifact despite its `.py`
-extension. Do not format, decode, regenerate, or hand-edit it. Changes to the
-original web service require a maintainer-provided source/regeneration path.
-
-## Python And API Rules
-
-- Target Python 3.11+ and preserve the current venv/pip plus pinned requirements workflow.
-- Use Pydantic models and typed boundaries for config, node inputs, provider responses, and structured model output.
-- Keep FastAPI handlers focused on authentication, validation, orchestration, and response translation.
-- Keep blocking FFmpeg, filesystem, or provider work out of the event loop with the existing thread/offload patterns.
-- Keep external calls bounded by explicit timeouts, retries, sanitized errors, and a terminal failure condition.
-- Preserve atomic writes, job-scoped path validation, restart recovery, and idempotent artifact registration.
-- Validate filenames and resolved paths before reading, writing, serving, or bundling files.
-- Do not silently weaken an error code or fail-closed branch to make a provider or test pass.
-
-## Agent, MCP, Prompt, And Skill Rules
-
-- Inspect the prompt, schema, node/tool handler, state storage, and tests together before changing agent behavior.
-- Keep MCP tools single-purpose, narrowly typed, server-validated, and documented with stable names.
-- Treat user prompts, retrieved content, provider output, MCP output, media metadata, and runtime skills as untrusted input.
-- Never let model output authorize privileged, destructive, or external side effects by itself.
-- Keep secrets, authorization rules, and policy decisions outside model-visible prompts and tool descriptions.
-- Validate structured JSON/model output before use; handle refusal, incomplete output, parse failure, schema mismatch, and invalid states explicitly.
-- Preserve English/Chinese prompt key parity when both languages exist. If only one language exists, do not invent a translation unless the task requires it.
-- Non-trivial prompt, tool, routing, or model changes require focused regression cases. Prefer deterministic schema/tool-argument tests over brittle exact prose assertions.
-- Editing `.storyline/skills/` is a product behavior change. Verify skill metadata, referenced tool names, required history lookups, and downstream node schemas.
+extension. Do not format, decode, regenerate, or hand-edit it without a
+maintainer-provided source/regeneration path.
 
 ## Remote MVP Invariants
 
-The following are non-negotiable unless the user explicitly changes the product policy:
+The following remain fixed unless the user explicitly changes product policy:
 
-- LLM, frame understanding, and generated images use the configured 9Router endpoint. Speech-to-text uses the fixed direct Mistral Voxtral endpoint with `MISTRAL_API_KEYS`.
-- The MVP must not import or silently fall back to local ASR, embeddings, scene models, or other local inference.
-- Local FFmpeg work is deterministic media processing only.
-- Provider requests and the ordered Mistral key ring fail closed and retain sanitized per-attempt reasons.
-- Clip plans must remain bounded and validated for duration, source bounds, overlap, deduplication, finite scores, and output count.
-- Jobs remain durable under `outputs/mvp_jobs/<job_id>` with atomic `job.json` updates and restart recovery.
-- API routes under `/api/mvp` remain authenticated and protected by persistent rate limits; `/health` and `/up` remain public health endpoints.
-- Artifacts remain job-scoped, traversal-safe, and downloadable only after registration.
-- Provider keys never enter logs, persisted job state, manifests, responses, screenshots, fixtures, or Git.
-- `Dockerfile.remote` must not download or install full local inference resources.
-- Kamal deployment keeps a persistent output volume and a working health check.
+- LLM, frame understanding, and generated images use configured 9Router routes;
+  speech-to-text uses direct Mistral Voxtral with `MISTRAL_API_KEYS`.
+- The remote image must not import or fall back to local ASR, embeddings, scene
+  models, or other local inference. Local FFmpeg work is deterministic media
+  processing only.
+- PostgreSQL is authoritative for browser sessions, failed-login buckets,
+  editing sessions, jobs, artifact metadata, ordered events, audit evidence,
+  reviews, holds, and retention state.
+- `outputs/mvp_jobs/<job_id>` remains job-owned media/work storage.
+  `job.json` is a derived rollback snapshot and never the live state source.
+- Persistent throttling applies only to failed password submissions. Successful
+  logins, authenticated reads, and job creation do not consume time-window
+  quotas. `OPENSTORYLINE_MAX_ACTIVE_JOBS` is queue capacity, not a user quota.
+- Clip plans remain bounded for duration, source bounds, overlap,
+  deduplication, finite scores, and output count.
+- Routes under `/api/mvp` remain session-authenticated and CSRF-protected;
+  `/health` and `/up` remain public health endpoints.
+- Artifacts remain job-scoped, traversal-safe, and downloadable only after
+  registration. Provider keys never enter logs, database state, manifests,
+  responses, screenshots, fixtures, or Git.
+- `Dockerfile.remote` must not install full local inference resources. Kamal
+  keeps persistent output, PostgreSQL data, and backup directories plus a
+  working health check.
 
-## Secrets, Privacy, And External Actions
+## Project Hazards And External Actions
 
-- Never print or paste real values from `config.toml`, `.env*`, `.kamal/secrets`, shell history, provider responses, or OpenClaw/Feishu configuration.
-- Commit variable names and safe placeholders only. Search the diff for accidental tokens before handoff.
-- Sanitize provider error bodies, URLs containing keys, authorization headers, transcripts, traces, and job failure details.
-- Treat user media, transcripts, generated assets, sessions, and artifacts as private data.
-- Do not upload media or artifacts, send Feishu messages, call paid providers, or run real-provider smoke tests without explicit user authorization.
-- Do not run `hf_space.sh`: it deletes/recreates a branch and force-pushes to a configured remote.
-- Do not run `kamal setup`, `kamal deploy`, destructive Docker cleanup, volume deletion, DNS/TLS changes, firewall changes, or server reboots without explicit approval.
-- Do not run `download.sh` casually; it performs large network downloads into ignored runtime directories.
+- Treat `config.toml`, `.env*`, `.kamal/secrets`, OpenClaw/Feishu config,
+  provider responses, user media, transcripts, sessions, and artifacts as
+  private. Commit names and safe placeholders only.
+- Do not upload media, send Feishu messages, call live/paid providers, touch a
+  production database, deploy, rotate credentials, or mutate a VPS unless the
+  user explicitly authorizes that action.
+- Do not run `hf_space.sh`; it deletes/recreates a branch and force-pushes.
+- Do not run `download.sh` as routine validation; it downloads large ignored
+  model/resource archives.
+- Do not run `kamal setup`, `kamal deploy`, destructive Docker cleanup, volume
+  deletion, DNS/TLS/firewall changes, or server reboots as validation.
 
 ## Documentation Rules
 
-- Keep `README.md` and `README_zh.md` navigation aligned when changing shared documentation links or agent instructions.
-- Keep current architecture and operating guidance separate from historical plans. Completed sprint records belong in `docs/mvp/implementation-history.md`.
-- Update documentation, env examples, tests, and deployment config together when adding or renaming config keys or environment variables.
-- Update all references before deleting or renaming a document. Use `rg` to confirm no stale path remains.
-- Do not rewrite runtime prompts or skills as prose cleanup; wording changes can alter model behavior.
+- Keep `README.md` and `README_zh.md` aligned when changing shared links or
+  agent instructions.
+- Keep current architecture separate from historical plans; completed sprint
+  records belong in `docs/mvp/implementation-history.md`.
+- Update docs, env examples, tests, and deployment config together when config
+  keys or environment variables change.
+- Use `rg` to update every inbound reference before renaming or deleting a
+  document. Do not rewrite runtime prompts or `.storyline/skills/` as prose
+  cleanup because wording changes product behavior.
 
 ## Verification
 
-Run the narrowest relevant checks first, then the broader gate for the touched area.
+Run focused checks first. Use `.venv/bin/python` unless an equivalent activated
+environment is explicitly documented.
 
-Core suite:
+Fast local non-browser baseline; database-backed classes skip when
+`TEST_DATABASE_URL` is unset, so report those skips rather than calling this
+connected-database evidence:
 
 ```bash
-PYTHONPATH=src python -m unittest discover -s tests -p 'test_*.py' -v
+PYTHONPATH=src .venv/bin/python -m unittest discover -s tests -p 'test_*.py' -v
 ```
 
 Focused examples:
 
 ```bash
-PYTHONPATH=src python tests/test_ninerouter.py
-PYTHONPATH=src python tests/test_mvp_jobs.py
-PYTHONPATH=src python tests/test_search_media_schema.py
-PYTHONPATH=src python tests/test_kamal_config.py
+PYTHONPATH=src .venv/bin/python -m unittest tests/test_ninerouter.py -v
+PYTHONPATH=src .venv/bin/python -m unittest tests/test_mvp_jobs.py -v
+PYTHONPATH=src .venv/bin/python -m unittest tests/test_search_media_schema.py -v
+PYTHONPATH=src .venv/bin/python -m unittest tests/test_kamal_config.py -v
+```
+
+For connected PostgreSQL evidence, use a disposable database whose name starts
+with `openstoryline_test`; replace placeholders locally and never paste a real
+connection URL into docs, chat, logs, or commits:
+
+```bash
+TEST_DATABASE_URL='postgresql+psycopg://USER:PASSWORD@127.0.0.1/openstoryline_test' \
+  PYTHONPATH=src .venv/bin/python -m unittest discover -s tests -p 'test_*.py' -v
 ```
 
 Additional checks when relevant:
 
 ```bash
-PYTHONPATH=src python -c "from open_storyline.config import load_settings; load_settings('config.toml'); print('config_ok')"
-bash -n run.sh build_env.sh download.sh bin/kamal-mvp
+PYTHONPATH=src .venv/bin/python -c "from open_storyline.config import load_settings; load_settings('config.toml'); print('config_ok')"
+bash -n run.sh build_env.sh download.sh bin/kamal-mvp \
+  scripts/mvp-postgres-init.sh scripts/mvp-postgres-backup.sh \
+  scripts/mvp-postgres-restore-check.sh .kamal/hooks/pre-deploy
 docker build -f Dockerfile.remote .
 ```
 
-- `tests/test_mvp_render.py` performs an FFmpeg smoke test and skips when `ffmpeg`/`ffprobe` are unavailable.
-- Prefer `rtk test <command>` for a noisy complete run, but rerun the first failing test raw when compressed output hides necessary diagnostics.
-- There is currently no repository-wide Ruff, formatter, type checker, coverage, or CI configuration. Do not claim those gates passed unless the project adds and runs them.
-- Do not use live provider calls as a substitute for deterministic tests.
-- For web changes, test the affected desktop/mobile flow and preserve route, WebSocket, session, and DOM contracts.
-- For release changes, validate the Kamal config/tests, health endpoints, secret references, persistent volumes, and rollback implications. Do not deploy as validation.
+- `tests/test_mvp_render.py` skips when `ffmpeg` or `ffprobe` is unavailable.
+- Prefer `rtk test <command>` for noisy runs; rerun only the first failing test
+  raw when compressed output hides the diagnostic.
+- The repository has no Ruff, formatter, type checker, coverage, or CI gate;
+  do not claim those checks passed.
+- Browser changes use the focused `.qa/web` Chromium commands documented in
+  that harness; do not use production credentials or URLs.
+- Release changes require Kamal config/tests, health endpoints, secret
+  references, persistent volumes, and rollback review; do not deploy to validate.
 
-## Handoff Gate
-
-Before finishing:
-
-1. Review `rtk git status` and `rtk git diff`.
-2. Confirm behavior and profile boundaries match the request.
-3. Confirm focused tests cover changed contracts and security-sensitive failure paths.
-4. Confirm secrets/private media are absent from the diff and test artifacts.
-5. Confirm documentation links, bilingual navigation, env names, and commands are current.
-6. Report checks actually run, skipped checks, and residual risks precisely.
+Before handoff, review status/diff, profile boundaries, focused security
+failures, secret/private-data absence, bilingual navigation, env names, and the
+exact checks and skips reported.
