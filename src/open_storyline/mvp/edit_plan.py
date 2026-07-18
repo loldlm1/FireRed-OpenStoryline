@@ -38,7 +38,7 @@ SUPPORTED_CAPABILITIES = frozenset({
 EditMode = Literal["legacy", "agentic"]
 AssetPolicy = Literal["off", "auto"]
 AgenticServerMode = Literal["off", "shadow", "render"]
-LayoutMode = Literal["crop", "fit", "letterbox", "pip", "source"]
+LayoutMode = Literal["crop", "fit", "letterbox", "source"]
 TransitionKind = Literal["cut", "fade", "xfade"]
 OverlayKind = Literal["text", "image", "source", "pip"]
 AssetKind = Literal["generated_image", "stock_image", "stock_video"]
@@ -137,10 +137,15 @@ class OverlaySpec(PlanModel):
     id: str = Field(min_length=1, max_length=80)
     kind: OverlayKind
     timeline_window: TimeWindow
+    source_window: TimeWindow | None = None
     text: str = Field(default="", max_length=500)
     asset_id: str = Field(default="", max_length=80)
     opacity: float = Field(default=1.0, ge=0, le=1, allow_inf_nan=False)
     width_ratio: float = Field(default=0.35, ge=0.08, le=1, allow_inf_nan=False)
+    margin_ratio: float = Field(default=0.035, ge=0, le=0.2, allow_inf_nan=False)
+    transition_ms: int = Field(default=0, ge=0, le=800)
+    z_index: int = Field(default=10, ge=1, le=100)
+    protect_subtitles: bool = True
     position: Literal["center", "top", "bottom", "top_left", "top_right", "bottom_left", "bottom_right"] = "center"
 
     @field_validator("id", "text", "asset_id")
@@ -155,6 +160,13 @@ class OverlaySpec(PlanModel):
             raise ValueError("text overlays require text")
         if self.kind == "image" and not self.asset_id:
             raise ValueError("image overlays require asset_id")
+        if self.kind in {"source", "pip"}:
+            if self.source_window is None:
+                raise ValueError("source and PiP overlays require source_window")
+            if self.source_window.duration_ms != self.timeline_window.duration_ms:
+                raise ValueError("source overlay duration must match its timeline duration")
+        elif self.source_window is not None:
+            raise ValueError("only source and PiP overlays may declare source_window")
         return self
 
 
@@ -253,19 +265,29 @@ class ClipEditPlan(PlanModel):
             raise ValueError("asset request IDs must be unique")
 
         last_timeline_end = 0
-        for segment in self.segments:
+        for index, segment in enumerate(self.segments):
             if (
                 segment.source_window.start_ms < self.source_window.start_ms
                 or segment.source_window.end_ms > self.source_window.end_ms
             ):
                 raise ValueError("segment source timing must stay inside the clip")
-            if segment.timeline_window.start_ms != last_timeline_end:
-                raise ValueError("primary timeline segments must be contiguous and non-overlapping")
+            if index == 0:
+                if segment.timeline_window.start_ms != 0 or segment.transition_in.kind != "cut":
+                    raise ValueError("the first segment must start at zero with a hard cut")
+            else:
+                overlap = segment.transition_in.duration_ms if segment.transition_in.kind == "xfade" else 0
+                if segment.timeline_window.start_ms != last_timeline_end - overlap:
+                    raise ValueError("segment timing must match its declared transition overlap")
             last_timeline_end = segment.timeline_window.end_ms
-        if self.segments[0].timeline_window.start_ms != 0:
-            raise ValueError("clip timeline must start at zero")
         if last_timeline_end != self.source_window.duration_ms:
             raise ValueError("clip timeline must cover the complete selected duration")
+        for segment in self.segments:
+            for overlay in segment.overlays:
+                if overlay.source_window is not None and (
+                    overlay.source_window.start_ms < self.source_window.start_ms
+                    or overlay.source_window.end_ms > self.source_window.end_ms
+                ):
+                    raise ValueError("overlay source timing must stay inside the selected clip")
         for asset in self.asset_requests:
             if asset.timeline_window.end_ms > self.source_window.duration_ms:
                 raise ValueError("asset timing must stay inside the clip timeline")

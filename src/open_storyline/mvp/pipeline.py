@@ -12,7 +12,13 @@ from open_storyline.mvp.edit_plan import (
     EditPlanError,
     resolve_agentic_server_mode,
 )
-from open_storyline.mvp.ffmpega import EffectsPlanner, FFMPEGAClient, ffmpega_enabled
+from open_storyline.mvp.ffmpega import (
+    AGENTIC_FINISHING_SKILLS,
+    DETERMINISTIC_SKILLS,
+    EffectsPlanner,
+    FFMPEGAClient,
+    ffmpega_enabled,
+)
 from open_storyline.mvp.frame_sampling import sample_frames
 from open_storyline.mvp.compositor import REFRAME_RENDER_CAPABILITIES
 from open_storyline.mvp.jobs import JobStore
@@ -290,7 +296,14 @@ class MVPJobProcessor:
             await store.update(job_id, progress=0.88, stage="planning_effects")
             effects_plan = await EffectsPlanner(
                 NineRouterClient.from_config(self.config.ninerouter)
-            ).plan(state["prompt"])
+            ).plan(
+                state["prompt"],
+                allowed_skills=(
+                    AGENTIC_FINISHING_SKILLS
+                    if agentic_requested
+                    else DETERMINISTIC_SKILLS
+                ),
+            )
             if effects_plan.effects:
                 ffmpega = FFMPEGAClient.from_config(self.config.ffmpega)
         for item in rendered:

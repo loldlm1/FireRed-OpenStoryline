@@ -7,6 +7,7 @@ from open_storyline.mvp.edit_plan import (
     EditSegment,
     FocalTarget,
     LayoutSpec,
+    OverlaySpec,
     TimeWindow,
     build_shadow_edit_plan,
 )
@@ -119,6 +120,52 @@ class EditPreflightTests(unittest.TestCase):
         codes = {finding.code for finding in report.findings}
         self.assertIn("REGION_REFERENCE_UNKNOWN", codes)
         self.assertIn("EVIDENCE_REFERENCE_UNKNOWN", codes)
+
+    def test_blocks_subtitle_zone_conflicts_and_unresolved_image_layers(self):
+        clip = ClipEditPlan(
+            clip_index=1,
+            source_window=TimeWindow(start_ms=0, end_ms=20_000),
+            output_name="short.mp4",
+            segments=(EditSegment(
+                id="segment",
+                source_window=TimeWindow(start_ms=0, end_ms=20_000),
+                timeline_window=TimeWindow(start_ms=0, end_ms=20_000),
+                layout=LayoutSpec(mode="fit"),
+                overlays=(
+                    OverlaySpec(
+                        id="text-hook",
+                        kind="text",
+                        timeline_window=TimeWindow(start_ms=0, end_ms=2000),
+                        text="Hook",
+                        position="bottom",
+                    ),
+                    OverlaySpec(
+                        id="image-1",
+                        kind="image",
+                        timeline_window=TimeWindow(start_ms=3000, end_ms=5000),
+                        asset_id="asset-1",
+                        position="top_right",
+                    ),
+                ),
+                reason="requested timeline layers",
+            ),),
+        )
+        plan = EditPlan(
+            planner_version="test.v1",
+            source_duration_ms=20_000,
+            requested_capabilities=(
+                "fit", "hard_cut", "image_overlay", "text_emphasis", "subtitles"
+            ),
+            clips=(clip,),
+        )
+        report = build_preflight(
+            plan,
+            available_capabilities=plan.requested_capabilities,
+            asset_policy="auto",
+        )
+        codes = {finding.code for finding in report.findings}
+        self.assertIn("SUBTITLE_SAFE_ZONE_CONFLICT", codes)
+        self.assertIn("ASSET_UNRESOLVED", codes)
 
 
 if __name__ == "__main__":
