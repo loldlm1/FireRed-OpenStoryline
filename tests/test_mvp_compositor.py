@@ -1,3 +1,4 @@
+import json
 from types import SimpleNamespace
 import unittest
 
@@ -7,6 +8,7 @@ from open_storyline.mvp.edit_plan import (
     EditSegment,
     FocalTarget,
     LayoutSpec,
+    OverlaySpec,
     TimeWindow,
 )
 from open_storyline.mvp.ffmpeg_filters import FilterGraphError, build_reframe_filtergraph
@@ -44,6 +46,35 @@ def clip_plan(segments):
 
 
 class CompositorTests(unittest.TestCase):
+    def test_execution_dict_serializes_nested_overlay_windows(self):
+        composition = resolve_clip_composition(
+            clip_plan([EditSegment(
+                id="overlay-segment",
+                source_window=TimeWindow(start_ms=0, end_ms=4000),
+                timeline_window=TimeWindow(start_ms=0, end_ms=4000),
+                layout=LayoutSpec(mode="fit"),
+                overlays=(OverlaySpec(
+                    id="presenter-pip",
+                    kind="pip",
+                    source_window=TimeWindow(start_ms=500, end_ms=2500),
+                    timeline_window=TimeWindow(start_ms=1000, end_ms=3000),
+                    position="top_right",
+                ),),
+                reason="keep the supporting source visible",
+            )]),
+            visual=visual([], []),
+            source_media=MediaInfo(4000, 640, 360, True),
+            output_width=180,
+            output_height=320,
+        )
+
+        payload = composition.to_dict()
+
+        json.dumps(payload)
+        overlay = payload["segments"][0]["overlays"][0]
+        self.assertEqual(overlay["timeline_window"], {"start_ms": 1000, "end_ms": 3000})
+        self.assertEqual(overlay["source_window"], {"start_ms": 500, "end_ms": 2500})
+
     def test_tracks_a_semantic_target_and_falls_back_for_wide_content(self):
         source = MediaInfo(4000, 640, 360, True)
         crop_segment = EditSegment(

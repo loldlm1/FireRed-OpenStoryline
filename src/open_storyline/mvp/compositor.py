@@ -54,6 +54,16 @@ class ResolvedOverlay:
     z_index: int
     position: str
 
+    def to_dict(self) -> dict[str, Any]:
+        value = asdict(self)
+        value["timeline_window"] = self.timeline_window.model_dump(mode="json")
+        value["source_window"] = (
+            self.source_window.model_dump(mode="json")
+            if self.source_window is not None
+            else None
+        )
+        return value
+
 
 @dataclass(frozen=True)
 class ResolvedSegment:
@@ -75,6 +85,7 @@ class ResolvedSegment:
         value = asdict(self)
         value["source_window"] = self.source_window.model_dump(mode="json")
         value["timeline_window"] = self.timeline_window.model_dump(mode="json")
+        value["overlays"] = [overlay.to_dict() for overlay in self.overlays]
         return value
 
 

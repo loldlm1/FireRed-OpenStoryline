@@ -1,3 +1,4 @@
+import json
 from pathlib import Path
 from tempfile import TemporaryDirectory
 import shutil
@@ -307,6 +308,7 @@ class CPUShortRendererTests(unittest.TestCase):
                 [item["id"] for item in execution["segments"][2]["overlays"]],
                 ["supporting-image", "hook-text"],
             )
+            json.dumps(result.execution)
             for expected in ("drawtext=", "overlay=", "xfade=", "acrossfade=", "fade=t=in"):
                 self.assertIn(expected, execution["filtergraph"])
             self.assertLess(execution["filtergraph_length"], 10_000)
