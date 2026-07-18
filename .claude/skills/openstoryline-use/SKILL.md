@@ -55,6 +55,7 @@ OpenStoryline 是一个剪辑 Agent，用户可使用自己的素材，通过自
 10. 下面的示例命令都使用`source .venv/bin/activate`作为示例，你需要根据用户实际使用的环境，替换成正确的命令（例如`conda activate `）。
 11. 遇到端口被占用的情况，优先换一个端口。
 12. `config.toml` 可能包含真实密钥。不要在日志、回复、补丁或上传文件中输出这些值。
+13. 不要要求用户在聊天中粘贴密钥。密钥必须由用户在本地终端隐藏输入，并且只验证配置能否加载，不读取或回显保存值。
 
 ## OpenClaw Execution Strategy (Important)
 
@@ -111,7 +112,7 @@ OpenStoryline 是一个剪辑 Agent，用户可使用自己的素材，通过自
 ### 1) 进入项目根目录并配置
 
 #### 必填配置
-在开始剪辑前，以下 6 个字段必须有值，否则模型调用会失败。你必须先向用户询问这些字段的具体值，然后用脚本进行修改：
+在开始剪辑前，以下 6 个字段必须有值，否则模型调用会失败。模型名称和 base URL 可以在聊天中确认；API key 必须由用户在本地终端输入，不能要求用户把真实值发到聊天中：
 
 - `[llm].model`
 - `[llm].base_url`
@@ -120,16 +121,29 @@ OpenStoryline 是一个剪辑 Agent，用户可使用自己的素材，通过自
 - `[vlm].base_url`
 - `[vlm].api_key`
 
-直接可用命令（在仓库根目录执行，以.venv为例）：
+先设置非密钥字段（在仓库根目录执行，以.venv为例）：
 
 ```bash
 cd <repo-root> && source .venv/bin/activate && python scripts/update_config.py --config ./config.toml --set llm.model=REPLACE_WITH_REAL_MODEL
 cd <repo-root> && source .venv/bin/activate && python scripts/update_config.py --config ./config.toml --set llm.base_url=REPLACE_WITH_REAL_URL
-cd <repo-root> && source .venv/bin/activate && python scripts/update_config.py --config ./config.toml --set llm.api_key=sk-REPLACE_WITH_REAL_KEY
-
 cd <repo-root> && source .venv/bin/activate && python scripts/update_config.py --config ./config.toml --set vlm.model=REPLACE_WITH_REAL_MODEL
 cd <repo-root> && source .venv/bin/activate && python scripts/update_config.py --config ./config.toml --set vlm.base_url=REPLACE_WITH_REAL_URL
-cd <repo-root> && source .venv/bin/activate && python scripts/update_config.py --config ./config.toml --set vlm.api_key=sk-REPLACE_WITH_REAL_KEY
+```
+
+然后在本地 Bash 终端隐藏输入密钥。密钥不会进入进程参数：
+
+```bash
+cd <repo-root> && source .venv/bin/activate
+set_secret() {
+  local key="$1"
+  read -rsp "$key: " OPENSTORYLINE_SECRET && printf '\n'
+  printf '%s' "$OPENSTORYLINE_SECRET" | \
+    python scripts/update_config.py --config ./config.toml --set-stdin "$key"
+  unset OPENSTORYLINE_SECRET
+}
+
+set_secret llm.api_key
+set_secret vlm.api_key
 ```
 
 #### 选填配置
@@ -142,7 +156,7 @@ cd <repo-root> && source .venv/bin/activate && python scripts/update_config.py -
 
 ##### 2. 素材检索（Pexels）
 ```bash
-cd <repo-root> && source .venv/bin/activate && python scripts/update_config.py --config ./config.toml --set search_media.pexels_api_key=REPLACE_WITH_PEXELS_KEY
+set_secret search_media.pexels_api_key
 ```
 
 ##### 3. TTS（如果需要配音）
@@ -151,17 +165,19 @@ cd <repo-root> && source .venv/bin/activate && python scripts/update_config.py -
 ```bash
 # minimax
 cd <repo-root> && source .venv/bin/activate && python scripts/update_config.py --config ./config.toml --set generate_voiceover.providers.minimax.base_url=https://api.minimax.chat/v1/t2a_v2
-cd <repo-root> && source .venv/bin/activate && python scripts/update_config.py --config ./config.toml --set generate_voiceover.providers.minimax.api_key=REPLACE_WITH_MINIMAX_KEY
+set_secret generate_voiceover.providers.minimax.api_key
 
 # bytedance
 cd <repo-root> && source .venv/bin/activate && python scripts/update_config.py --config ./config.toml --set generate_voiceover.providers.bytedance.uid=REPLACE_UID
 cd <repo-root> && source .venv/bin/activate && python scripts/update_config.py --config ./config.toml --set generate_voiceover.providers.bytedance.appid=REPLACE_APPID
-cd <repo-root> && source .venv/bin/activate && python scripts/update_config.py --config ./config.toml --set generate_voiceover.providers.bytedance.access_token=REPLACE_ACCESS_TOKEN
+set_secret generate_voiceover.providers.bytedance.access_token
 
 # 302
 cd <repo-root> && source .venv/bin/activate && python scripts/update_config.py --config ./config.toml --set generate_voiceover.providers.302.base_url=https://REPLACE_BASE_URL
-cd <repo-root> && source .venv/bin/activate && python scripts/update_config.py --config ./config.toml --set generate_voiceover.providers.302.api_key=REPLACE_API_KEY
+set_secret generate_voiceover.providers.302.api_key
 ```
+
+完成后只运行配置加载检查；不要读取或打印密钥值来确认配置。
 
 ---
 
@@ -301,22 +317,27 @@ cd <repo-root> && find .storyline/.server_cache/<session_id> -name "output_*.mp4
 #### OpenClaw + 飞书 APP 场景视频发送指南
 
 如果你是 OpenClaw 且用户使用手机飞书 APP，使用如下专属指南。要求：
-- Python 3.6+
-- 已安装 `requests`
-  ```bash
-  python3 -m pip install requests
-  ```
+- 使用仓库的 Python 3.11+ 环境，依赖中的 `httpx` 已安装
 - OpenClaw 已配置飞书渠道
 
-运行脚本示例如下，此脚本会自动从 ~/.openclaw/openclaw.json 读取飞书凭证。
+脚本会自动从 `~/.openclaw/openclaw.json` 读取飞书凭证，但只有在用户明确确认以下三项后才允许运行：
+
+1. 要发送的绝对文件路径；
+2. 完整 receive ID；
+3. receive ID 类型（`chat_id`、`open_id` 或 `user_id`）。
+
+不要根据环境变量或历史消息猜测发送目标。把三项内容展示给用户并得到明确确认后，才可以添加 `--confirm-send`。
+
 receive-id 的选择
 - oc_xxx -> chat_id：发到群聊或当前单聊会话，优先推荐
 - ou_xxx -> open_id：发给指定用户 
 - on_xxx -> user_id：仅当明确拿到的是 user_id 时再使用
 ```bash
 cd <repo-root> && source .venv/bin/activate && python <skills-root>/scripts/feishu_file_sender.py --help
-cd <repo-root> && source .venv/bin/activate && python <skills-root>/scripts/feishu_file_sender.py --file /absolute/path/to/video.mp4 --receive-id-type chat_id --receive-id oc_xxx
+cd <repo-root> && source .venv/bin/activate && python <skills-root>/scripts/feishu_file_sender.py --file /absolute/path/to/video.mp4 --receive-id-type chat_id --receive-id oc_xxx --confirm-send
 ```
+
+成功输出只包含 `ok`、receive ID 类型和可用时的稳定 message ID。失败输出只包含阶段、HTTP 状态、提供方错误码和固定的脱敏消息；不要输出完整提供方响应。
 
 ### 11) 二次编辑
 
