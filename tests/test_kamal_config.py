@@ -122,6 +122,14 @@ class KamalConfigTests(unittest.TestCase):
         )
         self.assertEqual(config["env"]["clear"]["OPENSTORYLINE_RETENTION_BATCH_SIZE"], 100)
         self.assertEqual(config["env"]["clear"]["OPENSTORYLINE_IMAGE_SIZE"], "1024x1024")
+        self.assertIs(
+            config["env"]["clear"]["OPENSTORYLINE_GENERATED_ASSETS_ENABLED"],
+            False,
+        )
+        self.assertEqual(
+            config["env"]["clear"]["OPENSTORYLINE_MAX_GENERATED_ASSETS_PER_CLIP"],
+            2,
+        )
         secrets = (ROOT / ".kamal" / "secrets.example").read_text(encoding="utf-8")
         kamal_env = (ROOT / ".env.kamal.example").read_text(encoding="utf-8")
         self.assertIn(

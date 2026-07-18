@@ -6,6 +6,13 @@ import asyncio
 import json
 
 from open_storyline.config import Settings
+from open_storyline.mvp.assets import (
+    generated_asset_server_cap,
+    generated_asset_size,
+    generated_assets_enabled,
+    resolve_generated_assets,
+    write_asset_manifest,
+)
 from open_storyline.mvp.edit_plan import (
     AgenticEditPlanner,
     AgenticArtifactNames,
@@ -35,6 +42,7 @@ from open_storyline.mvp.scene_boundaries import detect_scene_boundaries
 from open_storyline.mvp.shorts import ShortsPlanner, build_shorts_plan_artifact
 from open_storyline.mvp.visual_understanding import VisualUnderstandingPlanner
 from open_storyline.utils.remote_stt import MistralSTTClient, RemoteSTTError, extract_audio_for_stt
+from open_storyline.utils.remote_image import RemoteImageCascade
 
 
 class MVPJobProcessor:
@@ -49,6 +57,8 @@ class MVPJobProcessor:
         request = state.get("request") or {}
         agentic_requested = request.get("edit_mode") == "agentic"
         server_mode = None
+        effective_asset_policy = "off"
+        effective_generated_asset_cap = 0
         if agentic_requested:
             server_mode = resolve_agentic_server_mode(self.config.agentic_editing)
             if server_mode == "off":
@@ -56,6 +66,23 @@ class MVPJobProcessor:
                     "AGENTIC_EDITING_DISABLED",
                     "agentic editing is disabled on this server",
                 )
+            server_asset_cap = generated_asset_server_cap(self.config.agentic_editing)
+            job_asset_cap = int(
+                request.get("max_generated_assets_per_clip")
+                if request.get("max_generated_assets_per_clip") is not None
+                else server_asset_cap
+            )
+            effective_generated_asset_cap = min(
+                max(0, job_asset_cap),
+                server_asset_cap,
+                self.config.agentic_editing.max_assets_per_clip,
+            )
+            if (
+                str(request.get("asset_policy") or "auto") == "auto"
+                and generated_assets_enabled(self.config.agentic_editing)
+                and effective_generated_asset_cap > 0
+            ):
+                effective_asset_policy = "auto"
         source = await store.source_path(job_id)
         work_dir = store.work_dir(job_id)
         output_dir = store.output_dir(job_id)
@@ -181,10 +208,10 @@ class MVPJobProcessor:
                 scene_report=scene_report,
                 visual_understanding=visual_understanding,
                 source_duration_ms=media.duration_ms,
-                asset_policy=str(request.get("asset_policy") or "auto"),
+                asset_policy=effective_asset_policy,
                 max_segments_per_clip=self.config.agentic_editing.max_segments_per_clip,
                 max_overlays_per_clip=self.config.agentic_editing.max_overlays_per_clip,
-                max_assets_per_clip=self.config.agentic_editing.max_assets_per_clip,
+                max_assets_per_clip=effective_generated_asset_cap,
                 renderer_capabilities=REFRAME_RENDER_CAPABILITIES,
             )
             edit_planner_attempts = [
@@ -198,10 +225,21 @@ class MVPJobProcessor:
             )
             await store.register_artifact(job_id, edit_plan_path, kind="edit_plan")
 
-            preflight = build_preflight(
+            planned_asset_ids = {
+                asset.id
+                for clip in edit_plan.clips
+                for asset in clip.asset_requests
+            }
+            pending_asset_ids = (
+                planned_asset_ids
+                if effective_asset_policy == "auto"
+                else set()
+            )
+            preliminary_preflight = build_preflight(
                 edit_plan,
                 available_capabilities=REFRAME_RENDER_CAPABILITIES,
-                asset_policy=str(request.get("asset_policy") or "auto"),
+                asset_policy=effective_asset_policy,
+                pending_asset_ids=pending_asset_ids,
                 known_region_ids=(region.id for region in visual_understanding.regions),
                 known_track_ids=(track.id for track in visual_understanding.tracks),
                 known_evidence_ids_by_clip={
@@ -212,18 +250,72 @@ class MVPJobProcessor:
                 max_overlays_per_clip=self.config.agentic_editing.max_overlays_per_clip,
                 max_assets_per_clip=self.config.agentic_editing.max_assets_per_clip,
             )
+            shadow_allows_blocked = (
+                server_mode == "shadow"
+                and self.config.agentic_editing.shadow_allow_blocked_plans
+            )
+            if preliminary_preflight.blocking and not shadow_allows_blocked:
+                raise EditPlanError("EDIT_PREFLIGHT_BLOCKED", "agentic edit preflight is blocked")
+
+            if server_mode == "render":
+                if planned_asset_ids:
+                    await store.update(job_id, progress=0.66, stage="generating_assets")
+                asset_result = await resolve_generated_assets(
+                    edit_plan,
+                    output_dir=output_dir,
+                    asset_policy=effective_asset_policy,
+                    max_generated_assets_per_clip=effective_generated_asset_cap,
+                    cascade=(
+                        RemoteImageCascade.from_config(self.config.remote_image)
+                        if planned_asset_ids
+                        else None
+                    ),
+                    size=(
+                        generated_asset_size(self.config.remote_image)
+                        if planned_asset_ids
+                        else "1024x1024"
+                    ),
+                )
+                resolved_asset_ids = set(asset_result.paths)
+                preflight = build_preflight(
+                    edit_plan,
+                    available_capabilities=REFRAME_RENDER_CAPABILITIES,
+                    asset_policy=effective_asset_policy,
+                    resolved_asset_ids=resolved_asset_ids,
+                    known_region_ids=(region.id for region in visual_understanding.regions),
+                    known_track_ids=(track.id for track in visual_understanding.tracks),
+                    known_evidence_ids_by_clip={
+                        int(clip["clip_index"]): clip["evidence_ids"]
+                        for clip in shorts_plan_artifact["clips"]
+                    },
+                    max_segments_per_clip=self.config.agentic_editing.max_segments_per_clip,
+                    max_overlays_per_clip=self.config.agentic_editing.max_overlays_per_clip,
+                    max_assets_per_clip=self.config.agentic_editing.max_assets_per_clip,
+                )
+                if preflight.blocking:
+                    raise EditPlanError("EDIT_PREFLIGHT_BLOCKED", "resolved agentic edit preflight is blocked")
+            else:
+                asset_result = write_asset_manifest(
+                    edit_plan,
+                    output_dir=output_dir,
+                    asset_policy=effective_asset_policy,
+                    status="shadow_planned" if planned_asset_ids else "no_requests",
+                )
+                preflight = preliminary_preflight
+
+            for path in asset_result.paths.values():
+                await store.register_artifact(job_id, path, kind="generated_image")
+            await store.register_artifact(
+                job_id,
+                asset_result.manifest_path,
+                kind="asset_manifest",
+            )
             preflight_path = output_dir / names.preflight
             preflight_path.write_text(
                 json.dumps(preflight.to_dict(), ensure_ascii=False, indent=2),
                 encoding="utf-8",
             )
             await store.register_artifact(job_id, preflight_path, kind="edit_preflight")
-            shadow_allows_blocked = (
-                server_mode == "shadow"
-                and self.config.agentic_editing.shadow_allow_blocked_plans
-            )
-            if preflight.blocking and not shadow_allows_blocked:
-                raise EditPlanError("EDIT_PREFLIGHT_BLOCKED", "agentic edit preflight is blocked")
             agentic_manifest = {
                 "mode": server_mode,
                 "scene_boundaries": names.scene_boundaries,
@@ -243,6 +335,17 @@ class MVPJobProcessor:
                 "preflight": names.preflight,
                 "preflight_status": preflight.status,
                 "shadow_blocked": bool(preflight.blocking and shadow_allows_blocked),
+                "asset_manifest": names.asset_manifest,
+                "asset_policy": {
+                    "requested": str(request.get("asset_policy") or "auto"),
+                    "effective": effective_asset_policy,
+                    "max_generated_assets_per_clip": effective_generated_asset_cap,
+                },
+                "assets": {
+                    "requested": int(asset_result.manifest["requested_count"]),
+                    "resolved": int(asset_result.manifest["resolved_count"]),
+                    "provider_calls": asset_result.provider_call_count,
+                },
             }
 
         await store.update(job_id, progress=0.68, stage="rendering")
@@ -268,6 +371,7 @@ class MVPJobProcessor:
                 max_crop_velocity_ratio_per_second=(
                     self.config.agentic_editing.max_crop_velocity_ratio_per_second
                 ),
+                resolved_assets=asset_result.paths,
             )
             rendered = list(agentic_result.rendered)
             render_execution_path = output_dir / names.render_execution

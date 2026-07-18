@@ -22,6 +22,7 @@ RIGHTS_NOTICE = (
     "AI-generated output is not automatically copyright-free or legally rights-cleared. "
     "Review every asset before publication."
 )
+MAX_FINAL_IMAGE_PROMPT_LENGTH = 8000
 
 
 @dataclass(frozen=True)
@@ -36,11 +37,14 @@ def build_original_image_prompt(prompt: str, *, orientation: str, index: int, co
     if not clean_prompt:
         raise ValueError("image prompt is required")
     composition = "vertical portrait" if orientation == "portrait" else "horizontal landscape"
-    return (
+    final_prompt = (
         f"{clean_prompt}\n"
         f"Composition: {composition}. Variation {index + 1} of {count}.\n"
         f"{ORIGINALITY_SUFFIX}"
     )
+    if len(final_prompt) > MAX_FINAL_IMAGE_PROMPT_LENGTH:
+        raise ValueError("image prompt is too long after applying required safety guidance")
+    return final_prompt
 
 
 async def generate_remote_media(

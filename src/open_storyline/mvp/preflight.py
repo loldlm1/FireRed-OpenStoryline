@@ -58,6 +58,7 @@ def build_preflight(
     available_capabilities: Iterable[str],
     asset_policy: AssetPolicy,
     resolved_asset_ids: Iterable[str] = (),
+    pending_asset_ids: Iterable[str] = (),
     known_region_ids: Iterable[str] = (),
     known_track_ids: Iterable[str] = (),
     known_evidence_ids: Iterable[str] = (),
@@ -69,6 +70,7 @@ def build_preflight(
     available = tuple(sorted({str(value) for value in available_capabilities}))
     available_set = set(available)
     resolved = {str(value) for value in resolved_asset_ids}
+    pending = {str(value) for value in pending_asset_ids} - resolved
     regions = {str(value) for value in known_region_ids}
     tracks = {str(value) for value in known_track_ids}
     evidence = {str(value) for value in known_evidence_ids}
@@ -189,7 +191,11 @@ def build_preflight(
                         overlay_source,
                         "Overlay entrance and exit transitions exceed its timeline window.",
                     ))
-                if overlay.kind == "image" and overlay.asset_id not in resolved:
+                if (
+                    overlay.kind == "image"
+                    and overlay.asset_id not in resolved
+                    and overlay.asset_id not in pending
+                ):
                     findings.append(PreflightFinding(
                         "block",
                         "ASSET_UNRESOLVED",
@@ -205,6 +211,13 @@ def build_preflight(
                     "ASSET_POLICY_BLOCKED",
                     source,
                     "The job does not permit external assets.",
+                ))
+            elif asset.id in pending:
+                findings.append(PreflightFinding(
+                    "warn",
+                    "ASSET_PENDING",
+                    source,
+                    "The validated asset request is pending acquisition.",
                 ))
             elif asset.required and asset.id not in resolved:
                 findings.append(PreflightFinding(

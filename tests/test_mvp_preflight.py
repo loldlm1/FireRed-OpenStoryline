@@ -51,6 +51,7 @@ class EditPreflightTests(unittest.TestCase):
             kind="generated_image",
             provider="9router",
             timeline_window=TimeWindow(start_ms=0, end_ms=2_000),
+            visual_gap="the source contains only the speaker",
             purpose="explain an abstract idea",
             rationale="source contains only the speaker",
             prompt="a simple editorial illustration",
@@ -64,6 +65,13 @@ class EditPreflightTests(unittest.TestCase):
                 source_window=TimeWindow(start_ms=0, end_ms=20_000),
                 timeline_window=TimeWindow(start_ms=0, end_ms=20_000),
                 layout=LayoutSpec(mode="fit"),
+                overlays=(OverlaySpec(
+                    id="generated-overlay",
+                    kind="image",
+                    timeline_window=TimeWindow(start_ms=0, end_ms=2_000),
+                    asset_id="generated-1",
+                    position="top_right",
+                ),),
                 reason="keep source visible",
             ),),
             asset_requests=(asset,),
@@ -71,11 +79,11 @@ class EditPreflightTests(unittest.TestCase):
         plan = EditPlan(
             planner_version="test.v1",
             source_duration_ms=20_000,
-            requested_capabilities=("fit", "hard_cut", "subtitles"),
+            requested_capabilities=("fit", "hard_cut", "image_overlay", "subtitles"),
             clips=(clip,),
         )
 
-        capabilities = {"fit", "hard_cut", "subtitles"}
+        capabilities = {"fit", "hard_cut", "image_overlay", "subtitles"}
         off = build_preflight(plan, available_capabilities=capabilities, asset_policy="off")
         unresolved = build_preflight(plan, available_capabilities=capabilities, asset_policy="auto")
         resolved = build_preflight(
@@ -84,10 +92,18 @@ class EditPreflightTests(unittest.TestCase):
             asset_policy="auto",
             resolved_asset_ids={"generated-1"},
         )
+        pending = build_preflight(
+            plan,
+            available_capabilities=capabilities,
+            asset_policy="auto",
+            pending_asset_ids={"generated-1"},
+        )
 
         self.assertEqual(off.status, "blocked")
         self.assertEqual(unresolved.status, "blocked")
         self.assertEqual(resolved.status, "ready")
+        self.assertEqual(pending.status, "warn")
+        self.assertIn("ASSET_PENDING", {item.code for item in pending.findings})
 
     def test_blocks_unknown_visual_and_evidence_references(self):
         clip = ClipEditPlan(
@@ -148,6 +164,16 @@ class EditPreflightTests(unittest.TestCase):
                     ),
                 ),
                 reason="requested timeline layers",
+            ),),
+            asset_requests=(AssetRequest(
+                id="asset-1",
+                kind="generated_image",
+                provider="9router",
+                timeline_window=TimeWindow(start_ms=3000, end_ms=5000),
+                visual_gap="the source lacks a supporting image",
+                purpose="support the hook",
+                rationale="the requested still fills the declared visual gap",
+                prompt="an original supporting editorial image",
             ),),
         )
         plan = EditPlan(

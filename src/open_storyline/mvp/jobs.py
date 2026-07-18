@@ -20,7 +20,11 @@ from sqlalchemy.exc import IntegrityError, SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncConnection, AsyncSession
 
 from open_storyline.mvp.database import Database
-from open_storyline.mvp.edit_plan import EditPlanError, validate_job_controls
+from open_storyline.mvp.edit_plan import (
+    EditPlanError,
+    validate_generated_asset_limit,
+    validate_job_controls,
+)
 from open_storyline.mvp.models import Artifact, EditingSession, JobEvent, VideoJob
 from open_storyline.mvp.observability import emit_event
 from open_storyline.mvp.security import sanitize_for_persistence, sanitize_text
@@ -34,11 +38,15 @@ CAPACITY_ADVISORY_LOCK = 7_303_110_792_762
 WORKER_EXECUTION_ADVISORY_LOCK = 7_303_110_792_763
 MEDIA_ARTIFACT_SUFFIXES = {
     ".avi",
+    ".jpeg",
+    ".jpg",
     ".m4v",
     ".mkv",
     ".mov",
     ".mp4",
+    ".png",
     ".webm",
+    ".webp",
     ".zip",
 }
 Processor = Callable[[str, "JobStore"], Awaitable[dict[str, Any] | None]]
@@ -370,6 +378,7 @@ class JobStore:
         max_clips: int = 8,
         edit_mode: str = "legacy",
         asset_policy: str = "auto",
+        max_generated_assets_per_clip: int = 2,
         job_id: str | None = None,
     ) -> dict[str, Any]:
         clean_prompt = str(prompt or "").strip()
@@ -381,6 +390,9 @@ class JobStore:
             normalized_edit_mode, normalized_asset_policy = validate_job_controls(
                 edit_mode,
                 asset_policy,
+            )
+            generated_asset_limit = validate_generated_asset_limit(
+                max_generated_assets_per_clip
             )
         except EditPlanError as exc:
             raise JobStoreError(exc.code, str(exc)) from exc
@@ -400,6 +412,7 @@ class JobStore:
                 "max_clips": int(max_clips),
                 "edit_mode": normalized_edit_mode,
                 "asset_policy": normalized_asset_policy,
+                "max_generated_assets_per_clip": generated_asset_limit,
             },
             input_data={
                 "original_filename": _safe_filename(filename),

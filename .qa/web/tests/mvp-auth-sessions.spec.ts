@@ -24,6 +24,17 @@ test.describe('remote MVP password sessions', () => {
     await page.locator('#password').press('Enter');
     await expect(page.locator('#app-view')).toBeVisible();
     await expect(page.locator('#login-view')).toBeHidden();
+    await expect(page.locator('#edit-mode')).toHaveValue('legacy');
+    await expect(page.locator('#asset-policy')).toBeDisabled();
+    await expect(page.locator('#asset-policy-help')).toContainText(
+      'No se genera una imagen por defecto',
+    );
+    await page.locator('#edit-mode').selectOption('agentic');
+    await expect(page.locator('#asset-policy')).toBeEnabled();
+    await expect(page.locator('#max-generated-assets')).toBeEnabled();
+    await page.locator('#asset-policy').selectOption('off');
+    await expect(page.locator('#max-generated-assets')).toBeDisabled();
+    await page.locator('#edit-mode').selectOption('legacy');
 
     const sessionTitle = `Browser session ${Date.now()}`;
     await page.locator('#session-title').fill(sessionTitle);
@@ -126,6 +137,14 @@ test.describe('remote MVP password sessions', () => {
     await page.locator('#password').press('Enter');
     await expect(page.locator('#app-view')).toBeVisible();
     await expect(page.locator('#job-form')).toBeVisible();
+    await expect(page.locator('#edit-mode')).toBeVisible();
+    await expect(page.locator('#asset-policy-help')).toBeVisible();
+    await expect(page.locator('#asset-policy')).toBeDisabled();
+    await page.locator('#edit-mode').selectOption('agentic');
+    await expect(page.locator('#asset-policy')).toBeEnabled();
+    await expect(page.locator('#max-generated-assets')).toBeEnabled();
+    await page.locator('#asset-policy').selectOption('off');
+    await expect(page.locator('#max-generated-assets')).toBeDisabled();
     await expect(page.locator('#logout')).toBeVisible();
     expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(390);
   });
