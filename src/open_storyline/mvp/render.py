@@ -9,6 +9,14 @@ import re
 import subprocess
 
 from open_storyline.mvp.shorts import ShortCandidate
+from open_storyline.mvp.compositor import (
+    RENDER_EXECUTION_VERSION,
+    ClipComposition,
+    resolve_clip_composition,
+)
+from open_storyline.mvp.edit_plan import EditPlan
+from open_storyline.mvp.ffmpeg_filters import build_reframe_filtergraph
+from open_storyline.mvp.visual_understanding import VisualUnderstanding
 
 
 class RenderError(RuntimeError):
@@ -50,6 +58,12 @@ class RenderedShort:
             "subtitles": self.subtitle_path.name if self.subtitle_path else None,
             "clip": self.clip.to_dict(),
         }
+
+
+@dataclass(frozen=True)
+class AgenticRenderResult:
+    rendered: tuple[RenderedShort, ...]
+    execution: dict[str, Any]
 
 
 def _reason(value: str, limit: int = 1200) -> str:
@@ -219,3 +233,124 @@ class CPUShortRenderer:
             )
             for index, clip in enumerate(clips, start=1)
         ]
+
+
+class AgenticShortRenderer:
+    def __init__(self, settings: RenderSettings | None = None) -> None:
+        self.settings = settings or RenderSettings()
+
+    def render_plan(
+        self,
+        *,
+        source: str | Path,
+        edit_plan: EditPlan,
+        selected_clips: Sequence[ShortCandidate],
+        visual_understanding: VisualUnderstanding,
+        transcript_segments: Sequence[dict[str, Any]],
+        destination_dir: str | Path,
+        source_media: MediaInfo | None = None,
+        crop_hysteresis_ratio: float = 0.03,
+        crop_smoothing_alpha: float = 0.65,
+        max_crop_velocity_ratio_per_second: float = 0.45,
+    ) -> AgenticRenderResult:
+        if len(edit_plan.clips) != len(selected_clips):
+            raise RenderError(
+                "AGENTIC_RENDER_CLIP_MISMATCH",
+                "edit plan and selected clip counts do not match",
+            )
+        output_dir = Path(destination_dir).resolve()
+        output_dir.mkdir(parents=True, exist_ok=True)
+        media = source_media or probe_media(source)
+        settings = self.settings
+        rendered: list[RenderedShort] = []
+        executions: list[dict[str, Any]] = []
+
+        for clip_plan, selected_clip in zip(edit_plan.clips, selected_clips):
+            if (
+                clip_plan.source_window.start_ms != selected_clip.start_ms
+                or clip_plan.source_window.end_ms != selected_clip.end_ms
+            ):
+                raise RenderError(
+                    "AGENTIC_RENDER_CLIP_MISMATCH",
+                    f"clip {clip_plan.clip_index} source bounds changed after planning",
+                )
+            video_path = output_dir / clip_plan.output_name
+            subtitle_path = write_clip_subtitles(
+                output_dir / f"{video_path.stem}.srt",
+                clip=selected_clip,
+                transcript_segments=transcript_segments,
+            )
+            composition: ClipComposition = resolve_clip_composition(
+                clip_plan,
+                visual=visual_understanding,
+                source_media=media,
+                output_width=settings.width,
+                output_height=settings.height,
+                hysteresis_ratio=crop_hysteresis_ratio,
+                smoothing_alpha=crop_smoothing_alpha,
+                max_crop_velocity_ratio_per_second=max_crop_velocity_ratio_per_second,
+            )
+            filtergraph, video_label, audio_label = build_reframe_filtergraph(
+                composition.segments,
+                output_width=settings.width,
+                output_height=settings.height,
+                subtitle_filename=subtitle_path.name if subtitle_path else None,
+                has_audio=media.has_audio,
+            )
+            command = [
+                "ffmpeg", "-y", "-v", "error",
+                "-i", str(Path(source).resolve()),
+                "-filter_complex", filtergraph,
+                "-map", f"[{video_label}]", "-map", f"[{audio_label}]",
+                "-r", str(settings.fps),
+                "-c:v", "libx264", "-preset", settings.preset, "-crf", str(settings.crf),
+                "-pix_fmt", "yuv420p", "-c:a", "aac", "-b:a", "128k",
+                "-movflags", "+faststart", "-shortest", video_path.name,
+            ]
+            try:
+                result = subprocess.run(
+                    command,
+                    cwd=output_dir,
+                    capture_output=True,
+                    text=True,
+                    check=False,
+                    timeout=settings.timeout,
+                )
+            except (FileNotFoundError, subprocess.TimeoutExpired) as exc:
+                raise RenderError("AGENTIC_VIDEO_RENDER_FAILED", str(exc)) from exc
+            if result.returncode != 0 or not video_path.is_file():
+                raise RenderError("AGENTIC_VIDEO_RENDER_FAILED", _reason(result.stderr))
+            rendered.append(RenderedShort(
+                video_path=video_path,
+                subtitle_path=subtitle_path,
+                clip=selected_clip,
+            ))
+            executions.append({
+                **composition.to_dict(),
+                "video": video_path.name,
+                "subtitles": subtitle_path.name if subtitle_path else None,
+                "encode_count": 1,
+                "filtergraph": filtergraph,
+                "filtergraph_length": len(filtergraph),
+            })
+
+        return AgenticRenderResult(
+            rendered=tuple(rendered),
+            execution={
+                "version": RENDER_EXECUTION_VERSION,
+                "plan_version": edit_plan.version,
+                "output": {
+                    "width": settings.width,
+                    "height": settings.height,
+                    "fps": settings.fps,
+                    "video_codec": "h264",
+                    "audio_codec": "aac",
+                },
+                "summary": {
+                    "clips": len(executions),
+                    "encodes": len(executions),
+                    "fallbacks": sum(item["fallback_count"] for item in executions),
+                },
+                "clips": executions,
+            },
+        )

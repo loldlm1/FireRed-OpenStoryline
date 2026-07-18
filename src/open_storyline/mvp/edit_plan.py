@@ -517,7 +517,14 @@ class AgenticEditPlanner:
         max_segments_per_clip: int,
         max_overlays_per_clip: int,
         max_assets_per_clip: int,
+        renderer_capabilities: Iterable[str] = SUPPORTED_CAPABILITIES,
     ) -> EditPlan:
+        available_capabilities = frozenset(str(value) for value in renderer_capabilities)
+        if not available_capabilities or not available_capabilities <= SUPPORTED_CAPABILITIES:
+            raise EditPlanError(
+                "EDIT_PLAN_CAPABILITY_CONFIG_INVALID",
+                "renderer capabilities must be a non-empty supported subset",
+            )
         clip_contexts = [
             _clip_context(
                 clip,
@@ -533,7 +540,7 @@ class AgenticEditPlanner:
             "editing_prompt": _safe_text(editing_prompt, limit=12_000),
             "source_duration_ms": source_duration_ms,
             "asset_policy": asset_policy,
-            "renderer_capabilities": sorted(SUPPORTED_CAPABILITIES),
+            "renderer_capabilities": sorted(available_capabilities),
             "budgets": {
                 "max_segments_per_clip": max_segments_per_clip,
                 "max_overlays_per_clip": max_overlays_per_clip,
@@ -561,6 +568,12 @@ class AgenticEditPlanner:
             "source_duration_ms": source_duration_ms,
         })
         plan = validate_edit_plan(payload, source_duration_ms=source_duration_ms)
+        unavailable = sorted(set(plan.requested_capabilities) - available_capabilities)
+        if unavailable:
+            raise EditPlanError(
+                "EDIT_PLAN_CAPABILITY_UNAVAILABLE",
+                f"planner requested unavailable capabilities: {', '.join(unavailable)}",
+            )
         known_evidence_ids_by_clip = {
             int(clip.get("clip_index") or 0): {
                 str(evidence_id)
@@ -639,3 +652,4 @@ class AgenticArtifactNames:
     shorts_plan: str = "shorts_plan.json"
     edit_plan: str = "edit_plan.json"
     preflight: str = "edit_preflight.json"
+    render_execution: str = "render_execution.json"
