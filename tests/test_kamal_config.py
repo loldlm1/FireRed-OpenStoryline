@@ -130,6 +130,10 @@ class KamalConfigTests(unittest.TestCase):
             config["env"]["clear"]["OPENSTORYLINE_MAX_GENERATED_ASSETS_PER_CLIP"],
             2,
         )
+        self.assertIs(config["env"]["clear"]["OPENSTORYLINE_CREATIVE_QA_ENABLED"], True)
+        self.assertIs(config["env"]["clear"]["OPENSTORYLINE_CREATIVE_QA_STRICT"], True)
+        self.assertIs(config["env"]["clear"]["OPENSTORYLINE_SEMANTIC_QA_ENABLED"], False)
+        self.assertEqual(config["env"]["clear"]["OPENSTORYLINE_SEMANTIC_QA_MAX_FRAMES"], 4)
         secrets = (ROOT / ".kamal" / "secrets.example").read_text(encoding="utf-8")
         kamal_env = (ROOT / ".env.kamal.example").read_text(encoding="utf-8")
         self.assertIn(

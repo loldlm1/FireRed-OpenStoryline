@@ -18,6 +18,7 @@ from open_storyline.mvp.edit_plan import (
     build_shadow_edit_plan,
 )
 from open_storyline.mvp.frame_sampling import FrameManifest, SampledFrame
+from open_storyline.mvp.creative_qa import CreativeQAArtifacts
 from open_storyline.mvp.pipeline import MVPJobProcessor
 from open_storyline.mvp.render import AgenticRenderResult, MediaInfo, RenderedShort
 from open_storyline.mvp.scene_boundaries import build_scene_boundaries
@@ -228,6 +229,27 @@ class FakeRemoteClient:
     last_attempts = ()
 
 
+async def fake_creative_qa_artifacts(*, output_dir, **_kwargs):
+    root = Path(output_dir)
+    render_path = root / "render_qa.json"
+    rhythm_path = root / "retention_rhythm_qa.json"
+    conformance_path = root / "creative_conformance.json"
+    render = {"version": "render_qa.v1", "status": "pass"}
+    rhythm = {"version": "retention_rhythm_qa.v1", "status": "pass"}
+    conformance = {"version": "creative_conformance.v1", "status": "pass"}
+    render_path.write_text(json.dumps(render), encoding="utf-8")
+    rhythm_path.write_text(json.dumps(rhythm), encoding="utf-8")
+    conformance_path.write_text(json.dumps(conformance), encoding="utf-8")
+    return CreativeQAArtifacts(
+        render_path,
+        rhythm_path,
+        conformance_path,
+        render,
+        rhythm,
+        conformance,
+    )
+
+
 class FakeStore:
     def __init__(self, root: Path, *, server_request: dict):
         self.root = root
@@ -275,6 +297,10 @@ def config(mode: str, *, generated_assets: bool = False):
             max_assets_per_clip=4,
             generated_assets_enabled=generated_assets,
             max_generated_assets_per_clip=2,
+            creative_qa_enabled=False,
+            creative_qa_strict=True,
+            semantic_qa_enabled=False,
+            semantic_qa_max_frames=4,
             scene_threshold=0.35,
             min_scene_duration_ms=1000,
             max_scenes=64,
@@ -446,6 +472,7 @@ class MVPAgenticPipelineTests(unittest.IsolatedAsyncioTestCase):
             )
             processor = object.__new__(MVPJobProcessor)
             processor.config = config("render")
+            processor.config.agentic_editing.creative_qa_enabled = True
             processor.stt = FakeSTT()
             scene_report = build_scene_boundaries([], source_duration_ms=30_000, threshold=0.35)
             frame_manifest = FrameManifest(
@@ -475,13 +502,21 @@ class MVPAgenticPipelineTests(unittest.IsolatedAsyncioTestCase):
                 patch("open_storyline.mvp.pipeline.ShortsPlanner", FakePlanner),
                 patch("open_storyline.mvp.pipeline.AgenticShortRenderer", FakeAgenticRenderer),
                 patch("open_storyline.mvp.pipeline.CPUShortRenderer", side_effect=AssertionError("legacy renderer called")),
+                patch(
+                    "open_storyline.mvp.pipeline.generate_creative_qa_artifacts",
+                    side_effect=fake_creative_qa_artifacts,
+                ),
             ):
                 await processor("d" * 32, store)
 
             names = {name for name, _kind in store.registered}
             manifest = json.loads((root / "output" / "manifest.json").read_text(encoding="utf-8"))
             self.assertIn("render_execution.json", names)
+            self.assertIn("render_qa.json", names)
+            self.assertIn("retention_rhythm_qa.json", names)
+            self.assertIn("creative_conformance.json", names)
             self.assertEqual(manifest["agentic"]["render_execution"], "render_execution.json")
+            self.assertEqual(manifest["agentic"]["qa"]["status"], "pass")
             self.assertEqual((root / "output" / "short-01.mp4").read_bytes(), b"agentic-render")
 
     async def test_render_mode_generates_only_requested_assets_and_inserts_them(self):

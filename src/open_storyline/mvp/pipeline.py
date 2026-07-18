@@ -28,6 +28,14 @@ from open_storyline.mvp.ffmpega import (
 )
 from open_storyline.mvp.frame_sampling import sample_frames
 from open_storyline.mvp.compositor import REFRAME_RENDER_CAPABILITIES
+from open_storyline.mvp.creative_qa import (
+    QAInput,
+    creative_qa_enabled,
+    creative_qa_strict,
+    generate_creative_qa_artifacts,
+    semantic_qa_enabled,
+    semantic_qa_frame_limit,
+)
 from open_storyline.mvp.jobs import JobStore
 from open_storyline.mvp.ninerouter import NineRouterClient
 from open_storyline.mvp.render import (
@@ -395,6 +403,7 @@ class MVPJobProcessor:
             )
         effects_plan = None
         final_outputs = []
+        qa_inputs: list[QAInput] = []
         ffmpega = None
         if ffmpega_enabled(self.config.ffmpega):
             await store.update(job_id, progress=0.88, stage="planning_effects")
@@ -428,6 +437,61 @@ class MVPJobProcessor:
                 "subtitles": item.subtitle_path.name if item.subtitle_path else None,
                 "clip": item.clip.to_dict(),
             })
+            qa_inputs.append(QAInput(
+                clip_index=len(qa_inputs) + 1,
+                video_path=final_video,
+                expected_duration_ms=item.clip.duration_ms,
+                subtitle_path=item.subtitle_path,
+            ))
+
+        if agentic_requested and server_mode == "render":
+            qa_manifest: dict[str, Any] = {"enabled": False, "status": "disabled"}
+            try:
+                if creative_qa_enabled(self.config.agentic_editing):
+                    await store.update(job_id, progress=0.94, stage="post_render_qa")
+                    strict_qa = creative_qa_strict(self.config.agentic_editing)
+                    semantic_enabled = semantic_qa_enabled(self.config.agentic_editing)
+                    qa_artifacts = await generate_creative_qa_artifacts(
+                        output_dir=output_dir,
+                        inputs=qa_inputs,
+                        edit_plan=edit_plan.to_dict(),
+                        render_execution=agentic_result.execution,
+                        expected_width=render_settings.width,
+                        expected_height=render_settings.height,
+                        strict=strict_qa,
+                        semantic_enabled=semantic_enabled,
+                        semantic_max_frames=semantic_qa_frame_limit(
+                            self.config.agentic_editing
+                        ),
+                        semantic_client=remote_client,
+                    )
+                    registered = []
+                    for path, kind in (
+                        (qa_artifacts.render_qa_path, "render_qa"),
+                        (qa_artifacts.rhythm_qa_path, "retention_rhythm_qa"),
+                        (qa_artifacts.conformance_path, "creative_conformance"),
+                    ):
+                        await store.register_artifact(job_id, path, kind=kind)
+                        registered.append(path.name)
+                    qa_manifest = {
+                        "enabled": True,
+                        "strict": strict_qa,
+                        "semantic_enabled": semantic_enabled,
+                        "status": qa_artifacts.conformance.get("status", "unavailable"),
+                        "render_qa": names.render_qa,
+                        "retention_rhythm_qa": names.retention_rhythm_qa,
+                        "creative_conformance": names.creative_conformance,
+                        "registered": registered,
+                    }
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:
+                qa_manifest = {
+                    "enabled": True,
+                    "status": "unavailable",
+                    "error_code": str(getattr(exc, "code", "CREATIVE_QA_UNAVAILABLE"))[:80],
+                }
+            agentic_manifest["qa"] = qa_manifest
 
         manifest_path = output_dir / "manifest.json"
         manifest_path.write_text(json.dumps({

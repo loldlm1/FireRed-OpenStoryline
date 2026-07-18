@@ -1,0 +1,9 @@
+{
+  "version": "mvp_agentic_fixture.v1",
+  "id": "two-speaker-interview",
+  "prompt_context": "Follow the active speaker without losing the conversational relationship between participants.",
+  "expected_roles": ["speaker"],
+  "expected_capabilities": ["crop", "fit", "hard_cut", "subtitles"],
+  "expected_asset_calls": 0,
+  "metrics": ["schema_validity", "source_bounds", "target_visibility", "crop_smoothing", "fallbacks", "center_fallbacks", "qa_status", "latency_ms", "provider_calls"]
+}
