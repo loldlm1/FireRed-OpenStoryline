@@ -59,8 +59,9 @@ remain available independently.
 | Runtime editing skills | `.storyline/skills/`, `src/open_storyline/skills/skills_io.py` | Skill metadata/tool-name review and workflow test |
 | Session/artifact state | `src/open_storyline/storage/` | Corruption, isolation, restore, and path-safety tests |
 | Remote MVP policy | `docs/mvp/architecture.md`, `src/open_storyline/mvp/` | Remote profile, provider, API, job, render, and security tests |
+| Remote database state | `migrations/`, `alembic.ini`, `src/open_storyline/mvp/database.py`, `models.py`, `auth.py`, `jobs.py`, `audit.py`, `retention.py` | Auth, database, job, audit, retention, backup, and restore-check tests |
 | Deployment | `Dockerfile.remote`, `config/deploy.yml`, env examples, `bin/kamal-mvp` | `tests/test_kamal_config.py`, image build/config checks |
-| Operator automation | `.claude/skills/` and their scripts | Front matter review and safe local dry runs |
+| Operator automation | Canonical `.claude/skills/`, Codex discovery links under `.agents/skills/`, and their scripts | Current skill validator and safe local dry runs |
 
 ## Contract Boundaries
 
@@ -80,12 +81,15 @@ remain available independently.
 ### State and filesystem boundaries
 
 - Full-agent sessions and artifacts are scoped by `session_id`.
-- Remote MVP application state is scoped by PostgreSQL editing-session and job
-  IDs. Media paths remain job-owned and filesystem-validated.
+- PostgreSQL is authoritative for remote browser sessions, failed-login
+  buckets, editing sessions, jobs, artifact metadata, ordered events, audit
+  evidence, reviews, holds, and retention state. Media paths remain job-owned
+  and filesystem-validated.
 - Resolved paths must stay under their expected session/job root.
 - Job state transitions and events commit transactionally in PostgreSQL.
-  `job.json` is a derived rollback snapshot; queued/running jobs recover only
-  under the advisory worker lock.
+  Media/work files remain under `outputs/mvp_jobs/<job_id>`. `job.json` is a
+  derived rollback snapshot, not an authoritative state store; queued/running
+  jobs recover only under the advisory worker lock.
 - Runtime outputs, downloaded models, and resources are ignored because they can
   be large or private. Tests should use temporary directories and synthetic data.
 
@@ -97,6 +101,8 @@ remain available independently.
 - Bearer tokens, `X-API-Key`, browser token storage, authenticated API quotas,
   and job-creation quotas are intentionally unsupported. Persistent per-client
   and global counters apply only to failed password submissions.
+  `OPENSTORYLINE_MAX_ACTIVE_JOBS` bounds concurrent queue capacity; it is not a
+  per-user or time-window quota.
 - New jobs use `POST /api/mvp/sessions/{session_id}/jobs`. The retired unscoped
   `POST /api/mvp/jobs` returns `SESSION_REQUIRED`; polling and artifact routes
   remain job-scoped for compatibility.
@@ -141,10 +147,29 @@ evidence use, tool selection, parsing, and failure handling instead.
 | Web UI | Focused browser smoke on desktop/mobile plus API/WebSocket contract checks |
 | Documentation only | Link/path search, command syntax review, bilingual navigation parity |
 
-The complete deterministic suite is:
+The fast local non-browser baseline is:
 
 ```bash
-PYTHONPATH=src python -m unittest discover -s tests -p 'test_*.py' -v
+PYTHONPATH=src .venv/bin/python -m unittest discover -s tests -p 'test_*.py' -v
+```
+
+Database-backed classes skip when `TEST_DATABASE_URL` is unset. Report those
+skips explicitly; the baseline is not connected-database evidence. When a
+disposable PostgreSQL database is available, its name must start with
+`openstoryline_test`:
+
+```bash
+TEST_DATABASE_URL='postgresql+psycopg://USER:PASSWORD@127.0.0.1/openstoryline_test' \
+  PYTHONPATH=src .venv/bin/python -m unittest discover -s tests -p 'test_*.py' -v
+```
+
+Validate every current deployment shell entry point without contacting a live
+server:
+
+```bash
+bash -n run.sh build_env.sh download.sh bin/kamal-mvp \
+  scripts/mvp-postgres-init.sh scripts/mvp-postgres-backup.sh \
+  scripts/mvp-postgres-restore-check.sh .kamal/hooks/pre-deploy
 ```
 
 This project currently has no checked-in formatter, linter, type checker,
@@ -158,9 +183,10 @@ part of a feature.
   the documented production path.
 - `.env.kamal.example` documents deploy-machine variables. `.kamal/secrets`
   stores references and is ignored. Never commit resolved secret values.
-- `outputs/` is mounted persistently in production because it contains inputs,
-  work files, generated artifacts, and rollback snapshots. PostgreSQL is
-  authoritative for authentication, editing sessions, jobs, and audit metadata.
+- `outputs/` is mounted persistently because it contains inputs, work files,
+  generated artifacts, and rollback snapshots. The private PostgreSQL
+  accessory separately persists database data and the one-file backup
+  directory. PostgreSQL remains authoritative for application and audit state.
 - `src/open_storyline/mvp/audit.py` owns bounded JSON/SRT ingestion, structural
   QC, reviews, filters, and backfill. `kamal app logs` is recent diagnostic
   context only; agents should query the PostgreSQL audit CLI for durable history.
@@ -180,6 +206,8 @@ or modify live servers without explicit authorization.
 - `docs/mvp/architecture.md`: current remote MVP product/runtime policy.
 - `docs/mvp/implementation-history.md`: completed implementation record, not an active plan.
 - `.claude/skills/`: operator automation for installation and use.
+- `.agents/skills/`: repo-local Codex discovery links to the canonical operator
+  skills; do not fork or duplicate the skill contents.
 - `.storyline/skills/`: runtime editing behavior loaded by the product.
 - `README.md` and `README_zh.md`: user-facing navigation and quick starts.
 

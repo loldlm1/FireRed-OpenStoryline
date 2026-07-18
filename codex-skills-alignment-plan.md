@@ -274,17 +274,17 @@ skills through current Codex repo discovery.
 **Dependencies**: Sprint 1 gate complete.
 
 **Tracked scope**:
-`AGENTS.md`, `docs/agent-engineering.md`, `README.md`, `README_zh.md`,
+`AGENTS.md`, `docs/agent-engineering.md`, `docs/mvp/guia-es.md`, `README.md`, `README_zh.md`,
 `.agents/skills/openstoryline-install`, `.agents/skills/openstoryline-use`
 
 **Commit**: `docs(agents): align repository guidance with current Codex stack`
 
 **Demo/Validation**:
 
-- `PYTHONPATH=src .venv/bin/python tests/test_kamal_config.py`
-- `PYTHONPATH=src .venv/bin/python tests/test_remote_profile.py`
-- `PYTHONPATH=src .venv/bin/python tests/test_mvp_auth.py`
-- `PYTHONPATH=src .venv/bin/python tests/test_mvp_database.py`
+- `PYTHONPATH=src .venv/bin/python -m unittest tests/test_kamal_config.py -v`
+- `PYTHONPATH=src .venv/bin/python -m unittest tests/test_remote_profile.py -v`
+- `PYTHONPATH=src .venv/bin/python -m unittest tests/test_mvp_auth.py -v`
+- `PYTHONPATH=src .venv/bin/python -m unittest tests/test_mvp_database.py -v`
 - `test -L .agents/skills/openstoryline-install && test -L .agents/skills/openstoryline-use`
 - `python /home/loldlm/.codex/skills/.system/skill-creator/scripts/quick_validate.py .agents/skills/openstoryline-install`
 - `python /home/loldlm/.codex/skills/.system/skill-creator/scripts/quick_validate.py .agents/skills/openstoryline-use`
@@ -326,7 +326,7 @@ and application behavior remain intact.
 
 ### Task 2.2: Correct Skill Routing, Scope, And GitHub Base
 
-- **Location**: `AGENTS.md`
+- **Location**: `AGENTS.md`, `docs/mvp/guia-es.md`
 - **Description**:
   - Remove the hardcoded `/home/loldlm/.codex/skills` path from precedence.
   - Add `postgres-production-engineering` for migrations, locking, backup,
@@ -335,6 +335,8 @@ and application behavior remain intact.
     `token-efficient-web-qa` only to browser-runner verification.
   - Replace the retired `agent/remote-video-mvp` PR-base rule with fork `main` as
     the default unless the user identifies another maintained integration base.
+  - Remove the retired branch checkout from the Spanish deployment guide; a
+    fresh fork clone already checks out the maintained default branch.
   - Prune generic Git, minimal-change, model-security, secret, and handoff prose
     already supplied by installed personal skills, while retaining FireRed
     contracts, dangerous script names, external-action boundaries, bilingual

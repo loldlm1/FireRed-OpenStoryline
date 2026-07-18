@@ -156,21 +156,20 @@ cp -R .claude/skills/openstoryline-install ~/.claude/skills/
 cp -R .claude/skills/openstoryline-use ~/.claude/skills/
 ```
 
+### Codex
+
+在本仓库内启动 Codex 时，Codex 会通过 `.agents/skills/` 自动发现这两个项目级 Skills。可显式调用：
+
+```text
+$openstoryline-install
+$openstoryline-use
+```
+
+`.agents/skills/` 中的条目是指向规范 `.claude/skills/` 目录的仓库相对链接，因此 Claude Code、OpenClaw 和 Codex 使用同一份工作流内容。若要安装到 Codex 用户级目录，请调用 `$skill-installer`，并让它从 `FireRedTeam/FireRed-OpenStoryline` 安装 `.claude/skills/openstoryline-install` 与 `.claude/skills/openstoryline-use`。
+
 ### 其他兼容 Agent（实验性）
 
-这些 Skills 基于开放的 Agent Skills 格式，理论上也可安装到其他兼容的 agent 中。
-例如，可通过 Skills CLI 安装到 Codex：
-
-```bash
-npx skills add FireRedTeam/FireRed-OpenStoryline --skill openstoryline-install --agent codex
-npx skills add FireRedTeam/FireRed-OpenStoryline --skill openstoryline-use --agent codex
-```
-
-或者使用下面的命令，选择 --global 参数将此技能安装到用户级目录，跨项目可用：
-```bash
-npx skills add FireRedTeam/FireRed-OpenStoryline --skill openstoryline-install --global
-npx skills add FireRedTeam/FireRed-OpenStoryline --skill openstoryline-use --global
-```
+这些 Skills 使用开放的 Agent Skills 格式，也可能适用于其他兼容 Agent。请遵循对应 Agent 当前的安装与发现文档，不要假设 Codex 的仓库路径同样适用。
 
 ## 📦 安装
 
