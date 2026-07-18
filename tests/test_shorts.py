@@ -1,9 +1,13 @@
 import json
 import unittest
+from types import SimpleNamespace
 
 from open_storyline.mvp.shorts import (
     ShortsPlanError,
     ShortsPlanner,
+    ShortCandidate,
+    ShortsPlan,
+    build_shorts_plan_artifact,
     format_transcript,
     validate_candidates,
 )
@@ -42,6 +46,45 @@ class CandidateValidationTests(unittest.TestCase):
             validate_candidates([
                 {"start_ms": 0, "end_ms": 20_000, "score": float("nan")},
             ], source_duration_ms=30_000, max_clips=1)
+
+    def test_builds_independent_timestamped_evidence_artifact(self):
+        plan = ShortsPlan(
+            clips=[ShortCandidate(1000, 21_000, "A", "Hook", "Reason", 0.9)],
+            rejected=[],
+        )
+        scene = SimpleNamespace(
+            id="scene-001",
+            start_ms=0,
+            end_ms=30_000,
+        )
+        region = SimpleNamespace(
+            id="region-1",
+            frame_id="frame-001",
+            role="screen",
+        )
+        track = SimpleNamespace(
+            id="track-1",
+            start_ms=500,
+            end_ms=22_000,
+            role="screen",
+        )
+        visual = SimpleNamespace(
+            frame_manifest={"frames": [{"id": "frame-001", "timestamp_ms": 5000}]},
+            regions=(region,),
+            tracks=(track,),
+        )
+
+        artifact = build_shorts_plan_artifact(
+            plan,
+            transcript_segments=[{"start": 1000, "end": 3000, "text": "private text"}],
+            scene_report=SimpleNamespace(scenes=(scene,)),
+            visual_understanding=visual,
+        )
+
+        self.assertEqual(artifact["version"], "shorts_plan.v1")
+        self.assertIn("transcript-0001", artifact["clips"][0]["evidence_ids"])
+        self.assertIn("region-1", artifact["clips"][0]["evidence_ids"])
+        self.assertNotIn("private text", json.dumps(artifact))
 
 
 class FakeClient:
