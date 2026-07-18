@@ -172,6 +172,21 @@ bash -n run.sh build_env.sh download.sh bin/kamal-mvp \
   scripts/mvp-postgres-restore-check.sh .kamal/hooks/pre-deploy
 ```
 
+For browser-visible work, run the relevant Python/API checks first, then select
+the narrowest local Chromium command:
+
+```bash
+cd .qa/web && QA_FAIL_ON_CONSOLE=1 npm run test:smoke
+cd .qa/web && QA_PASSWORD='local test password' npm run test:auth:desktop
+cd .qa/web && QA_PASSWORD='local test password' npm run test:auth:mobile
+```
+
+Use smoke plus at most one affected auth/layout flow by default. All focused
+scripts use one worker. Full Playwright and cross-browser runs are explicit
+coverage requests, not routine validation in this environment. Capture
+screenshots, traces, and videos only on failure; compact JSON/JUnit summaries
+may remain under `.qa/web/artifacts/`. Report paths without dumping artifacts.
+
 This project currently has no checked-in formatter, linter, type checker,
 coverage threshold, or CI workflow. Adding one should be an explicit tooling
 change with dependency and contributor-workflow discussion, not an incidental
