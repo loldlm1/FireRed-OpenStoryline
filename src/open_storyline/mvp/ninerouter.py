@@ -145,8 +145,17 @@ class NineRouterClient:
         system_prompt: str,
         user_prompt: str,
         image_data_urls: Sequence[str] = (),
+        reasoning_effort: str | None = None,
     ) -> dict[str, Any]:
         self.last_attempts = ()
+        effective_reasoning_effort = str(
+            reasoning_effort or self.reasoning_effort
+        ).strip().lower()
+        if effective_reasoning_effort not in {"low", "medium", "high"}:
+            raise NineRouterError(
+                "NINEROUTER_CONFIG_INVALID",
+                "reasoning effort must be low, medium, or high",
+            )
         user_content: Any = user_prompt
         if image_data_urls:
             user_content = [{"type": "text", "text": user_prompt}]
@@ -160,7 +169,7 @@ class NineRouterClient:
                 {"role": "system", "content": system_prompt},
                 {"role": "user", "content": user_content},
             ],
-            "reasoning_effort": self.reasoning_effort,
+            "reasoning_effort": effective_reasoning_effort,
             "response_format": {"type": "json_object"},
         }
         attempts: list[NineRouterAttempt] = []

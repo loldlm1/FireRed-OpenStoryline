@@ -106,9 +106,95 @@ class VisualUnderstandingTests(unittest.IsolatedAsyncioTestCase):
         )
         self.assertEqual(client.images, manifest.image_data_urls)
         self.assertEqual(understanding.regions[0].role, "speaker")
+        self.assertEqual(
+            payload["allowed_motion_values"],
+            ["high", "low", "medium", "static", "unknown"],
+        )
+        self.assertEqual(len(payload["track_timing_constraints"]), 3)
+        self.assertEqual(len(payload["scene_region_constraints"]), 2)
         serialized = json.dumps(understanding.to_dict())
         self.assertNotIn("data:image", serialized)
         self.assertNotIn("jpeg-bytes", serialized)
+
+    def test_normalizes_prose_motion_to_unknown(self):
+        manifest = self._manifest()
+        frame = manifest.frames[0]
+        raw = {
+            "regions": [{
+                "id": "region-1",
+                "frame_id": frame.id,
+                "role": "screen",
+                "bbox": {"x": 0.1, "y": 0.1, "width": 0.8, "height": 0.7},
+                "confidence": 0.9,
+            }],
+            "tracks": [{
+                "id": "track-1",
+                "role": "screen",
+                "region_ids": ["region-1"],
+                "start_ms": 0,
+                "end_ms": frame.timestamp_ms + 1000,
+                "confidence": 0.8,
+                "motion": "The camera remains fixed while the chart changes.",
+                "description": "The chart remains visible.",
+            }],
+            "warnings": [],
+        }
+
+        understanding = validate_visual_understanding(
+            raw,
+            frame_manifest=manifest,
+            scene_report=self.scenes,
+            model="cx/gpt-5.6-sol",
+        )
+
+        self.assertEqual(understanding.tracks[0].motion, "unknown")
+        self.assertEqual(
+            understanding.warnings,
+            ("Normalized unsupported motion values for 1 track(s).",),
+        )
+
+    def test_removes_cross_scene_salient_regions(self):
+        manifest = self._manifest()
+        first_frame = manifest.frames[0]
+        other_frame = next(frame for frame in manifest.frames if frame.scene_id != first_frame.scene_id)
+        raw = {
+            "regions": [
+                {
+                    "id": "region-1",
+                    "frame_id": first_frame.id,
+                    "role": "speaker",
+                    "bbox": {"x": 0.1, "y": 0.1, "width": 0.4, "height": 0.7},
+                    "confidence": 0.9,
+                },
+                {
+                    "id": "region-2",
+                    "frame_id": other_frame.id,
+                    "role": "screen",
+                    "bbox": {"x": 0.2, "y": 0.2, "width": 0.6, "height": 0.6},
+                    "confidence": 0.9,
+                },
+            ],
+            "scenes": [{
+                "scene_id": first_frame.scene_id,
+                "summary": "The presenter introduces the visible subject.",
+                "salient_region_ids": ["region-1", "region-2", "missing-region"],
+            }],
+        }
+
+        understanding = validate_visual_understanding(
+            raw,
+            frame_manifest=manifest,
+            scene_report=self.scenes,
+            model="cx/gpt-5.6-sol",
+        )
+
+        self.assertEqual(understanding.scenes[0].salient_region_ids, ("region-1",))
+        self.assertEqual(
+            understanding.warnings,
+            (
+                "Removed 2 invalid salient region reference(s) from scene summaries.",
+            ),
+        )
 
     def test_rejects_unknown_frames_and_invalid_boxes(self):
         manifest = self._manifest()
@@ -140,7 +226,7 @@ class VisualUnderstandingTests(unittest.IsolatedAsyncioTestCase):
             )
         self.assertEqual(caught.exception.code, "VISUAL_FRAME_UNKNOWN")
 
-    async def test_rejects_track_windows_that_do_not_contain_observations(self):
+    async def test_normalizes_track_windows_that_do_not_contain_observations(self):
         manifest = self._manifest()
         frame = manifest.frames[0]
         raw = {
@@ -160,14 +246,19 @@ class VisualUnderstandingTests(unittest.IsolatedAsyncioTestCase):
                 "confidence": 0.8,
             }],
         }
-        with self.assertRaises(VisualUnderstandingError) as caught:
-            validate_visual_understanding(
-                raw,
-                frame_manifest=manifest,
-                scene_report=self.scenes,
-                model="cx/gpt-5.6-sol",
-            )
-        self.assertEqual(caught.exception.code, "VISUAL_TRACK_TIMING_INVALID")
+        understanding = validate_visual_understanding(
+            raw,
+            frame_manifest=manifest,
+            scene_report=self.scenes,
+            model="cx/gpt-5.6-sol",
+        )
+        scene = next(scene for scene in self.scenes.scenes if scene.id == frame.scene_id)
+        self.assertEqual(understanding.tracks[0].start_ms, scene.start_ms)
+        self.assertEqual(understanding.tracks[0].end_ms, scene.end_ms)
+        self.assertEqual(
+            understanding.warnings,
+            ("Normalized invalid timing windows for 1 track(s).",),
+        )
 
 
 if __name__ == "__main__":

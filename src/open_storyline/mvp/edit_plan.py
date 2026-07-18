@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from copy import deepcopy
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Iterable, Literal, Sequence
@@ -103,7 +104,7 @@ class FocalTarget(PlanModel):
     @field_validator("region_id", "track_id", "semantic_role")
     @classmethod
     def clean_identifier(cls, value: str) -> str:
-        return _safe_identifier(value)
+        return "" if value == "" else _safe_identifier(value)
 
     @model_validator(mode="after")
     def require_reference(self) -> "FocalTarget":
@@ -152,7 +153,11 @@ class OverlaySpec(PlanModel):
     @classmethod
     def clean_text_fields(cls, value: str, info: Any) -> str:
         limit = 500 if info.field_name == "text" else 80
-        return _safe_text(value, limit=limit) if info.field_name == "text" else _safe_identifier(value)
+        if info.field_name == "text":
+            return _safe_text(value, limit=limit)
+        if info.field_name == "asset_id" and value == "":
+            return ""
+        return _safe_identifier(value)
 
     @model_validator(mode="after")
     def validate_payload(self) -> "OverlaySpec":
@@ -362,6 +367,108 @@ class EditPlan(PlanModel):
         return self.model_dump(mode="json")
 
 
+def _edit_plan_field_contract() -> dict[str, list[str]]:
+    models = (
+        TimeWindow,
+        FocalTarget,
+        LayoutSpec,
+        TransitionSpec,
+        OverlaySpec,
+        AssetRequest,
+        EditSegment,
+        ClipEditPlan,
+        EditPlan,
+    )
+    return {
+        model.__name__: list(model.model_fields)
+        for model in models
+    }
+
+
+def _valid_clip_plan_template(clip_context: dict[str, Any]) -> dict[str, Any]:
+    source_window = dict(clip_context["source_window"])
+    duration_ms = int(source_window["end_ms"]) - int(source_window["start_ms"])
+    focal_target = None
+    evidence_ids: list[str] = []
+    regions = clip_context.get("regions") or []
+    tracks = clip_context.get("tracks") or []
+    valid_regions = [item for item in regions if isinstance(item, dict) and item.get("id")]
+    valid_tracks = [item for item in tracks if isinstance(item, dict) and item.get("id")]
+    if valid_regions:
+        region = max(
+            valid_regions,
+            key=lambda item: (
+                float(item.get("salience") or 0),
+                float(item.get("confidence") or 0),
+            ),
+        )
+        focal_target = {"region_id": str(region["id"])}
+        evidence_ids.append(str(region["id"]))
+    elif valid_tracks:
+        track = max(valid_tracks, key=lambda item: float(item.get("confidence") or 0))
+        focal_target = {"track_id": str(track["id"])}
+        evidence_ids.append(str(track["id"]))
+    layout = {
+        "mode": "crop" if focal_target else "fit",
+        "fallback": "fit",
+    }
+    if focal_target:
+        layout["focal_target"] = focal_target
+    return {
+        "requested_capabilities": [
+            "crop" if focal_target else "fit",
+            "hard_cut",
+            "subtitles",
+        ],
+        "clips": [{
+            "clip_index": int(clip_context["clip_index"]),
+            "title": str(clip_context.get("title") or ""),
+            "source_window": source_window,
+            "output_name": str(clip_context["output_name"]),
+            "segments": [{
+                "id": f"clip-{int(clip_context['clip_index']):02d}-segment-01",
+                "source_window": source_window,
+                "timeline_window": {"start_ms": 0, "end_ms": duration_ms},
+                "layout": layout,
+                "transition_in": {"kind": "cut", "duration_ms": 0},
+                "overlays": [],
+                "reason": "Keep the strongest prompt-relevant source evidence visible.",
+                "evidence_ids": evidence_ids,
+            }],
+            "asset_requests": [],
+        }],
+    }
+
+
+def _normalize_edit_plan_response(value: Any) -> Any:
+    if not isinstance(value, dict):
+        return value
+    normalized = deepcopy(value)
+    clips = normalized.get("clips")
+    if not isinstance(clips, list):
+        return normalized
+    for clip in clips:
+        if not isinstance(clip, dict) or not isinstance(clip.get("segments"), list):
+            continue
+        for segment in clip["segments"]:
+            if not isinstance(segment, dict) or not isinstance(segment.get("overlays"), list):
+                continue
+            for overlay in segment["overlays"]:
+                if not isinstance(overlay, dict):
+                    continue
+                if overlay.get("kind") in {"text", "image"}:
+                    overlay.pop("source_window", None)
+                if overlay.get("protect_subtitles", True):
+                    safe_position = {
+                        "bottom": "top",
+                        "bottom_left": "top_left",
+                        "bottom_right": "top_right",
+                    }.get(overlay.get("position"))
+                    if safe_position:
+                        overlay["position"] = safe_position
+    return normalized
+
+
 def validate_edit_plan(value: Any, *, source_duration_ms: int | None = None) -> EditPlan:
     try:
         plan = EditPlan.model_validate(value)
@@ -401,6 +508,7 @@ def validate_edit_plan_context(
     plan: EditPlan,
     *,
     selected_clips: Sequence[ShortCandidate],
+    selected_clip_indexes: Sequence[int] | None = None,
     known_region_ids: Iterable[str],
     known_track_ids: Iterable[str],
     known_evidence_ids_by_clip: dict[int, Iterable[str]],
@@ -413,7 +521,13 @@ def validate_edit_plan_context(
             "EDIT_PLAN_CLIP_MISMATCH",
             "the edit plan must contain exactly one entry per selected clip",
         )
-    selected = {index: clip for index, clip in enumerate(selected_clips, start=1)}
+    indexes = tuple(selected_clip_indexes or range(1, len(selected_clips) + 1))
+    if len(indexes) != len(selected_clips) or len(set(indexes)) != len(indexes):
+        raise EditPlanError(
+            "EDIT_PLAN_CLIP_MISMATCH",
+            "selected clip indexes must be unique and aligned with selected clips",
+        )
+    selected = dict(zip(indexes, selected_clips))
     regions = set(known_region_ids)
     tracks = set(known_track_ids)
     for clip in plan.clips:
@@ -603,7 +717,7 @@ class AgenticEditPlanner:
             )
             for index, clip in enumerate(shorts_plan.clips, start=1)
         ]
-        user_payload = {
+        base_user_payload = {
             "editing_prompt": _safe_text(editing_prompt, limit=12_000),
             "source_duration_ms": source_duration_ms,
             "asset_policy": asset_policy,
@@ -632,20 +746,157 @@ class AgenticEditPlanner:
                 "Use only the asset kinds and providers explicitly available in asset_providers.",
                 "Never return FFmpeg expressions, commands, paths, or unsupported operations.",
             ],
-            "clips": clip_contexts,
+            "exact_field_contract": _edit_plan_field_contract(),
         }
-        response = await self.client.complete_json(
-            system_prompt=EDIT_PLAN_SYSTEM_PROMPT,
-            user_prompt=json.dumps(user_payload, ensure_ascii=False),
+        known_region_ids = tuple(region.id for region in visual_understanding.regions)
+        known_track_ids = tuple(track.id for track in visual_understanding.tracks)
+        known_evidence_ids_by_clip = {
+            int(clip.get("clip_index") or 0): {
+                str(evidence_id)
+                for evidence_id in clip.get("evidence_ids") or []
+            }
+            for clip in shorts_plan_artifact.get("clips") or []
+        }
+        all_attempts: list[Any] = []
+
+        async def complete(**kwargs: Any) -> dict[str, Any]:
+            try:
+                return await self.client.complete_json(**kwargs)
+            finally:
+                all_attempts.extend(tuple(getattr(self.client, "last_attempts", ())))
+                if hasattr(self.client, "last_attempts"):
+                    self.client.last_attempts = tuple(all_attempts)
+
+        planned_clips: list[ClipEditPlan] = []
+        requested_capabilities: set[str] = set()
+        for clip_index, (selected_clip, clip_context) in enumerate(
+            zip(shorts_plan.clips, clip_contexts),
+            start=1,
+        ):
+            user_payload = {
+                **base_user_payload,
+                "clip_task": {
+                    "clip_index": clip_index,
+                    "total_clips": len(clip_contexts),
+                },
+                "valid_output_template": _valid_clip_plan_template(clip_context),
+                "clips": [clip_context],
+            }
+
+            def validate_response(value: Any) -> EditPlan:
+                payload = dict(_normalize_edit_plan_response(value))
+                payload.update({
+                    "version": EDIT_PLAN_VERSION,
+                    "planner_version": AGENTIC_PLANNER_VERSION,
+                    "prompt_version": EDIT_PLAN_PROMPT_VERSION,
+                    "source_duration_ms": source_duration_ms,
+                })
+                clip_plan = validate_edit_plan(
+                    payload,
+                    source_duration_ms=source_duration_ms,
+                )
+                clip_plan = clip_plan.model_copy(update={
+                    "requested_capabilities": tuple(sorted(
+                        set(clip_plan.requested_capabilities)
+                        | set(required_capabilities(clip_plan))
+                    )),
+                })
+                clip_plan = validate_edit_plan_context(
+                    clip_plan,
+                    selected_clips=(selected_clip,),
+                    selected_clip_indexes=(clip_index,),
+                    known_region_ids=known_region_ids,
+                    known_track_ids=known_track_ids,
+                    known_evidence_ids_by_clip=known_evidence_ids_by_clip,
+                    max_segments_per_clip=max_segments_per_clip,
+                    max_overlays_per_clip=max_overlays_per_clip,
+                    max_assets_per_clip=max_assets_per_clip,
+                )
+                generated_count = sum(
+                    asset.kind == "generated_image"
+                    for clip in clip_plan.clips
+                    for asset in clip.asset_requests
+                )
+                stock_count = sum(
+                    asset.kind in {"stock_image", "stock_video"}
+                    for clip in clip_plan.clips
+                    for asset in clip.asset_requests
+                )
+                if asset_policy == "off" and generated_count:
+                    raise EditPlanError(
+                        "EDIT_PLAN_ASSET_POLICY_BLOCKED",
+                        "the planner requested generated images while that job policy is off",
+                    )
+                if stock_policy == "off" and stock_count:
+                    raise EditPlanError(
+                        "EDIT_PLAN_STOCK_POLICY_BLOCKED",
+                        "the planner requested Pexels stock while that job policy is off",
+                    )
+                if generated_count > generated_limit:
+                    raise EditPlanError(
+                        "EDIT_PLAN_GENERATED_ASSET_BUDGET_EXCEEDED",
+                        f"clip {clip_index} exceeds the generated image budget",
+                    )
+                if stock_count > stock_limit:
+                    raise EditPlanError(
+                        "EDIT_PLAN_STOCK_ASSET_BUDGET_EXCEEDED",
+                        f"clip {clip_index} exceeds the Pexels stock budget",
+                    )
+                unavailable = sorted(
+                    set(clip_plan.requested_capabilities) - available_capabilities
+                )
+                if unavailable:
+                    raise EditPlanError(
+                        "EDIT_PLAN_CAPABILITY_UNAVAILABLE",
+                        "planner requested unavailable capabilities: "
+                        + ", ".join(unavailable),
+                    )
+                return clip_plan
+
+            response = await complete(
+                system_prompt=EDIT_PLAN_SYSTEM_PROMPT,
+                user_prompt=json.dumps(user_payload, ensure_ascii=False),
+                reasoning_effort="low",
+            )
+            try:
+                clip_plan = validate_response(response)
+            except EditPlanError as initial_error:
+                repair_payload = {
+                    "repair_task": (
+                        "Rewrite invalid_response using valid_output_template and "
+                        "exact_field_contract exactly. Preserve every usable editorial "
+                        "decision from invalid_response; do not collapse to the minimal "
+                        "template unless no valid decision can be retained. Return only "
+                        "the corrected JSON object."
+                    ),
+                    "validation_error": _safe_text(str(initial_error), limit=2000),
+                    "authoritative_request": user_payload,
+                    "invalid_response": response,
+                }
+                repaired = await complete(
+                    system_prompt=EDIT_PLAN_SYSTEM_PROMPT,
+                    user_prompt=json.dumps(repair_payload, ensure_ascii=False),
+                    reasoning_effort="low",
+                )
+                try:
+                    clip_plan = validate_response(repaired)
+                except EditPlanError:
+                    fallback = deepcopy(user_payload["valid_output_template"])
+                    fallback["clips"][0]["segments"][0]["reason"] = (
+                        "Use the strongest validated source evidence after remote "
+                        "edit-plan validation failed."
+                    )
+                    clip_plan = validate_response(fallback)
+            planned_clips.extend(clip_plan.clips)
+            requested_capabilities.update(clip_plan.requested_capabilities)
+
+        plan = EditPlan(
+            planner_version=AGENTIC_PLANNER_VERSION,
+            prompt_version=EDIT_PLAN_PROMPT_VERSION,
+            source_duration_ms=source_duration_ms,
+            requested_capabilities=tuple(sorted(requested_capabilities)),
+            clips=tuple(planned_clips),
         )
-        payload = dict(response)
-        payload.update({
-            "version": EDIT_PLAN_VERSION,
-            "planner_version": AGENTIC_PLANNER_VERSION,
-            "prompt_version": EDIT_PLAN_PROMPT_VERSION,
-            "source_duration_ms": source_duration_ms,
-        })
-        plan = validate_edit_plan(payload, source_duration_ms=source_duration_ms)
         generated_assets = [
             asset
             for clip in plan.clips
@@ -692,18 +943,11 @@ class AgenticEditPlanner:
                 "EDIT_PLAN_CAPABILITY_UNAVAILABLE",
                 f"planner requested unavailable capabilities: {', '.join(unavailable)}",
             )
-        known_evidence_ids_by_clip = {
-            int(clip.get("clip_index") or 0): {
-                str(evidence_id)
-                for evidence_id in clip.get("evidence_ids") or []
-            }
-            for clip in shorts_plan_artifact.get("clips") or []
-        }
         return validate_edit_plan_context(
             plan,
             selected_clips=shorts_plan.clips,
-            known_region_ids=(region.id for region in visual_understanding.regions),
-            known_track_ids=(track.id for track in visual_understanding.tracks),
+            known_region_ids=known_region_ids,
+            known_track_ids=known_track_ids,
             known_evidence_ids_by_clip=known_evidence_ids_by_clip,
             max_segments_per_clip=max_segments_per_clip,
             max_overlays_per_clip=max_overlays_per_clip,

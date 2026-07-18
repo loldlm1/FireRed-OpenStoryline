@@ -16,6 +16,7 @@ from open_storyline.mvp.scene_boundaries import SceneBoundaryReport
 
 
 VISUAL_UNDERSTANDING_VERSION = "visual_understanding.v1"
+MOTION_VALUES = frozenset({"static", "low", "medium", "high", "unknown"})
 
 SemanticRole = Literal[
     "speaker",
@@ -146,6 +147,107 @@ class VisualUnderstanding(VisualModel):
         return self.model_dump(mode="json")
 
 
+def _normalize_tracks(
+    raw_tracks: Any,
+    *,
+    raw_regions: Any,
+    frame_manifest: FrameManifest,
+    scene_report: SceneBoundaryReport,
+) -> tuple[Any, int, int]:
+    if not isinstance(raw_tracks, (list, tuple)):
+        return raw_tracks, 0, 0
+    frames = {frame.id: frame for frame in frame_manifest.frames}
+    scenes = {scene.id: scene for scene in scene_report.scenes}
+    region_frames: dict[str, Any] = {}
+    if isinstance(raw_regions, (list, tuple)):
+        for region in raw_regions:
+            if not isinstance(region, dict):
+                continue
+            region_id = region.get("id")
+            frame = frames.get(region.get("frame_id"))
+            if isinstance(region_id, str) and frame is not None:
+                region_frames[region_id] = frame
+    normalized_tracks: list[Any] = []
+    normalized_motion_count = 0
+    normalized_timing_count = 0
+    for item in raw_tracks:
+        if not isinstance(item, dict):
+            normalized_tracks.append(item)
+            continue
+        track = dict(item)
+        raw_motion = track.get("motion", "unknown")
+        motion = raw_motion.strip().lower() if isinstance(raw_motion, str) else ""
+        if motion not in MOTION_VALUES:
+            motion = "unknown"
+            normalized_motion_count += 1
+        track["motion"] = motion
+        region_ids = track.get("region_ids")
+        referenced_frames = (
+            [region_frames.get(region_id) for region_id in region_ids]
+            if isinstance(region_ids, (list, tuple)) and region_ids
+            else []
+        )
+        if referenced_frames and all(frame is not None for frame in referenced_frames):
+            start_ms = track.get("start_ms")
+            end_ms = track.get("end_ms")
+            timestamps = [frame.timestamp_ms for frame in referenced_frames]
+            invalid_window = (
+                not isinstance(start_ms, int)
+                or isinstance(start_ms, bool)
+                or not isinstance(end_ms, int)
+                or isinstance(end_ms, bool)
+                or start_ms < 0
+                or end_ms <= start_ms
+                or end_ms > frame_manifest.source_duration_ms
+                or any(timestamp < start_ms or timestamp > end_ms for timestamp in timestamps)
+            )
+            referenced_scenes = [scenes.get(frame.scene_id) for frame in referenced_frames]
+            if invalid_window and all(scene is not None for scene in referenced_scenes):
+                track["start_ms"] = min(scene.start_ms for scene in referenced_scenes)
+                track["end_ms"] = max(scene.end_ms for scene in referenced_scenes)
+                normalized_timing_count += 1
+        normalized_tracks.append(track)
+    return normalized_tracks, normalized_motion_count, normalized_timing_count
+
+
+def _normalize_scenes(
+    raw_scenes: Any,
+    *,
+    raw_regions: Any,
+    frame_manifest: FrameManifest,
+) -> tuple[Any, int]:
+    if not isinstance(raw_scenes, (list, tuple)):
+        return raw_scenes, 0
+    frames = {frame.id: frame for frame in frame_manifest.frames}
+    region_scenes: dict[str, str] = {}
+    if isinstance(raw_regions, (list, tuple)):
+        for region in raw_regions:
+            if not isinstance(region, dict):
+                continue
+            region_id = region.get("id")
+            frame = frames.get(region.get("frame_id"))
+            if isinstance(region_id, str) and frame is not None:
+                region_scenes[region_id] = frame.scene_id
+    normalized_scenes: list[Any] = []
+    removed_count = 0
+    for item in raw_scenes:
+        if not isinstance(item, dict):
+            normalized_scenes.append(item)
+            continue
+        scene = dict(item)
+        salient_region_ids = scene.get("salient_region_ids")
+        if isinstance(salient_region_ids, (list, tuple)):
+            filtered = [
+                region_id
+                for region_id in salient_region_ids
+                if region_scenes.get(region_id) == scene.get("scene_id")
+            ]
+            removed_count += len(salient_region_ids) - len(filtered)
+            scene["salient_region_ids"] = filtered
+        normalized_scenes.append(scene)
+    return normalized_scenes, removed_count
+
+
 def validate_visual_understanding(
     raw: Any,
     *,
@@ -158,16 +260,46 @@ def validate_visual_understanding(
             "VISUAL_RESPONSE_INVALID",
             "visual understanding response must be an object",
         )
+    raw_regions = raw.get("regions") or ()
+    tracks, normalized_motion_count, normalized_timing_count = _normalize_tracks(
+        raw.get("tracks") or (),
+        raw_regions=raw_regions,
+        frame_manifest=frame_manifest,
+        scene_report=scene_report,
+    )
+    scenes, removed_scene_region_count = _normalize_scenes(
+        raw.get("scenes") or (),
+        raw_regions=raw_regions,
+        frame_manifest=frame_manifest,
+    )
+    warnings = raw.get("warnings") or ()
+    if isinstance(warnings, (list, tuple)):
+        normalization_warnings = []
+        if normalized_motion_count:
+            normalization_warnings.append(
+                f"Normalized unsupported motion values for {normalized_motion_count} track(s)."
+            )
+        if normalized_timing_count:
+            normalization_warnings.append(
+                f"Normalized invalid timing windows for {normalized_timing_count} track(s)."
+            )
+        if removed_scene_region_count:
+            normalization_warnings.append(
+                "Removed "
+                f"{removed_scene_region_count} invalid salient region reference(s) "
+                "from scene summaries."
+            )
+        warnings = [*warnings, *normalization_warnings][:64]
     payload = {
         "version": VISUAL_UNDERSTANDING_VERSION,
         "prompt_version": VISUAL_UNDERSTANDING_PROMPT_VERSION,
         "model": model,
         "source_duration_ms": frame_manifest.source_duration_ms,
         "frame_manifest": frame_manifest.to_dict(),
-        "regions": raw.get("regions") or (),
-        "tracks": raw.get("tracks") or (),
-        "scenes": raw.get("scenes") or (),
-        "warnings": raw.get("warnings") or (),
+        "regions": raw_regions,
+        "tracks": tracks,
+        "scenes": scenes,
+        "warnings": warnings,
     }
     try:
         understanding = VisualUnderstanding.model_validate(payload)
@@ -307,6 +439,16 @@ class VisualUnderstandingPlanner:
                 "object",
                 "demonstration_target",
                 "background",
+            ],
+            "allowed_motion_values": sorted(MOTION_VALUES),
+            "track_timing_constraints": [
+                "start_ms and end_ms are integer source timestamps",
+                "0 <= start_ms < end_ms <= source_duration_ms",
+                "the window contains every frame referenced through region_ids",
+            ],
+            "scene_region_constraints": [
+                "salient_region_ids must contain only known region IDs",
+                "every salient region must come from a frame in that same scene_id",
             ],
             "scene_boundaries": scene_report.to_dict(),
             "attached_images_in_exact_order": frame_order,
