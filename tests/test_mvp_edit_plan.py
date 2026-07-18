@@ -1,6 +1,7 @@
 import json
 import os
 import unittest
+from copy import deepcopy
 from types import SimpleNamespace
 from unittest.mock import patch
 
@@ -52,9 +53,14 @@ class FakeEditClient:
     def __init__(self, response):
         self.response = response
         self.call = None
+        self.calls = []
+        self.last_attempts = ()
 
     async def complete_json(self, **kwargs):
         self.call = kwargs
+        self.calls.append(kwargs)
+        if isinstance(self.response, list):
+            return self.response.pop(0)
         return self.response
 
 
@@ -121,6 +127,19 @@ def planner_fixture(role: str, editing_prompt: str):
 
 
 class EditPlanContractTests(unittest.TestCase):
+    def test_accepts_explicit_empty_optional_identifiers(self):
+        target = FocalTarget(region_id="", track_id="", semantic_role="speaker")
+        overlay = OverlaySpec(
+            id="text-1",
+            kind="text",
+            timeline_window=TimeWindow(start_ms=0, end_ms=1000),
+            text="Hook",
+            asset_id="",
+        )
+
+        self.assertEqual(target.region_id, "")
+        self.assertEqual(overlay.asset_id, "")
+
     def test_builds_versioned_shadow_plan(self):
         plan = build_shadow_edit_plan(
             [ShortCandidate(1_000, 21_000, "Title", "Hook", "Reason", 0.9)],
@@ -331,6 +350,170 @@ class AgenticEditPlannerTests(unittest.IsolatedAsyncioTestCase):
                 self.assertEqual(plan.clips[0].segments[0].layout.focal_target.region_id, "region-1")
                 self.assertEqual(payload["editing_prompt"], editing_prompt)
                 self.assertEqual(payload["clips"][0]["regions"][0]["role"], role)
+                self.assertNotIn("output_contract", payload)
+                self.assertEqual(
+                    payload["exact_field_contract"]["EditSegment"],
+                    [
+                        "id",
+                        "source_window",
+                        "timeline_window",
+                        "layout",
+                        "transition_in",
+                        "overlays",
+                        "reason",
+                        "evidence_ids",
+                    ],
+                )
+                self.assertNotIn("response_schema", client.call)
+                self.assertEqual(client.call["reasoning_effort"], "low")
+                template = payload["valid_output_template"]
+                self.assertEqual(template["clips"][0]["source_window"]["end_ms"], 20_000)
+                self.assertEqual(
+                    template["clips"][0]["segments"][0]["layout"]["focal_target"]["region_id"],
+                    "region-1",
+                )
+
+    async def test_repairs_one_structurally_invalid_response(self):
+        planner, client, kwargs = planner_fixture(
+            "screen", "Keep the visible screen readable."
+        )
+        valid_response = client.response
+        client.response = [
+            {
+                "format": {"aspect_ratio": "9:16"},
+                "clips": [{
+                    "clip_index": 1,
+                    "segments": [{
+                        "timeline": {"start_ms": 0, "end_ms": 20_000},
+                        "source": {"start_ms": 0, "end_ms": 20_000},
+                        "capability": "crop",
+                    }],
+                }],
+            },
+            valid_response,
+        ]
+
+        plan = await planner.plan(**kwargs)
+
+        self.assertEqual(len(client.calls), 2)
+        repair_payload = json.loads(client.calls[1]["user_prompt"])
+        self.assertIn("repair_task", repair_payload)
+        self.assertIn("do not collapse", repair_payload["repair_task"])
+        self.assertNotIn("output_contract", repair_payload)
+        self.assertNotIn("response_schema", client.calls[1])
+        self.assertEqual(client.calls[1]["reasoning_effort"], "low")
+        self.assertEqual(plan.clips[0].segments[0].layout.mode, "crop")
+
+    async def test_falls_back_to_valid_evidence_template_after_invalid_repair(self):
+        planner, client, kwargs = planner_fixture(
+            "screen", "Keep the validated screen evidence visible."
+        )
+        invalid_response = {
+            "format": {"aspect_ratio": "9:16"},
+            "clips": [{"segments": [{"operation": "smart crop"}]}],
+        }
+        client.response = [deepcopy(invalid_response), deepcopy(invalid_response)]
+
+        plan = await planner.plan(**kwargs)
+
+        self.assertEqual(len(client.calls), 2)
+        self.assertEqual(len(plan.clips[0].segments), 1)
+        self.assertEqual(
+            plan.clips[0].segments[0].layout.focal_target.region_id,
+            "region-1",
+        )
+        self.assertIn("validation failed", plan.clips[0].segments[0].reason)
+        self.assertIn("crop", plan.requested_capabilities)
+
+    async def test_removes_source_windows_from_text_and_image_overlays(self):
+        planner, client, kwargs = planner_fixture(
+            "speaker", "Emphasize the visible explanation."
+        )
+        client.response["requested_capabilities"].append("text_emphasis")
+        client.response["clips"][0]["segments"][0]["overlays"] = [{
+            "id": "text-overlay",
+            "kind": "text",
+            "timeline_window": {"start_ms": 1000, "end_ms": 3000},
+            "source_window": {"start_ms": 1000, "end_ms": 3000},
+            "text": "Key point",
+            "asset_id": "",
+            "position": "top",
+        }]
+
+        plan = await planner.plan(**kwargs)
+
+        overlay = plan.clips[0].segments[0].overlays[0]
+        self.assertIsNone(overlay.source_window)
+        self.assertEqual(len(client.calls), 1)
+
+    async def test_moves_protected_bottom_overlays_out_of_subtitle_zone(self):
+        planner, client, kwargs = planner_fixture(
+            "speaker", "Keep the emphasis clear of subtitles."
+        )
+        client.response["requested_capabilities"].append("text_emphasis")
+        client.response["clips"][0]["segments"][0]["overlays"] = [{
+            "id": "text-overlay",
+            "kind": "text",
+            "timeline_window": {"start_ms": 1000, "end_ms": 3000},
+            "text": "Key point",
+            "asset_id": "",
+            "protect_subtitles": True,
+            "position": "bottom_right",
+        }]
+
+        plan = await planner.plan(**kwargs)
+
+        self.assertEqual(
+            plan.clips[0].segments[0].overlays[0].position,
+            "top_right",
+        )
+
+    async def test_plans_multiple_selected_clips_in_bounded_calls(self):
+        planner, client, kwargs = planner_fixture(
+            "speaker", "Keep each selected moment visually focused."
+        )
+        first_response = deepcopy(client.response)
+        second_response = deepcopy(client.response)
+        second_response["clips"][0].update({
+            "clip_index": 2,
+            "source_window": {"start_ms": 10_000, "end_ms": 30_000},
+            "output_name": "short-02.mp4",
+        })
+        second_segment = second_response["clips"][0]["segments"][0]
+        second_segment.update({
+            "id": "segment-2",
+            "source_window": {"start_ms": 10_000, "end_ms": 30_000},
+            "evidence_ids": [],
+        })
+        second_segment["layout"]["focal_target"] = {"semantic_role": "speaker"}
+        second_clip = ShortCandidate(
+            10_000, 30_000, "Second", "Hook", "Reason", 0.8
+        )
+        shorts_plan = ShortsPlan(
+            clips=[kwargs["shorts_plan"].clips[0], second_clip],
+            rejected=[],
+        )
+        kwargs["shorts_plan"] = shorts_plan
+        kwargs["shorts_plan_artifact"] = build_shorts_plan_artifact(
+            shorts_plan,
+            transcript_segments=kwargs["transcript_segments"],
+            scene_report=kwargs["scene_report"],
+            visual_understanding=kwargs["visual_understanding"],
+        )
+        client.response = [first_response, second_response]
+
+        plan = await planner.plan(**kwargs)
+
+        self.assertEqual([clip.clip_index for clip in plan.clips], [1, 2])
+        self.assertEqual(len(client.calls), 2)
+        self.assertEqual(
+            [json.loads(call["user_prompt"])["clip_task"]["clip_index"] for call in client.calls],
+            [1, 2],
+        )
+        self.assertTrue(all(
+            len(json.loads(call["user_prompt"])["clips"]) == 1
+            for call in client.calls
+        ))
 
     async def test_stock_planning_requires_an_explicit_pexels_capability(self):
         planner, client, kwargs = planner_fixture("speaker", "Use a neutral teamwork cutaway.")
@@ -390,24 +573,23 @@ class AgenticEditPlannerTests(unittest.IsolatedAsyncioTestCase):
             "max_stock_assets_per_clip": 0,
             "stock_policy": "off",
         })
-        with self.assertRaises(EditPlanError) as caught:
-            await planner.plan(**blocked_kwargs)
-        self.assertEqual(caught.exception.code, "EDIT_PLAN_STOCK_POLICY_BLOCKED")
+        fallback_plan = await planner.plan(**blocked_kwargs)
+        self.assertEqual(fallback_plan.clips[0].asset_requests, ())
+        self.assertEqual(len(client.calls), 2)
 
-    async def test_rejects_clip_expansion_and_undeclared_capabilities(self):
+    async def test_falls_back_from_clip_expansion_and_derives_required_capabilities(self):
         planner, client, kwargs = planner_fixture("speaker", "Keep the speaker visible.")
         client.response["clips"][0]["source_window"]["end_ms"] = 21_000
         client.response["clips"][0]["segments"][0]["source_window"]["end_ms"] = 21_000
         client.response["clips"][0]["segments"][0]["timeline_window"]["end_ms"] = 21_000
-        with self.assertRaises(EditPlanError) as caught:
-            await planner.plan(**kwargs)
-        self.assertEqual(caught.exception.code, "EDIT_PLAN_CLIP_BOUNDS_INVALID")
+        plan = await planner.plan(**kwargs)
+        self.assertEqual(plan.clips[0].source_window.end_ms, 20_000)
+        self.assertEqual(len(client.calls), 2)
 
         planner, client, kwargs = planner_fixture("speaker", "Keep the speaker visible.")
         client.response["requested_capabilities"].remove("hard_cut")
-        with self.assertRaises(EditPlanError) as caught:
-            await planner.plan(**kwargs)
-        self.assertEqual(caught.exception.code, "EDIT_PLAN_CAPABILITY_UNDECLARED")
+        plan = await planner.plan(**kwargs)
+        self.assertIn("hard_cut", plan.requested_capabilities)
 
 
 if __name__ == "__main__":

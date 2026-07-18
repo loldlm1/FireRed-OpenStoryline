@@ -59,6 +59,33 @@ class NineRouterClientTests(unittest.IsolatedAsyncioTestCase):
             {"ok": True},
         )
 
+    async def test_sends_per_call_reasoning_override(self):
+        captured = {}
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            captured.update(json.loads(request.content))
+            return httpx.Response(200, json={
+                "choices": [{"message": {"content": "{\"ok\": true}"}}],
+            })
+
+        client = NineRouterClient(
+            base_url="https://router.test",
+            api_key="secret",
+            reasoning_effort="medium",
+            max_retries=0,
+            transport=httpx.MockTransport(handler),
+        )
+
+        result = await client.complete_json(
+            system_prompt="system",
+            user_prompt="user",
+            reasoning_effort="low",
+        )
+
+        self.assertEqual(result, {"ok": True})
+        self.assertEqual(captured["reasoning_effort"], "low")
+        self.assertEqual(captured["response_format"], {"type": "json_object"})
+
     async def test_invalid_json_fails_closed(self):
         def handler(request: httpx.Request) -> httpx.Response:
             return httpx.Response(200, json={
