@@ -15,6 +15,7 @@ from open_storyline.mvp.edit_plan import (
     LayoutSpec,
     OverlaySpec,
     TimeWindow,
+    TransitionSpec,
     build_shadow_edit_plan,
     resolve_agentic_server_mode,
     validate_edit_plan,
@@ -229,6 +230,48 @@ class EditPlanContractTests(unittest.TestCase):
                         reason="gap",
                     ),
                 ),
+            )
+
+    def test_accepts_declared_crossfade_and_bounded_source_pip(self):
+        first = EditSegment(
+            id="first",
+            source_window=TimeWindow(start_ms=0, end_ms=2000),
+            timeline_window=TimeWindow(start_ms=0, end_ms=2000),
+            layout=LayoutSpec(mode="source"),
+            overlays=(OverlaySpec(
+                id="pip-1",
+                kind="pip",
+                source_window=TimeWindow(start_ms=500, end_ms=1000),
+                timeline_window=TimeWindow(start_ms=500, end_ms=1000),
+                position="top_right",
+                width_ratio=0.25,
+                transition_ms=100,
+            ),),
+            reason="source cutaway with presenter PiP",
+        )
+        second = EditSegment(
+            id="second",
+            source_window=TimeWindow(start_ms=1500, end_ms=3500),
+            timeline_window=TimeWindow(start_ms=1500, end_ms=3500),
+            layout=LayoutSpec(mode="fit"),
+            transition_in=TransitionSpec(kind="xfade", duration_ms=500),
+            reason="bounded crossfade",
+        )
+        clip = ClipEditPlan(
+            clip_index=1,
+            source_window=TimeWindow(start_ms=0, end_ms=3500),
+            output_name="short.mp4",
+            segments=(first, second),
+        )
+        self.assertEqual(clip.segments[1].timeline_window.start_ms, 1500)
+        self.assertEqual(clip.segments[0].overlays[0].z_index, 10)
+
+        with self.assertRaises(ValueError):
+            OverlaySpec(
+                id="bad-pip",
+                kind="pip",
+                source_window=TimeWindow(start_ms=0, end_ms=1000),
+                timeline_window=TimeWindow(start_ms=0, end_ms=1500),
             )
 
 

@@ -252,6 +252,7 @@ class AgenticShortRenderer:
         crop_hysteresis_ratio: float = 0.03,
         crop_smoothing_alpha: float = 0.65,
         max_crop_velocity_ratio_per_second: float = 0.45,
+        resolved_assets: dict[str, str | Path] | None = None,
     ) -> AgenticRenderResult:
         if len(edit_plan.clips) != len(selected_clips):
             raise RenderError(
@@ -261,6 +262,16 @@ class AgenticShortRenderer:
         output_dir = Path(destination_dir).resolve()
         output_dir.mkdir(parents=True, exist_ok=True)
         media = source_media or probe_media(source)
+        asset_paths = {
+            str(asset_id): Path(path).resolve()
+            for asset_id, path in (resolved_assets or {}).items()
+        }
+        for asset_id, path in asset_paths.items():
+            if not path.is_file():
+                raise RenderError(
+                    "AGENTIC_RENDER_ASSET_MISSING",
+                    f"resolved image asset is missing: {asset_id}",
+                )
         settings = self.settings
         rendered: list[RenderedShort] = []
         executions: list[dict[str, Any]] = []
@@ -290,23 +301,44 @@ class AgenticShortRenderer:
                 smoothing_alpha=crop_smoothing_alpha,
                 max_crop_velocity_ratio_per_second=max_crop_velocity_ratio_per_second,
             )
+            used_asset_ids = sorted({
+                overlay.asset_id
+                for segment in composition.segments
+                for overlay in segment.overlays
+                if overlay.kind == "image"
+            })
+            missing_assets = sorted(set(used_asset_ids) - set(asset_paths))
+            if missing_assets:
+                raise RenderError(
+                    "AGENTIC_RENDER_ASSET_MISSING",
+                    f"resolved image assets are missing: {', '.join(missing_assets)}",
+                )
+            asset_input_indexes = {
+                asset_id: index
+                for index, asset_id in enumerate(used_asset_ids, start=1)
+            }
             filtergraph, video_label, audio_label = build_reframe_filtergraph(
                 composition.segments,
                 output_width=settings.width,
                 output_height=settings.height,
                 subtitle_filename=subtitle_path.name if subtitle_path else None,
                 has_audio=media.has_audio,
+                asset_input_indexes=asset_input_indexes,
             )
             command = [
                 "ffmpeg", "-y", "-v", "error",
                 "-i", str(Path(source).resolve()),
+            ]
+            for asset_id in used_asset_ids:
+                command.extend(["-loop", "1", "-i", str(asset_paths[asset_id])])
+            command.extend([
                 "-filter_complex", filtergraph,
                 "-map", f"[{video_label}]", "-map", f"[{audio_label}]",
                 "-r", str(settings.fps),
                 "-c:v", "libx264", "-preset", settings.preset, "-crf", str(settings.crf),
                 "-pix_fmt", "yuv420p", "-c:a", "aac", "-b:a", "128k",
                 "-movflags", "+faststart", "-shortest", video_path.name,
-            ]
+            ])
             try:
                 result = subprocess.run(
                     command,
@@ -332,6 +364,7 @@ class AgenticShortRenderer:
                 "encode_count": 1,
                 "filtergraph": filtergraph,
                 "filtergraph_length": len(filtergraph),
+                "asset_ids": used_asset_ids,
             })
 
         return AgenticRenderResult(

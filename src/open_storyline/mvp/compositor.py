@@ -12,7 +12,14 @@ REFRAME_RENDER_CAPABILITIES = frozenset({
     "crop",
     "fit",
     "letterbox",
+    "focus_zoom",
+    "source_cutaway",
+    "image_overlay",
+    "pip",
+    "text_emphasis",
     "hard_cut",
+    "fade",
+    "xfade",
     "subtitles",
 })
 RENDER_EXECUTION_VERSION = "render_execution.v1"
@@ -33,6 +40,22 @@ class CropRect:
 
 
 @dataclass(frozen=True)
+class ResolvedOverlay:
+    id: str
+    kind: str
+    timeline_window: TimeWindow
+    source_window: TimeWindow | None
+    text: str
+    asset_id: str
+    opacity: float
+    width_ratio: float
+    margin_ratio: float
+    transition_ms: int
+    z_index: int
+    position: str
+
+
+@dataclass(frozen=True)
 class ResolvedSegment:
     id: str
     source_window: TimeWindow
@@ -40,6 +63,9 @@ class ResolvedSegment:
     strategy: str
     crop: CropRect | None
     target_region_ids: tuple[str, ...]
+    transition_kind: str
+    transition_duration_ms: int
+    overlays: tuple[ResolvedOverlay, ...]
     reason: str
     fallback_used: bool
     smoothed: bool
@@ -156,6 +182,27 @@ def _fallback_strategy(segment: EditSegment) -> str:
     return "crop"
 
 
+def _resolve_overlays(segment: EditSegment) -> tuple[ResolvedOverlay, ...]:
+    overlays = [
+        ResolvedOverlay(
+            id=overlay.id,
+            kind=overlay.kind,
+            timeline_window=overlay.timeline_window,
+            source_window=overlay.source_window,
+            text=overlay.text,
+            asset_id=overlay.asset_id,
+            opacity=overlay.opacity,
+            width_ratio=overlay.width_ratio,
+            margin_ratio=overlay.margin_ratio,
+            transition_ms=overlay.transition_ms,
+            z_index=overlay.z_index,
+            position=overlay.position,
+        )
+        for overlay in segment.overlays
+    ]
+    return tuple(sorted(overlays, key=lambda item: (item.z_index, item.id)))
+
+
 def _resolve_segment(
     segment: EditSegment,
     *,
@@ -165,16 +212,6 @@ def _resolve_segment(
     output_width: int,
     output_height: int,
 ) -> ResolvedSegment:
-    if segment.transition_in.kind != "cut":
-        raise CompositionError(
-            "COMPOSITION_TRANSITION_UNSUPPORTED",
-            "Sprint 4 compositor supports hard cuts only",
-        )
-    if segment.overlays:
-        raise CompositionError(
-            "COMPOSITION_OVERLAY_UNSUPPORTED",
-            "Sprint 4 compositor does not execute overlays",
-        )
     if segment.layout.mode in {"fit", "letterbox"}:
         return ResolvedSegment(
             id=segment.id,
@@ -183,7 +220,25 @@ def _resolve_segment(
             strategy=segment.layout.mode,
             crop=None,
             target_region_ids=(),
+            transition_kind=segment.transition_in.kind,
+            transition_duration_ms=segment.transition_in.duration_ms,
+            overlays=_resolve_overlays(segment),
             reason="The validated plan explicitly preserves the full source frame.",
+            fallback_used=False,
+            smoothed=False,
+        )
+    if segment.layout.mode == "source":
+        return ResolvedSegment(
+            id=segment.id,
+            source_window=segment.source_window,
+            timeline_window=segment.timeline_window,
+            strategy="fit",
+            crop=None,
+            target_region_ids=(),
+            transition_kind=segment.transition_in.kind,
+            transition_duration_ms=segment.transition_in.duration_ms,
+            overlays=_resolve_overlays(segment),
+            reason="The segment is an explicit source cutaway rendered full-frame.",
             fallback_used=False,
             smoothed=False,
         )
@@ -199,6 +254,11 @@ def _resolve_segment(
         output_width,
         output_height,
     )
+    if segment.layout.max_zoom > 1:
+        crop_width = max(2, int(round(crop_width / segment.layout.max_zoom)))
+        crop_height = max(2, int(round(crop_height / segment.layout.max_zoom)))
+        crop_width -= crop_width % 2
+        crop_height -= crop_height % 2
     regions = _target_regions(segment, visual)
     if not regions:
         fallback = _fallback_strategy(segment)
@@ -219,6 +279,9 @@ def _resolve_segment(
             strategy=fallback,
             crop=crop,
             target_region_ids=(),
+            transition_kind=segment.transition_in.kind,
+            transition_duration_ms=segment.transition_in.duration_ms,
+            overlays=_resolve_overlays(segment),
             reason="No matching visual observation exists in this source window; explicit fallback applied.",
             fallback_used=True,
             smoothed=False,
@@ -238,6 +301,9 @@ def _resolve_segment(
             strategy=fallback,
             crop=None,
             target_region_ids=tuple(region.id for region in regions),
+            transition_kind=segment.transition_in.kind,
+            transition_duration_ms=segment.transition_in.duration_ms,
+            overlays=_resolve_overlays(segment),
             reason="The protected visual union is wider than a safe portrait crop; full-frame fallback applied.",
             fallback_used=True,
             smoothed=False,
@@ -258,7 +324,14 @@ def _resolve_segment(
             crop_height=crop_height,
         ),
         target_region_ids=tuple(region.id for region in regions),
-        reason="Portrait crop is centered on the validated semantic target union.",
+        transition_kind=segment.transition_in.kind,
+        transition_duration_ms=segment.transition_in.duration_ms,
+        overlays=_resolve_overlays(segment),
+        reason=(
+            "Focus zoom is centered on the validated semantic target union."
+            if segment.layout.max_zoom > 1
+            else "Portrait crop is centered on the validated semantic target union."
+        ),
         fallback_used=False,
         smoothed=False,
     )

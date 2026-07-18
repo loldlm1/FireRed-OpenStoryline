@@ -42,6 +42,13 @@ DETERMINISTIC_SKILLS = frozenset({
     "vintage",
     "volume",
 })
+AGENTIC_FINISHING_SKILLS = DETERMINISTIC_SKILLS - {
+    "deshake",
+    "fade",
+    "letterbox",
+    "mirror",
+    "rotate",
+}
 BLOCKED_PARAM_PARTS = {"command", "device", "filter", "model", "path", "script", "target", "url"}
 
 
@@ -96,7 +103,11 @@ def _simple_value(value: Any, depth: int = 0) -> bool:
     return False
 
 
-def validate_effects(value: Any) -> EffectsPlan:
+def validate_effects(
+    value: Any,
+    *,
+    allowed_skills: frozenset[str] = DETERMINISTIC_SKILLS,
+) -> EffectsPlan:
     raw_effects = value.get("effects") if isinstance(value, dict) else None
     if not isinstance(raw_effects, list):
         raise FFMPEGAError("FFMPEGA_PLAN_INVALID", "effects must be an array")
@@ -107,7 +118,7 @@ def validate_effects(value: Any) -> EffectsPlan:
         if not isinstance(raw, dict):
             raise FFMPEGAError("FFMPEGA_PLAN_INVALID", "each effect must be an object")
         skill = str(raw.get("skill") or "").strip()
-        if skill not in DETERMINISTIC_SKILLS:
+        if skill not in allowed_skills:
             raise FFMPEGAError("FFMPEGA_SKILL_BLOCKED", f"skill is not deterministic or allowed: {skill}")
         params = raw.get("params") or {}
         if not isinstance(params, dict) or not _simple_value(params):
@@ -124,8 +135,13 @@ class EffectsPlanner:
     def __init__(self, client: NineRouterClient) -> None:
         self.client = client
 
-    async def plan(self, editing_prompt: str) -> EffectsPlan:
-        allowed = ", ".join(sorted(DETERMINISTIC_SKILLS))
+    async def plan(
+        self,
+        editing_prompt: str,
+        *,
+        allowed_skills: frozenset[str] = DETERMINISTIC_SKILLS,
+    ) -> EffectsPlan:
+        allowed = ", ".join(sorted(allowed_skills))
         response = await self.client.complete_json(
             system_prompt=(
                 "Select zero to five deterministic visual/audio finishing effects for a social video. "
@@ -136,7 +152,7 @@ class EffectsPlanner:
             ),
             user_prompt=str(editing_prompt or "")[:12_000],
         )
-        return validate_effects(response)
+        return validate_effects(response, allowed_skills=allowed_skills)
 
 
 def ffmpega_enabled(config: Any) -> bool:

@@ -186,9 +186,10 @@ class CompositorTests(unittest.TestCase):
             subtitle_filename=None,
             has_audio=True,
         )
-        self.assertEqual((video, audio), ("vcat", "acat"))
+        self.assertEqual((video, audio), ("vchain1", "achain1"))
         self.assertIn("split=2", multi)
-        self.assertIn("concat=n=2:v=1:a=1", multi)
+        self.assertIn("concat=n=2:v=1:a=0", multi)
+        self.assertIn("concat=n=2:v=0:a=1", multi)
 
         with self.assertRaises(FilterGraphError):
             build_reframe_filtergraph(

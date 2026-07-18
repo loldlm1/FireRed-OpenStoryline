@@ -170,6 +170,32 @@ def build_preflight(
                     f"clips.{clip.clip_index}.segments.{segment.id}.transition_in",
                     "Transition duration must be shorter than the segment.",
                 ))
+            for overlay in segment.overlays:
+                overlay_source = f"clips.{clip.clip_index}.segments.{segment.id}.overlays.{overlay.id}"
+                if (
+                    overlay.protect_subtitles
+                    and overlay.position in {"bottom", "bottom_left", "bottom_right"}
+                ):
+                    findings.append(PreflightFinding(
+                        "block",
+                        "SUBTITLE_SAFE_ZONE_CONFLICT",
+                        overlay_source,
+                        "The overlay occupies the protected subtitle zone.",
+                    ))
+                if overlay.transition_ms * 2 > overlay.timeline_window.duration_ms:
+                    findings.append(PreflightFinding(
+                        "block",
+                        "OVERLAY_TRANSITION_TOO_LONG",
+                        overlay_source,
+                        "Overlay entrance and exit transitions exceed its timeline window.",
+                    ))
+                if overlay.kind == "image" and overlay.asset_id not in resolved:
+                    findings.append(PreflightFinding(
+                        "block",
+                        "ASSET_UNRESOLVED",
+                        overlay_source,
+                        "The image overlay asset has not been resolved.",
+                    ))
 
         for asset in clip.asset_requests:
             source = f"clips.{clip.clip_index}.asset_requests.{asset.id}"

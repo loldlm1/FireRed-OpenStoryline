@@ -14,6 +14,7 @@ reuse its CLI, local-model, or file-authoritative architecture.
 | `src/open_storyline/mvp/frame_sampling.py` | `scripts/video_understanding.py` | Adapted scene-plus-uniform sampling ideas into an in-memory, byte-bounded frame manifest with stable IDs and no local detector. |
 | `src/open_storyline/mvp/visual_understanding.py` | `scripts/video_understanding.py` | Replaced local YOLO/class logic with validated, general-purpose remote observations and tracklets grounded in ordered frame IDs and timestamps. |
 | `src/open_storyline/mvp/compositor.py` | `scripts/smart_reframe.py` | Reimplemented subject-union portrait framing with typed visual evidence, fit/letterbox decisions, bounded crop motion, and explicit fallback evidence. |
+| `src/open_storyline/mvp/edit_plan.py`, `src/open_storyline/mvp/ffmpeg_filters.py` | `scripts/pip_overlay.py`, `scripts/screen_focus.py`, `scripts/transition_bridge.py` | Adapted typed timeline-window, focus, overlay, and transition concepts into a server-generated FFmpeg filtergraph. Platform presets, arbitrary filter input, and provider-specific behavior were not copied. |
 
 Future sprints must append materially adapted reference paths here. Provider,
 platform, local-inference, and niche-specific logic must not be copied into the

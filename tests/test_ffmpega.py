@@ -6,6 +6,7 @@ import unittest
 import httpx
 
 from open_storyline.mvp.ffmpega import (
+    AGENTIC_FINISHING_SKILLS,
     EffectsPlanner,
     FFMPEGAClient,
     FFMPEGAError,
@@ -34,6 +35,20 @@ class EffectsPolicyTests(unittest.TestCase):
             with self.subTest(payload=payload), self.assertRaises(FFMPEGAError):
                 validate_effects(payload)
 
+    def test_agentic_finishing_policy_excludes_structural_edits(self):
+        plan = validate_effects(
+            {"effects": [{"skill": "vignette", "params": {}}]},
+            allowed_skills=AGENTIC_FINISHING_SKILLS,
+        )
+        self.assertEqual(plan.effects[0].skill, "vignette")
+        for skill in ("fade", "letterbox", "rotate", "deshake"):
+            with self.subTest(skill=skill), self.assertRaises(FFMPEGAError) as caught:
+                validate_effects(
+                    {"effects": [{"skill": skill, "params": {}}]},
+                    allowed_skills=AGENTIC_FINISHING_SKILLS,
+                )
+            self.assertEqual(caught.exception.code, "FFMPEGA_SKILL_BLOCKED")
+
 
 class FakePlannerClient:
     def __init__(self, response):
@@ -58,6 +73,17 @@ class EffectsPlannerTests(unittest.IsolatedAsyncioTestCase):
         with self.assertRaises(FFMPEGAError) as caught:
             await planner.plan("transcribe locally")
         self.assertEqual(caught.exception.code, "FFMPEGA_SKILL_BLOCKED")
+
+    async def test_agentic_planner_advertises_only_finishing_skills(self):
+        client = FakePlannerClient({"effects": []})
+        await EffectsPlanner(client).plan(
+            "finish the completed timeline",
+            allowed_skills=AGENTIC_FINISHING_SKILLS,
+        )
+        prompt = client.kwargs["system_prompt"]
+        self.assertIn("vignette", prompt)
+        self.assertNotIn("letterbox", prompt)
+        self.assertNotIn("fade,", prompt)
 
 
 class FFMPEGAClientTests(unittest.IsolatedAsyncioTestCase):
