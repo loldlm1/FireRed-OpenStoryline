@@ -174,22 +174,27 @@ cp -R .claude/skills/openstoryline-install ~/.claude/skills/
 cp -R .claude/skills/openstoryline-use ~/.claude/skills/
 ```
 
+### Codex
+
+When Codex starts inside this repository, it discovers the two project Skills
+through `.agents/skills/`. Invoke them explicitly with:
+
+```text
+$openstoryline-install
+$openstoryline-use
+```
+
+The `.agents/skills/` entries are repository-relative links to the canonical
+`.claude/skills/` directories, so Claude Code, OpenClaw, and Codex use the same
+workflow content. For user-level Codex installation, invoke `$skill-installer`
+and ask it to install both `.claude/skills/openstoryline-install` and
+`.claude/skills/openstoryline-use` from `FireRedTeam/FireRed-OpenStoryline`.
+
 ### Other Compatible Agents (Experimental)
 
-These Skills are based on an open Agent Skills format, so in theory they can also be installed into other compatible agents.
-For example, you can install them into Codex via the Skills CLI:
-
-```bash
-npx skills add FireRedTeam/FireRed-OpenStoryline --skill openstoryline-install --agent codex
-npx skills add FireRedTeam/FireRed-OpenStoryline --skill openstoryline-use --agent codex
-```
-
-Or use the commands below with the `--global` flag to install these Skills into the user-level directory so they are available across projects:
-
-```bash
-npx skills add FireRedTeam/FireRed-OpenStoryline --skill openstoryline-install --global
-npx skills add FireRedTeam/FireRed-OpenStoryline --skill openstoryline-use --global
-```
+These Skills use an open Agent Skills format and may work with other compatible
+agents. Follow the current installation and discovery documentation for the
+specific agent rather than assuming Codex's repository paths apply to it.
 
 ## 📦 Install
 ### 1. Clone repository

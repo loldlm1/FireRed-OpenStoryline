@@ -45,7 +45,6 @@ el puerto público elegido. Para dominio con HTTPS deben estar abiertos 80 y
 ```bash
 git clone https://github.com/loldlm1/FireRed-OpenStoryline.git
 cd FireRed-OpenStoryline
-git switch agent/remote-video-mvp
 cp .env.kamal.example .env.kamal
 ./bin/kamal-mvp auth hash-password
 ```
