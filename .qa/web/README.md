@@ -1,8 +1,7 @@
 # Remote MVP Browser QA
 
-This Playwright harness tests the password/session flow against an already
-running local remote-MVP server. Never point it at production or provide a real
-production password.
+This Playwright harness tests an already running local remote-MVP server. Never
+point it at production or provide a real production password.
 
 ## Install
 
@@ -11,42 +10,65 @@ npm install
 npx playwright install chromium
 ```
 
-Use `npx playwright install --with-deps chromium` only when the environment is missing system browser dependencies; that command may require sudo. If a run fails with a missing browser executable after `npm install`, install the matching browser revision with `npx playwright install chromium`.
+Use `npx playwright install --with-deps chromium` only when system browser
+dependencies are missing; it may require sudo.
 
-## Run
+## Focused Local Gate
+
+The default local URL is `http://127.0.0.1:8000`, matching
+`.env.mvp.example`. `BASE_URL` still overrides it for an intentional custom
+port. Run project-native Python tests before Playwright, then select one focused
+Chromium command:
 
 ```bash
-BASE_URL=http://127.0.0.1:18000 \
-QA_PASSWORD='local test password' \
-QA_FAIL_ON_CONSOLE=1 \
-npm run test:compact
+QA_FAIL_ON_CONSOLE=1 npm run test:smoke
+
+QA_PASSWORD='local test password' npm run test:auth:desktop
+
+QA_PASSWORD='local test password' npm run test:auth:mobile
 ```
 
-The focused suite covers the fresh login state, generic invalid-password
-feedback, cookie/CSRF behavior, browser-storage absence, logout, keyboard
-focus, resumable editing sessions, destructive session-deletion confirmation,
-post-delete media unavailability, audit-retention messaging, and desktop/mobile
-layout. `tests/smoke.spec.ts` provides the generic page-error check.
+All three commands use Chromium, compact reporters, and one worker. Run the
+generic smoke plus at most one directly affected auth/layout test by default;
+do not run both auth commands when the change does not require them.
 
-Multiple paths can be added to the generic smoke test:
+Collection-only checks do not require a server:
 
 ```bash
-BASE_URL=http://127.0.0.1:18000 QA_PATHS=/,/health npm run test:compact
+npm run test:smoke -- --list
+QA_PASSWORD='local-list-only' npm run test:auth:desktop -- --list
+QA_PASSWORD='local-list-only' npm run test:auth:mobile -- --list
 ```
 
-Cross-browser only when needed:
+`tests/smoke.spec.ts` checks one or more paths for fatal HTTP, page, console,
+and body errors. Add paths without broadening the browser matrix:
 
 ```bash
-BASE_URL=http://127.0.0.1:3000 QA_BROWSERS=all npm run test:compact
+QA_PATHS=/,/health QA_FAIL_ON_CONSOLE=1 npm run test:smoke
+```
+
+## Broader Runs
+
+`npm run test:compact` and the Firefox/WebKit scripts remain available for an
+explicit broader request. They are not the routine validation path in this
+resource-constrained environment. A deliberate cross-browser run can use:
+
+```bash
+BASE_URL=http://127.0.0.1:8000 QA_BROWSERS=all npm run test:compact
 ```
 
 Useful environment variables:
 
-- `BASE_URL`: app URL.
-- `QA_PASSWORD`: required local test password configured by the running app.
-- `QA_PATHS`: comma-separated paths to smoke test.
-- `QA_BROWSERS`: `chromium` or `all`.
+- `BASE_URL`: local app URL; defaults to `http://127.0.0.1:8000`.
+- `QA_PASSWORD`: required only by the auth/session spec.
+- `QA_PATHS`: comma-separated paths for the generic smoke test.
+- `QA_BROWSERS`: `chromium` or an explicitly requested broader selection.
 - `QA_FAIL_ON_CONSOLE`: set `1` to fail on console errors.
-- `QA_TRACE`: default `retain-on-failure`.
+- `QA_TRACE`: defaults to `retain-on-failure`.
 - `QA_VIDEO`: set `1` to retain video on failure.
-- `QA_WORKERS`: parallel worker count.
+- `QA_WORKERS`: worker count; defaults to `1`.
+
+Focused runs keep screenshots and traces only on failure; video remains off
+unless `QA_VIDEO=1`. Compact JSON/JUnit results stay under
+`.qa/web/artifacts/`. Enable heavier HTML/video artifacts only for a targeted
+failure, and report artifact paths instead of dumping reports or DOM snapshots.

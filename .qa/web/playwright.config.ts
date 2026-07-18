@@ -2,7 +2,7 @@ import { defineConfig, devices } from '@playwright/test';
 
 const compact = process.env.QA_COMPACT !== '0';
 const browsersEnv = process.env.QA_BROWSERS || 'chromium';
-const workers = Number(process.env.QA_WORKERS || (process.env.CI ? 2 : 4));
+const workers = Number(process.env.QA_WORKERS || 1);
 
 function projectFor(name: string) {
   const browser = name.trim().toLowerCase();
@@ -49,7 +49,7 @@ export default defineConfig({
         ['html', { outputFolder: 'artifacts/html-report', open: 'never' }],
       ],
   use: {
-    baseURL: process.env.BASE_URL || 'http://127.0.0.1:3000',
+    baseURL: process.env.BASE_URL || 'http://127.0.0.1:8000',
     actionTimeout: Number(process.env.QA_ACTION_TIMEOUT || 10_000),
     navigationTimeout: Number(process.env.QA_NAVIGATION_TIMEOUT || 15_000),
     screenshot: 'only-on-failure',

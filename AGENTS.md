@@ -206,8 +206,20 @@ docker build -f Dockerfile.remote .
   raw when compressed output hides the diagnostic.
 - The repository has no Ruff, formatter, type checker, coverage, or CI gate;
   do not claim those checks passed.
-- Browser changes use the focused `.qa/web` Chromium commands documented in
-  that harness; do not use production credentials or URLs.
+- Run project-native Python checks before browser QA. For local browser changes,
+  select the narrowest Chromium command and keep one worker:
+
+  ```bash
+  cd .qa/web && QA_FAIL_ON_CONSOLE=1 npm run test:smoke
+  cd .qa/web && QA_PASSWORD='local test password' npm run test:auth:desktop
+  cd .qa/web && QA_PASSWORD='local test password' npm run test:auth:mobile
+  ```
+
+  Run smoke plus at most one affected auth/layout test by default. Full
+  Playwright, cross-browser, and production-URL runs are opt-in. Keep
+  screenshots, traces, and videos failure-only; compact JSON/JUnit summaries
+  may be written under `.qa/web/artifacts/`. Report artifact paths rather than
+  dumping their contents.
 - Release changes require Kamal config/tests, health endpoints, secret
   references, persistent volumes, and rollback review; do not deploy to validate.
 

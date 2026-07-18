@@ -436,10 +436,10 @@ local MVP server available only for actual browser execution.
 **Demo/Validation**:
 
 - `cd .qa/web && ./node_modules/.bin/playwright test tests/smoke.spec.ts --project=chromium --workers=1 --list`
-- `cd .qa/web && ./node_modules/.bin/playwright test tests/mvp-auth-sessions.spec.ts --project=chromium --workers=1 --grep 'mobile login' --list`
+- `cd .qa/web && QA_PASSWORD='local-list-only' ./node_modules/.bin/playwright test tests/mvp-auth-sessions.spec.ts --project=chromium --workers=1 --grep 'mobile login' --list`
 - `PYTHONPATH=src .venv/bin/python -m unittest discover -s tests -p 'test_*.py' -v`
 - With a disposable local server:
-  `cd .qa/web && BASE_URL=http://127.0.0.1:8000 QA_PASSWORD='<local-test-password>' QA_FAIL_ON_CONSOLE=1 npm run test:smoke`
+  `cd .qa/web && BASE_URL=http://127.0.0.1:8000 QA_FAIL_ON_CONSOLE=1 npm run test:smoke`
 - If the UI-affecting documentation/script change needs authenticated coverage,
   run exactly one of `npm run test:auth:desktop` or
   `npm run test:auth:mobile`, not both by default.
