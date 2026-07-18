@@ -6,6 +6,13 @@ import asyncio
 import json
 
 from open_storyline.config import Settings
+from open_storyline.mvp.edit_plan import (
+    AgenticArtifactNames,
+    EditPlanError,
+    SUPPORTED_CAPABILITIES,
+    build_shadow_edit_plan,
+    resolve_agentic_server_mode,
+)
 from open_storyline.mvp.ffmpega import EffectsPlanner, FFMPEGAClient, ffmpega_enabled
 from open_storyline.mvp.jobs import JobStore
 from open_storyline.mvp.ninerouter import NineRouterClient
@@ -15,6 +22,7 @@ from open_storyline.mvp.render import (
     extract_frame_data_urls,
     probe_media,
 )
+from open_storyline.mvp.preflight import build_preflight
 from open_storyline.mvp.shorts import ShortsPlanner
 from open_storyline.utils.remote_stt import MistralSTTClient, RemoteSTTError, extract_audio_for_stt
 
@@ -66,6 +74,60 @@ class MVPJobProcessor:
             max_clips=int((state.get("request") or {}).get("max_clips") or 8),
             frame_data_urls=frames,
         )
+
+        agentic_manifest = None
+        request = state.get("request") or {}
+        if request.get("edit_mode") == "agentic":
+            server_mode = resolve_agentic_server_mode(self.config.agentic_editing)
+            if server_mode == "off":
+                raise EditPlanError(
+                    "AGENTIC_EDITING_DISABLED",
+                    "agentic editing is disabled on this server",
+                )
+            if server_mode == "render":
+                raise EditPlanError(
+                    "AGENTIC_RENDER_UNAVAILABLE",
+                    "agentic rendering is not available until the compositor sprint",
+                )
+
+            names = AgenticArtifactNames()
+            shorts_plan_path = output_dir / names.shorts_plan
+            shorts_plan_path.write_text(
+                json.dumps(plan.to_dict(), ensure_ascii=False, indent=2),
+                encoding="utf-8",
+            )
+            await store.register_artifact(job_id, shorts_plan_path, kind="shorts_plan")
+
+            edit_plan = build_shadow_edit_plan(
+                plan.clips,
+                source_duration_ms=media.duration_ms,
+            )
+            edit_plan_path = output_dir / names.edit_plan
+            edit_plan_path.write_text(
+                json.dumps(edit_plan.to_dict(), ensure_ascii=False, indent=2),
+                encoding="utf-8",
+            )
+            await store.register_artifact(job_id, edit_plan_path, kind="edit_plan")
+
+            preflight = build_preflight(
+                edit_plan,
+                available_capabilities=SUPPORTED_CAPABILITIES,
+                asset_policy=str(request.get("asset_policy") or "auto"),
+            )
+            preflight_path = output_dir / names.preflight
+            preflight_path.write_text(
+                json.dumps(preflight.to_dict(), ensure_ascii=False, indent=2),
+                encoding="utf-8",
+            )
+            await store.register_artifact(job_id, preflight_path, kind="edit_preflight")
+            if preflight.blocking:
+                raise EditPlanError("EDIT_PREFLIGHT_BLOCKED", "agentic edit preflight is blocked")
+            agentic_manifest = {
+                "mode": server_mode,
+                "edit_plan": names.edit_plan,
+                "preflight": names.preflight,
+                "preflight_status": preflight.status,
+            }
 
         await store.update(job_id, progress=0.68, stage="rendering")
         renderer = CPUShortRenderer(RenderSettings(
@@ -125,6 +187,7 @@ class MVPJobProcessor:
                 "attempts": [attempt.to_dict() for attempt in transcript.attempts],
             },
             "plan": plan.to_dict(),
+            "agentic": agentic_manifest,
             "effects": effects_plan.to_dict() if effects_plan is not None else {"effects": []},
             "outputs": final_outputs,
         }, ensure_ascii=False, indent=2), encoding="utf-8")
