@@ -111,25 +111,42 @@ Before starting the app, update config.toml.
 
 Treat `config.toml` as secret-bearing local configuration: never print, upload,
 or include real API keys in a patch, log excerpt, or response.
+Do not ask the user to paste secrets into chat. Have them enter secret values in
+a local Bash prompt and verify only that configuration loading succeeds.
 
 You can use scripts/update_config.py.
 
-At minimum, fill:
+At minimum, set the non-secret model names and base URLs:
 
 ```bash
 .venv/bin/python scripts/update_config.py --config ./config.toml --set llm.model=REPLACE_WITH_REAL_MODEL
 .venv/bin/python scripts/update_config.py --config ./config.toml --set llm.base_url=REPLACE_WITH_REAL_URL
-.venv/bin/python scripts/update_config.py --config ./config.toml --set llm.api_key=sk-REPLACE_WITH_REAL_KEY
-
 .venv/bin/python scripts/update_config.py --config ./config.toml --set vlm.model=REPLACE_WITH_REAL_MODEL
 .venv/bin/python scripts/update_config.py --config ./config.toml --set vlm.base_url=REPLACE_WITH_REAL_URL
-.venv/bin/python scripts/update_config.py --config ./config.toml --set vlm.api_key=sk-REPLACE_WITH_REAL_KEY
+```
+
+Enter secret values locally so they do not appear in process arguments:
+
+```bash
+set_secret() {
+  local key="$1"
+  read -rsp "$key: " OPENSTORYLINE_SECRET && printf '\n'
+  printf '%s' "$OPENSTORYLINE_SECRET" | \
+    .venv/bin/python scripts/update_config.py --config ./config.toml --set-stdin "$key"
+  unset OPENSTORYLINE_SECRET
+}
+
+set_secret llm.api_key
+set_secret vlm.api_key
 ```
 
 Optional but common:
 
 - `search_media.pexels_api_key` for searching media
 - TTS provider keys under `generate_voiceover.providers.*` (choose one provider)
+
+Use the same `set_secret <config-key>` flow for every optional API key or
+access token. Do not confirm configuration by reading the stored value back.
 
 
 ## Verification
