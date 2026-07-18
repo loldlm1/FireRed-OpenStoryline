@@ -60,6 +60,7 @@ class ResolvedSegment:
     id: str
     source_window: TimeWindow
     timeline_window: TimeWindow
+    operation: str
     strategy: str
     crop: CropRect | None
     target_region_ids: tuple[str, ...]
@@ -217,6 +218,7 @@ def _resolve_segment(
             id=segment.id,
             source_window=segment.source_window,
             timeline_window=segment.timeline_window,
+            operation=segment.layout.mode,
             strategy=segment.layout.mode,
             crop=None,
             target_region_ids=(),
@@ -232,6 +234,7 @@ def _resolve_segment(
             id=segment.id,
             source_window=segment.source_window,
             timeline_window=segment.timeline_window,
+            operation="source_cutaway",
             strategy="fit",
             crop=None,
             target_region_ids=(),
@@ -276,6 +279,7 @@ def _resolve_segment(
             id=segment.id,
             source_window=segment.source_window,
             timeline_window=segment.timeline_window,
+            operation="focus_zoom" if segment.layout.max_zoom > 1 else "crop",
             strategy=fallback,
             crop=crop,
             target_region_ids=(),
@@ -298,6 +302,7 @@ def _resolve_segment(
             id=segment.id,
             source_window=segment.source_window,
             timeline_window=segment.timeline_window,
+            operation="focus_zoom" if segment.layout.max_zoom > 1 else "crop",
             strategy=fallback,
             crop=None,
             target_region_ids=tuple(region.id for region in regions),
@@ -314,6 +319,7 @@ def _resolve_segment(
         id=segment.id,
         source_window=segment.source_window,
         timeline_window=segment.timeline_window,
+        operation="focus_zoom" if segment.layout.max_zoom > 1 else "crop",
         strategy="crop",
         crop=_crop_at_focus(
             focus_x,

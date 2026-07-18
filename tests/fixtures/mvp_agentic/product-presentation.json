@@ -1,0 +1,9 @@
+{
+  "version": "mvp_agentic_fixture.v1",
+  "id": "product-presentation",
+  "prompt_context": "Show the product detail or slide that supports each claim and use external imagery only for a specific visual gap.",
+  "expected_roles": ["speaker", "object", "screen", "text"],
+  "expected_capabilities": ["fit", "focus_zoom", "image_overlay", "text_emphasis", "subtitles"],
+  "expected_asset_calls": 1,
+  "metrics": ["schema_validity", "source_bounds", "target_visibility", "asset_calls", "plan_execution", "qa_status", "latency_ms", "provider_calls"]
+}

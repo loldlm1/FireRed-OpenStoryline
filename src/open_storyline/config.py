@@ -185,6 +185,10 @@ class AgenticEditingConfig(ConfigBaseModel):
     max_assets_per_clip: int = Field(default=4, ge=0, le=8)
     generated_assets_enabled: bool = False
     max_generated_assets_per_clip: int = Field(default=2, ge=0, le=8)
+    creative_qa_enabled: bool = True
+    creative_qa_strict: bool = True
+    semantic_qa_enabled: bool = False
+    semantic_qa_max_frames: int = Field(default=4, ge=1, le=8)
     scene_threshold: float = Field(default=0.35, gt=0, lt=1)
     min_scene_duration_ms: int = Field(default=1000, ge=100, le=30_000)
     max_scenes: int = Field(default=64, ge=1, le=256)

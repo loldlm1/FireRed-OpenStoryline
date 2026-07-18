@@ -37,10 +37,37 @@ isolated so upstream behavior can continue to be merged into this fork.
 5. `cx/gpt-5.6-sol` receives the transcript and sampled frames through
    9Router and returns a structured clip plan.
 6. The server validates duration, bounds, overlap, and output count.
-7. FFmpeg renders vertical clips and subtitles on CPU.
-8. PostgreSQL ingests the sanitized JSON/SRT evidence and records deterministic
+7. In agentic render mode, the server validates an executable edit plan,
+   conditionally resolves approved assets, and FFmpeg renders the typed timeline
+   operations and subtitles on CPU.
+8. Agentic outputs produce `render_qa.json`, `retention_rhythm_qa.json`, and
+   `creative_conformance.json`. Structural, pacing, fallback, operation, and
+   asset-use findings are evidence for review and never rewrite a rendered job
+   to failed. The pacing heuristics do not predict retention or virality.
+9. PostgreSQL ingests the sanitized JSON/SRT evidence and records deterministic
    FFprobe/subtitle structural checks without storing media bytes.
-9. The browser downloads individual clips, the manifest, or a ZIP bundle.
+10. The browser downloads individual clips, the manifest, or a ZIP bundle.
+
+## Agentic creative QA
+
+- Deterministic creative QA is enabled independently of agentic rendering with
+  `OPENSTORYLINE_CREATIVE_QA_ENABLED`; strict blocker thresholds can be relaxed
+  with `OPENSTORYLINE_CREATIVE_QA_STRICT` without changing render completion.
+- Structural analysis uses bounded FFprobe/FFmpeg commands and timeouts for
+  dimensions, codecs, audio, duration, black frames, freezes, and silence.
+- Rhythm evidence measures hook-window activity, scene and overlay changes,
+  visual holds, attention gaps, and output-aligned subtitle cadence.
+- Conformance evidence compares validated planned operations and requested
+  assets with executed operations, used assets, and explained fallbacks.
+- Optional semantic frame review uses the approved 9Router vision route only
+  when `OPENSTORYLINE_SEMANTIC_QA_ENABLED=true`. It samples at most
+  `OPENSTORYLINE_SEMANTIC_QA_MAX_FRAMES`, stores no frame bytes or raw provider
+  body, cannot authorize actions or modify the edit plan, and degrades to an
+  unavailable review note on provider failure.
+- Cross-niche regression fixtures under `tests/fixtures/mvp_agentic/` contain
+  only synthetic schema expectations. The private production session
+  `Sesion prueba 1` is an operator-only regression gate and its media,
+  transcript, prompts, frames, and reports must never be committed.
 
 ## Default remote services
 

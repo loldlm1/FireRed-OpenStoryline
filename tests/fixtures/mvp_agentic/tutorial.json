@@ -1,0 +1,9 @@
+{
+  "version": "mvp_agentic_fixture.v1",
+  "id": "single-speaker-tutorial",
+  "prompt_context": "Keep the speaker readable and reveal demonstrated steps at the moment they are explained.",
+  "expected_roles": ["speaker", "screen", "demonstration_target"],
+  "expected_capabilities": ["crop", "source_cutaway", "text_emphasis", "subtitles"],
+  "expected_asset_calls": 0,
+  "metrics": ["schema_validity", "source_bounds", "target_visibility", "hook_activity", "subtitle_cadence", "qa_status", "latency_ms", "provider_calls"]
+}

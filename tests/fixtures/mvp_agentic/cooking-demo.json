@@ -1,0 +1,9 @@
+{
+  "version": "mvp_agentic_fixture.v1",
+  "id": "cooking-demonstration",
+  "prompt_context": "Prioritize hands, ingredients, and visible state changes while preserving the presenter when useful.",
+  "expected_roles": ["speaker", "object", "demonstration_target"],
+  "expected_capabilities": ["crop", "focus_zoom", "source_cutaway", "subtitles"],
+  "expected_asset_calls": 0,
+  "metrics": ["schema_validity", "source_bounds", "target_visibility", "scene_changes", "attention_gaps", "plan_execution", "qa_status", "latency_ms", "provider_calls"]
+}
