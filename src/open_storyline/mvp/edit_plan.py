@@ -344,6 +344,8 @@ def validate_job_controls(edit_mode: str, asset_policy: str) -> tuple[EditMode, 
 
 @dataclass(frozen=True)
 class AgenticArtifactNames:
+    scene_boundaries: str = "scene_boundaries.json"
+    visual_understanding: str = "visual_understanding.json"
     shorts_plan: str = "shorts_plan.json"
     edit_plan: str = "edit_plan.json"
     preflight: str = "edit_preflight.json"

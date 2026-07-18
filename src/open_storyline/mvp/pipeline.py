@@ -14,6 +14,7 @@ from open_storyline.mvp.edit_plan import (
     resolve_agentic_server_mode,
 )
 from open_storyline.mvp.ffmpega import EffectsPlanner, FFMPEGAClient, ffmpega_enabled
+from open_storyline.mvp.frame_sampling import sample_frames
 from open_storyline.mvp.jobs import JobStore
 from open_storyline.mvp.ninerouter import NineRouterClient
 from open_storyline.mvp.render import (
@@ -23,7 +24,9 @@ from open_storyline.mvp.render import (
     probe_media,
 )
 from open_storyline.mvp.preflight import build_preflight
+from open_storyline.mvp.scene_boundaries import detect_scene_boundaries
 from open_storyline.mvp.shorts import ShortsPlanner
+from open_storyline.mvp.visual_understanding import VisualUnderstandingPlanner
 from open_storyline.utils.remote_stt import MistralSTTClient, RemoteSTTError, extract_audio_for_stt
 
 
@@ -36,6 +39,21 @@ class MVPJobProcessor:
 
     async def __call__(self, job_id: str, store: JobStore) -> dict[str, Any]:
         state = await store.load(job_id)
+        request = state.get("request") or {}
+        agentic_requested = request.get("edit_mode") == "agentic"
+        server_mode = None
+        if agentic_requested:
+            server_mode = resolve_agentic_server_mode(self.config.agentic_editing)
+            if server_mode == "off":
+                raise EditPlanError(
+                    "AGENTIC_EDITING_DISABLED",
+                    "agentic editing is disabled on this server",
+                )
+            if server_mode == "render":
+                raise EditPlanError(
+                    "AGENTIC_RENDER_UNAVAILABLE",
+                    "agentic rendering is not available until the compositor sprint",
+                )
         source = await store.source_path(job_id)
         work_dir = store.work_dir(job_id)
         output_dir = store.output_dir(job_id)
@@ -57,15 +75,66 @@ class MVPJobProcessor:
         }, ensure_ascii=False, indent=2), encoding="utf-8")
         await store.register_artifact(job_id, transcript_path, kind="transcript")
 
-        await store.update(job_id, progress=0.48, stage="sampling_frames")
-        frames = await asyncio.to_thread(
-            extract_frame_data_urls,
-            source,
-            duration_ms=media.duration_ms,
-            count=self.config.mvp.frame_count,
-        )
+        names = AgenticArtifactNames()
+        scene_report = None
+        frame_manifest = None
+        visual_understanding = None
+        remote_client = NineRouterClient.from_config(self.config.ninerouter)
+        if agentic_requested:
+            agentic_config = self.config.agentic_editing
+            await store.update(job_id, progress=0.42, stage="detecting_scenes")
+            scene_report = await asyncio.to_thread(
+                detect_scene_boundaries,
+                source,
+                source_duration_ms=media.duration_ms,
+                threshold=agentic_config.scene_threshold,
+                min_scene_duration_ms=agentic_config.min_scene_duration_ms,
+                max_scenes=agentic_config.max_scenes,
+            )
+            scene_path = output_dir / names.scene_boundaries
+            scene_path.write_text(
+                json.dumps(scene_report.to_dict(), ensure_ascii=False, indent=2),
+                encoding="utf-8",
+            )
+            await store.register_artifact(job_id, scene_path, kind="scene_boundaries")
+
+            await store.update(job_id, progress=0.48, stage="sampling_agentic_frames")
+            frame_manifest = await asyncio.to_thread(
+                sample_frames,
+                source,
+                scene_report=scene_report,
+                source_width=media.width,
+                source_height=media.height,
+                max_frames=agentic_config.vision_frame_count,
+                max_width=agentic_config.vision_frame_max_width,
+                max_height=agentic_config.vision_frame_max_height,
+                max_frame_bytes=agentic_config.vision_frame_max_bytes,
+            )
+            await store.update(job_id, progress=0.54, stage="remote_visual_understanding")
+            visual_understanding = await VisualUnderstandingPlanner(remote_client).plan(
+                frame_manifest=frame_manifest,
+                scene_report=scene_report,
+                editing_prompt=state["prompt"],
+                transcript_text=transcript.text,
+            )
+            visual_path = output_dir / names.visual_understanding
+            visual_path.write_text(
+                json.dumps(visual_understanding.to_dict(), ensure_ascii=False, indent=2),
+                encoding="utf-8",
+            )
+            await store.register_artifact(job_id, visual_path, kind="visual_understanding")
+            frames = frame_manifest.image_data_urls
+        else:
+            await store.update(job_id, progress=0.48, stage="sampling_frames")
+            frames = await asyncio.to_thread(
+                extract_frame_data_urls,
+                source,
+                duration_ms=media.duration_ms,
+                count=self.config.mvp.frame_count,
+            )
+
         await store.update(job_id, progress=0.58, stage="remote_planning")
-        planner = ShortsPlanner(NineRouterClient.from_config(self.config.ninerouter))
+        planner = ShortsPlanner(remote_client)
         plan = await planner.plan(
             editing_prompt=state["prompt"],
             transcript_text=transcript.text,
@@ -76,21 +145,7 @@ class MVPJobProcessor:
         )
 
         agentic_manifest = None
-        request = state.get("request") or {}
-        if request.get("edit_mode") == "agentic":
-            server_mode = resolve_agentic_server_mode(self.config.agentic_editing)
-            if server_mode == "off":
-                raise EditPlanError(
-                    "AGENTIC_EDITING_DISABLED",
-                    "agentic editing is disabled on this server",
-                )
-            if server_mode == "render":
-                raise EditPlanError(
-                    "AGENTIC_RENDER_UNAVAILABLE",
-                    "agentic rendering is not available until the compositor sprint",
-                )
-
-            names = AgenticArtifactNames()
+        if agentic_requested:
             shorts_plan_path = output_dir / names.shorts_plan
             shorts_plan_path.write_text(
                 json.dumps(plan.to_dict(), ensure_ascii=False, indent=2),
@@ -124,6 +179,10 @@ class MVPJobProcessor:
                 raise EditPlanError("EDIT_PREFLIGHT_BLOCKED", "agentic edit preflight is blocked")
             agentic_manifest = {
                 "mode": server_mode,
+                "scene_boundaries": names.scene_boundaries,
+                "visual_understanding": names.visual_understanding,
+                "vision_frame_count": len(frame_manifest.frames) if frame_manifest else 0,
+                "vision_call_count": 1 if visual_understanding else 0,
                 "edit_plan": names.edit_plan,
                 "preflight": names.preflight,
                 "preflight_status": preflight.status,
