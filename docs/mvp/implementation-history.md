@@ -47,6 +47,7 @@ Each implementation increment was validated before its short commit.
 | 34 | Agentic editing Sprint 6: conditional generated assets | Zero-call source-only behavior, 9Router-only generation, transactional cleanup, provenance, rights controls, API/UI tests, and no provider fallback | `feat(mvp): insert conditional generated assets` |
 | 35 | Agentic editing Sprint 7: structural, rhythm, and conformance evidence | Synthetic cross-niche fixtures, structural/rhythm/conformance artifacts, advisory semantic QA, and non-blocking failure tests | `test(mvp): add creative conformance gates` |
 | 36 | Agentic editing Sprint 8: guarded Pexels sourcing and disabled rollout | Mocked Pexels security/provenance tests, 228 deterministic and connected PostgreSQL tests, 4 FFmpeg renders, remote Docker build, Kamal/shell/config gates, and focused desktop/mobile Chromium QA; live rollout remains disabled pending manual license review and separate authorization | `feat(mvp): add guarded pexels sourcing and rollout` |
+| 37 | Agentic production Sprints 9-10: shadow deployment and source-only render activation | Atomic PostgreSQL backup and isolated restore, 228 deterministic tests, live redacted 9Router/Mistral gates, healthy shadow/render deployments, disabled generated/Pexels/semantic providers, and an operator-ready private comparison runbook | `ops(mvp): record agentic production rollout` |
 
 The original pull request targeted `main` in
 `loldlm1/FireRed-OpenStoryline`. Merge and release state belongs in the hosting
