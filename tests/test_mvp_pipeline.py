@@ -5,8 +5,10 @@ import unittest
 from unittest.mock import patch
 
 from open_storyline.mvp.edit_plan import EditPlanError
+from open_storyline.mvp.frame_sampling import FrameManifest, SampledFrame
 from open_storyline.mvp.pipeline import MVPJobProcessor
 from open_storyline.mvp.render import MediaInfo, RenderedShort
+from open_storyline.mvp.scene_boundaries import build_scene_boundaries
 from open_storyline.mvp.shorts import ShortCandidate, ShortsPlan
 
 
@@ -41,6 +43,26 @@ class FakeRenderer:
         path = Path(destination_dir) / "short-01.mp4"
         path.write_bytes(b"legacy-render")
         return [RenderedShort(path, None, clips[0])]
+
+
+class FakeVisualUnderstanding:
+    def to_dict(self):
+        return {
+            "version": "visual_understanding.v1",
+            "frame_manifest": {"frames": [{"id": "frame-001", "timestamp_ms": 250}]},
+            "regions": [],
+            "tracks": [],
+            "scenes": [],
+            "warnings": [],
+        }
+
+
+class FakeVisualPlanner:
+    def __init__(self, _client):
+        pass
+
+    async def plan(self, **_kwargs):
+        return FakeVisualUnderstanding()
 
 
 class FakeStore:
@@ -82,7 +104,16 @@ def config(mode: str):
     return SimpleNamespace(
         remote_asr=SimpleNamespace(language=""),
         ninerouter=SimpleNamespace(),
-        agentic_editing=SimpleNamespace(mode=mode),
+        agentic_editing=SimpleNamespace(
+            mode=mode,
+            scene_threshold=0.35,
+            min_scene_duration_ms=1000,
+            max_scenes=64,
+            vision_frame_count=6,
+            vision_frame_max_width=512,
+            vision_frame_max_height=512,
+            vision_frame_max_bytes=1_500_000,
+        ),
         mvp=SimpleNamespace(
             frame_count=0,
             render_width=1080,
@@ -105,11 +136,33 @@ class MVPAgenticPipelineTests(unittest.IsolatedAsyncioTestCase):
             processor = object.__new__(MVPJobProcessor)
             processor.config = config("shadow")
             processor.stt = FakeSTT()
+            scene_report = build_scene_boundaries(
+                [],
+                source_duration_ms=30_000,
+                threshold=0.35,
+            )
+            frame_manifest = FrameManifest(
+                source_duration_ms=30_000,
+                source_width=1920,
+                source_height=1080,
+                frames=(SampledFrame(
+                    id="frame-001",
+                    timestamp_ms=250,
+                    scene_id="scene-001",
+                    width=512,
+                    height=288,
+                    extraction_reason="scene_opening",
+                    encoded_bytes=4,
+                    data_url="data:image/jpeg;base64,ZmFrZQ==",
+                ),),
+            )
 
             with (
                 patch("open_storyline.mvp.pipeline.probe_media", return_value=MediaInfo(30_000, 1920, 1080, True)),
                 patch("open_storyline.mvp.pipeline.extract_audio_for_stt", side_effect=lambda _source, target: target),
-                patch("open_storyline.mvp.pipeline.extract_frame_data_urls", return_value=[]),
+                patch("open_storyline.mvp.pipeline.detect_scene_boundaries", return_value=scene_report),
+                patch("open_storyline.mvp.pipeline.sample_frames", return_value=frame_manifest),
+                patch("open_storyline.mvp.pipeline.VisualUnderstandingPlanner", FakeVisualPlanner),
                 patch("open_storyline.mvp.pipeline.NineRouterClient.from_config", return_value=object()),
                 patch("open_storyline.mvp.pipeline.ShortsPlanner", FakePlanner),
                 patch("open_storyline.mvp.pipeline.CPUShortRenderer", FakeRenderer),
@@ -119,6 +172,8 @@ class MVPAgenticPipelineTests(unittest.IsolatedAsyncioTestCase):
             names = {name for name, _kind in store.registered}
             self.assertEqual(result["clip_count"], 1)
             self.assertIn("shorts_plan.json", names)
+            self.assertIn("scene_boundaries.json", names)
+            self.assertIn("visual_understanding.json", names)
             self.assertIn("edit_plan.json", names)
             self.assertIn("edit_preflight.json", names)
             self.assertIn("short-01.mp4", names)

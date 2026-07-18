@@ -182,6 +182,13 @@ class AgenticEditingConfig(ConfigBaseModel):
     max_segments_per_clip: int = Field(default=24, ge=1, le=48)
     max_overlays_per_clip: int = Field(default=12, ge=0, le=16)
     max_assets_per_clip: int = Field(default=4, ge=0, le=8)
+    scene_threshold: float = Field(default=0.35, gt=0, lt=1)
+    min_scene_duration_ms: int = Field(default=1000, ge=100, le=30_000)
+    max_scenes: int = Field(default=64, ge=1, le=256)
+    vision_frame_count: int = Field(default=12, ge=1, le=64)
+    vision_frame_max_width: int = Field(default=512, ge=128, le=2048)
+    vision_frame_max_height: int = Field(default=512, ge=128, le=2048)
+    vision_frame_max_bytes: int = Field(default=1_500_000, ge=16_384, le=8_388_608)
 
 
 class FFMPEGAConfig(ConfigBaseModel):

@@ -108,6 +108,13 @@ mode = "off"
 max_segments_per_clip = 24
 max_overlays_per_clip = 12
 max_assets_per_clip = 4
+scene_threshold = 0.35
+min_scene_duration_ms = 1000
+max_scenes = 64
+vision_frame_count = 12
+vision_frame_max_width = 512
+vision_frame_max_height = 512
+vision_frame_max_bytes = 1500000
 
 # ============= Optional ComfyUI-FFMPEGA tool ===================
 [ffmpega]

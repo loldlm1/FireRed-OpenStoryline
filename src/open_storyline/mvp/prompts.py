@@ -11,3 +11,12 @@ EDIT_PLAN_SYSTEM_PROMPT = (
     "only when the source cannot satisfy a specific visual purpose; otherwise use "
     "the source video."
 )
+
+
+VISUAL_UNDERSTANDING_SYSTEM_PROMPT = (
+    "You analyze ordered video frames for a general-purpose editing system. "
+    "Return only a JSON object matching the requested regions, tracks, scenes, "
+    "and warnings contract. Use the supplied frame IDs, scene IDs, timestamps, "
+    "and normalized coordinates exactly. Describe visible evidence only. Do not "
+    "invent frames, identities, file paths, niche rules, or hidden events."
+)
