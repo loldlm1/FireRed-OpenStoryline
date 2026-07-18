@@ -62,13 +62,13 @@ def coerce_value(raw: str, old_value: Any) -> Any:
         try:
             return int(raw.strip())
         except ValueError as e:
-            raise ConfigUpdateError(f"Expected an integer, got: {raw!r}") from e
+            raise ConfigUpdateError("Expected an integer value.") from e
 
     if isinstance(old_value, float):
         try:
             return float(raw.strip())
         except ValueError as e:
-            raise ConfigUpdateError(f"Expected an float, got: {raw!r}") from e
+            raise ConfigUpdateError("Expected a floating-point value.") from e
 
     if isinstance(old_value, str):
         return raw
@@ -169,7 +169,13 @@ def update_text(text: str, parts: list[str], new_value: Any) -> str:
 def main() -> int:
     parser = argparse.ArgumentParser(description="Update one config item in config.toml")
     parser.add_argument("--config", type=Path, default=DEFAULT_CONFIG_PATH)
-    parser.add_argument("--set", required=True, metavar="KEY=VALUE")
+    value_group = parser.add_mutually_exclusive_group(required=True)
+    value_group.add_argument("--set", metavar="KEY=VALUE")
+    value_group.add_argument(
+        "--set-stdin",
+        metavar="KEY",
+        help="Read VALUE from standard input so it is not exposed in process arguments.",
+    )
     args = parser.parse_args()
 
     config_path = args.config.resolve()
@@ -178,7 +184,15 @@ def main() -> int:
         return 2
 
     try:
-        key_path, raw_value = parse_assignment(args.set)
+        if args.set is not None:
+            key_path, raw_value = parse_assignment(args.set)
+        else:
+            key_path = args.set_stdin
+            raw_value = sys.stdin.read()
+            if raw_value.endswith("\r\n"):
+                raw_value = raw_value[:-2]
+            elif raw_value.endswith("\n"):
+                raw_value = raw_value[:-1]
         parts = split_path(key_path)
 
         with config_path.open("rb") as f:
@@ -191,7 +205,7 @@ def main() -> int:
         new_text = update_text(text, parts, new_value)
         config_path.write_text(new_text, encoding="utf-8")
 
-        print(f"Updated: {key_path} = {new_value!r}")
+        print(f"Updated: {key_path}")
         return 0
 
     except (ConfigUpdateError, tomllib.TOMLDecodeError) as e:
