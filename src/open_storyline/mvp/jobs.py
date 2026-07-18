@@ -24,6 +24,8 @@ from open_storyline.mvp.edit_plan import (
     EditPlanError,
     validate_generated_asset_limit,
     validate_job_controls,
+    validate_stock_asset_limit,
+    validate_stock_policy,
 )
 from open_storyline.mvp.models import Artifact, EditingSession, JobEvent, VideoJob
 from open_storyline.mvp.observability import emit_event
@@ -379,6 +381,8 @@ class JobStore:
         edit_mode: str = "legacy",
         asset_policy: str = "auto",
         max_generated_assets_per_clip: int = 2,
+        stock_policy: str = "off",
+        max_stock_assets_per_clip: int = 0,
         job_id: str | None = None,
     ) -> dict[str, Any]:
         clean_prompt = str(prompt or "").strip()
@@ -394,6 +398,8 @@ class JobStore:
             generated_asset_limit = validate_generated_asset_limit(
                 max_generated_assets_per_clip
             )
+            normalized_stock_policy = validate_stock_policy(stock_policy)
+            stock_asset_limit = validate_stock_asset_limit(max_stock_assets_per_clip)
         except EditPlanError as exc:
             raise JobStoreError(exc.code, str(exc)) from exc
         await self.get_session(editing_session_id)
@@ -413,6 +419,8 @@ class JobStore:
                 "edit_mode": normalized_edit_mode,
                 "asset_policy": normalized_asset_policy,
                 "max_generated_assets_per_clip": generated_asset_limit,
+                "stock_policy": normalized_stock_policy,
+                "max_stock_assets_per_clip": stock_asset_limit,
             },
             input_data={
                 "original_filename": _safe_filename(filename),

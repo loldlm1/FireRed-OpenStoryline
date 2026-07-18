@@ -144,6 +144,7 @@ def build_reframe_filtergraph(
     subtitle_filename: str | None,
     has_audio: bool,
     asset_input_indexes: dict[str, int] | None = None,
+    asset_input_kinds: dict[str, str] | None = None,
 ) -> tuple[str, str, str]:
     if not has_audio:
         raise FilterGraphError(
@@ -155,6 +156,7 @@ def build_reframe_filtergraph(
     validate_output_dimensions(output_width, output_height)
 
     assets = dict(asset_input_indexes or {})
+    asset_kinds = dict(asset_input_kinds or {})
     source_overlays = [
         (segment_index, overlay)
         for segment_index, segment in enumerate(segments)
@@ -262,6 +264,12 @@ def build_reframe_filtergraph(
                         raise FilterGraphError(
                             "FILTER_ASSET_UNRESOLVED",
                             f"image overlay asset is unresolved: {overlay.asset_id}",
+                        )
+                    asset_kind = asset_kinds.get(overlay.asset_id, "generated_image")
+                    if asset_kind not in {"generated_image", "stock_image", "stock_video"}:
+                        raise FilterGraphError(
+                            "FILTER_ASSET_KIND_INVALID",
+                            f"overlay asset kind is unsupported: {overlay.asset_id}",
                         )
                     graph.append(
                         f"[{input_index}:v]trim=duration={duration:.3f},"

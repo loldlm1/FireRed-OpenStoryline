@@ -21,6 +21,8 @@ from open_storyline.mvp.edit_plan import (
     validate_edit_plan,
     validate_generated_asset_limit,
     validate_job_controls,
+    validate_stock_asset_limit,
+    validate_stock_policy,
 )
 from open_storyline.mvp.shorts import ShortCandidate, ShortsPlan, build_shorts_plan_artifact
 from open_storyline.mvp.scene_boundaries import build_scene_boundaries
@@ -183,6 +185,23 @@ class EditPlanContractTests(unittest.TestCase):
         self.assertEqual(validate_generated_asset_limit(2), 2)
         with self.assertRaises(EditPlanError):
             validate_generated_asset_limit(9)
+        self.assertEqual(validate_stock_policy("auto"), "auto")
+        self.assertEqual(validate_stock_asset_limit(2), 2)
+        with self.assertRaises(EditPlanError):
+            validate_stock_policy("fallback")
+        with self.assertRaises(EditPlanError):
+            validate_stock_asset_limit(9)
+
+        with self.assertRaises(ValueError):
+            AssetRequest(
+                id="stock-empty",
+                kind="stock_image",
+                provider="pexels",
+                timeline_window=TimeWindow(start_ms=0, end_ms=1_000),
+                visual_gap="the source lacks a visual",
+                purpose="illustrate",
+                rationale="a stock image is justified",
+            )
 
     def test_rejects_unknown_capability_and_non_finite_values(self):
         base = build_shadow_edit_plan(
@@ -312,6 +331,68 @@ class AgenticEditPlannerTests(unittest.IsolatedAsyncioTestCase):
                 self.assertEqual(plan.clips[0].segments[0].layout.focal_target.region_id, "region-1")
                 self.assertEqual(payload["editing_prompt"], editing_prompt)
                 self.assertEqual(payload["clips"][0]["regions"][0]["role"], role)
+
+    async def test_stock_planning_requires_an_explicit_pexels_capability(self):
+        planner, client, kwargs = planner_fixture("speaker", "Use a neutral teamwork cutaway.")
+        client.response["requested_capabilities"].append("image_overlay")
+        client.response["clips"][0]["segments"][0]["overlays"] = [{
+            "id": "stock-overlay",
+            "kind": "image",
+            "timeline_window": {"start_ms": 1000, "end_ms": 3000},
+            "asset_id": "stock-1",
+            "position": "top_right",
+        }]
+        client.response["clips"][0]["asset_requests"] = [{
+            "id": "stock-1",
+            "kind": "stock_image",
+            "provider": "pexels",
+            "timeline_window": {"start_ms": 1000, "end_ms": 3000},
+            "visual_gap": "the source has no neutral teamwork visual",
+            "purpose": "support the spoken example",
+            "rationale": "a short cutaway closes the visible gap",
+            "prompt": "remote teamwork planning",
+        }]
+        kwargs.update({
+            "max_generated_assets_per_clip": 0,
+            "max_stock_assets_per_clip": 1,
+            "stock_policy": "auto",
+        })
+
+        plan = await planner.plan(**kwargs)
+        payload = json.loads(client.call["user_prompt"])
+        self.assertEqual(plan.clips[0].asset_requests[0].provider, "pexels")
+        self.assertEqual(payload["asset_providers"]["generated_image"], [])
+        self.assertEqual(payload["asset_providers"]["stock_video"], ["pexels"])
+
+        planner, client, blocked_kwargs = planner_fixture(
+            "speaker", "Use a neutral teamwork cutaway."
+        )
+        client.response["requested_capabilities"].append("image_overlay")
+        client.response["clips"][0]["segments"][0]["overlays"] = [{
+            "id": "stock-overlay",
+            "kind": "image",
+            "timeline_window": {"start_ms": 1000, "end_ms": 3000},
+            "asset_id": "stock-1",
+            "position": "top_right",
+        }]
+        client.response["clips"][0]["asset_requests"] = [{
+            "id": "stock-1",
+            "kind": "stock_image",
+            "provider": "pexels",
+            "timeline_window": {"start_ms": 1000, "end_ms": 3000},
+            "visual_gap": "the source has no neutral teamwork visual",
+            "purpose": "support the spoken example",
+            "rationale": "a short cutaway closes the visible gap",
+            "prompt": "remote teamwork planning",
+        }]
+        blocked_kwargs.update({
+            "max_generated_assets_per_clip": 0,
+            "max_stock_assets_per_clip": 0,
+            "stock_policy": "off",
+        })
+        with self.assertRaises(EditPlanError) as caught:
+            await planner.plan(**blocked_kwargs)
+        self.assertEqual(caught.exception.code, "EDIT_PLAN_STOCK_POLICY_BLOCKED")
 
     async def test_rejects_clip_expansion_and_undeclared_capabilities(self):
         planner, client, kwargs = planner_fixture("speaker", "Keep the speaker visible.")

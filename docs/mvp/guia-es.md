@@ -2,7 +2,7 @@
 
 Este perfil no instala ni ejecuta modelos de IA locales. Texto, visión e
 imágenes usan Codex OAuth mediante 9Router; STT usa Voxtral directamente con
-Mistral. FFmpeg/FFprobe sólo procesan audio y video de forma determinista en
+Mistral y el stock opcional usa Pexels sin fallback. FFmpeg/FFprobe sólo procesan audio y video de forma determinista en
 CPU. Si alguno de esos contratos falla, el trabajo guarda razones sanitizadas
 en `failure.json`.
 
@@ -17,6 +17,7 @@ mano en el VPS.
 1. Conserva activas las conexiones Codex OAuth de 9Router.
 2. Crea una endpoint key de 9Router sólo para OpenStoryline.
 3. Conserva una o más keys válidas de Mistral para `MISTRAL_API_KEYS`.
+4. Deja Pexels apagado o conserva su key por separado si existe un rollout aprobado.
 
 Las credenciales Codex quedan en 9Router. FireRed recibe la URL/key del endpoint
 de 9Router y la key ring directa de Mistral como secretos Kamal independientes.
@@ -61,6 +62,7 @@ KAMAL_DOMAIN=video.example.com
 NINEROUTER_URL=https://tu-9router.example.com
 NINEROUTER_KEY=clave-del-endpoint-de-9router
 MISTRAL_API_KEYS=key-directa-de-mistral
+PEXELS_API_KEY=
 POSTGRES_PASSWORD=contraseña-aleatoria-del-administrador-de-postgres
 OPENSTORYLINE_DATABASE_PASSWORD=otra-contraseña-aleatoria-de-la-aplicación
 DATABASE_URL=postgresql+psycopg://openstoryline:contraseña-de-la-aplicación@openstoryline-mvp-db:5432/openstoryline
@@ -68,6 +70,8 @@ OPENSTORYLINE_WEB_PASSWORD_HASH='$argon2id$hash-generado'
 OPENSTORYLINE_SECURITY_PEPPER=pepper-aleatorio-de-64-caracteres
 OPENSTORYLINE_PUBLIC_ORIGIN=https://video.example.com
 OPENSTORYLINE_ALLOW_INSECURE_HTTP=false
+OPENSTORYLINE_PEXELS_ENABLED=false
+OPENSTORYLINE_PEXELS_LICENSE_REVIEWED_AT=
 ```
 
 `NINEROUTER_URL` debe ser accesible desde el VPS. Si 9Router sólo escucha en
@@ -75,6 +79,12 @@ OPENSTORYLINE_ALLOW_INSECURE_HTTP=false
 El password sin hash no se guarda en `.env.kamal`, PostgreSQL, JavaScript,
 headers, URLs ni logs. Conserva las comillas simples alrededor del hash: sus
 caracteres `$` serían interpretados al cargar `.env.kamal` sin esas comillas.
+Pexels permanece apagado y no necesita key para el despliegue base. Si se
+aprueba activarlo, guarda la key sólo en `.env.kamal`, revisa manualmente la
+documentación y licencia oficiales actuales, escribe la fecha `YYYY-MM-DD` en
+`OPENSTORYLINE_PEXELS_LICENSE_REVIEWED_AT` y luego cambia
+`OPENSTORYLINE_PEXELS_ENABLED=true`. El wrapper rechaza una fecha futura o con
+más de 180 días; no realiza una búsqueda Pexels durante el deploy.
 
 ## 3. Elige IP:puerto o dominio
 
@@ -151,6 +161,9 @@ para texto/visión/imagen y Mistral directo para STT. Cualquier fallo de catálo
 autenticación, transporte, cuota o contrato detiene el comando antes de iniciar
 Kamal. Los comandos de diagnóstico y `rollback` siguen disponibles cuando un
 gate está rojo. No reinicies ni reconfigures el proceso manual de 9Router.
+Si `OPENSTORYLINE_PEXELS_ENABLED=true`, el wrapper también exige la key y una
+revisión vigente de licencia antes de esos gates, pero no consume cuota ni
+descarga medios Pexels.
 
 El primer rollout con PostgreSQL se prepara por etapas para que la base de
 datos y la copia verificable existan antes de arrancar la nueva aplicación:
@@ -205,6 +218,14 @@ URL conserva el identificador para restaurarla después de refrescar o volver a
 iniciar sesión. La página permite ver trabajos recientes, progreso y descargar
 cada artefacto o un ZIP. Cerrar sesión revoca la sesión de autenticación en
 PostgreSQL y borra las cookies del navegador; no elimina la sesión de edición.
+
+En edición agentiva hay dos controles separados. “Imágenes generadas” autoriza
+únicamente `cx/gpt-5.5-image` y sólo cuando el plan detecta un vacío visual.
+“Stock externo · Pexels” comienza en `No usar Pexels`; al activarlo permite
+fotos o videos de stock dentro del límite indicado. Desactivar ambos conserva
+encuadres, cortes, capas de fuente, texto, transiciones y subtítulos inteligentes
+sin llamadas a proveedores de assets. No existe fallback entre Pexels, 9Router
+y el video fuente.
 
 En dominio/HTTPS, la sesión usa una cookie opaca `HttpOnly`, `Secure` y
 `SameSite`, junto con un token CSRF separado para operaciones que modifican
@@ -307,7 +328,33 @@ revisa el preview de retención dos veces. Activa
 detener la limpieza, vuelve a `false` antes de considerar un rollback. El dump
 restaura metadatos y texto, no medios ya eliminados.
 
-## 7. Activa ComfyUI-FFMPEGA, si lo deseas
+## 7. Rollout agentivo y Pexels
+
+El release seguro mantiene estos valores iniciales:
+
+```dotenv
+OPENSTORYLINE_AGENTIC_EDITING_MODE=shadow
+OPENSTORYLINE_GENERATED_ASSETS_ENABLED=false
+OPENSTORYLINE_PEXELS_ENABLED=false
+OPENSTORYLINE_SEMANTIC_QA_ENABLED=false
+```
+
+Primero compara planes y evidencia sin cambiar el renderer. Luego autoriza un
+canary privado con fuente sintética, seguido por `Sesion prueba 1` y al menos dos
+nichos no relacionados; esos medios y reportes nunca entran a Git. Activa en
+orden: render agentivo source-only, imágenes generadas y, finalmente, Pexels.
+Verifica `/up`, `/health`, recuperación de cola, descargas, auditoría, retención,
+visibilidad del objetivo, sincronía, latencia y errores de proveedor después de
+cada cambio.
+
+Sin autorización para desplegar o llamar proveedores, todos los flags permanecen
+apagados. El rollback normal no requiere restaurar PostgreSQL: vuelve la UI a
+legacy, fija `OPENSTORYLINE_AGENTIC_EDITING_MODE=off`, desactiva assets/QA
+semántica y ejecuta `./bin/kamal-mvp rollback` al release previo. Restaura la base
+sólo ante una migración incompatible revisada por separado; esta entrega no añade
+migraciones.
+
+## 8. Activa ComfyUI-FFMPEGA, si lo deseas
 
 El despliegue base ya incluye todos los componentes obligatorios. FFMPEGA es un
 servicio opcional separado: instala ComfyUI y
@@ -331,7 +378,7 @@ prohíbe descargas de modelos y falla todo el trabajo si FFMPEGA falla.
 En un VPS sin GPU esta ruta determinista puede correr en CPU. Los efectos que
 requieran modelos de ComfyUI quedan fuera de este MVP remoto-only.
 
-## 8. Diagnóstico rápido
+## 9. Diagnóstico rápido
 
 ```bash
 curl -fsS https://video.example.com/up
@@ -354,3 +401,8 @@ curl -fsS https://video.example.com/up
 - `IMAGE_ALL_PROVIDERS_FAILED`: el modelo Codex seleccionado falló; el lote
   parcial se elimina y no se sustituye silenciosamente con Pexels o un modelo
   local.
+- `PEXELS_LICENSE_REVIEW_REQUIRED`: Pexels está activado sin una revisión manual
+  vigente; revisa las páginas oficiales y actualiza sólo la fecha, no la key en
+  logs o artefactos.
+- `PEXELS_SEARCH_FAILED` o `PEXELS_DOWNLOAD_FAILED`: revisa cuota, red y contrato;
+  el lote parcial se elimina y no se sustituye con 9Router ni el video fuente.

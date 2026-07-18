@@ -79,6 +79,40 @@ run_mistral_release_gate() {
     || fail "direct-Mistral STT gate failed; kamal $command_name was not started"
 }
 
+validate_pexels_release_config() {
+  local command_name="$1"
+  local enabled="${OPENSTORYLINE_PEXELS_ENABLED:-false}"
+  local python_bin
+
+  case "${enabled,,}" in
+    false|0|no|off)
+      return
+      ;;
+    true|1|yes|on)
+      ;;
+    *)
+      fail "OPENSTORYLINE_PEXELS_ENABLED must be true or false"
+      ;;
+  esac
+
+  require_value PEXELS_API_KEY
+  require_value OPENSTORYLINE_PEXELS_LICENSE_REVIEWED_AT
+  python_bin="$(resolve_python)"
+  printf 'Validating the guarded Pexels release configuration before kamal %s...\n' "$command_name"
+  PYTHONPATH="$ROOT_DIR/src" "$python_bin" - "$ROOT_DIR/config.toml" <<'PY'
+from pathlib import Path
+import sys
+
+from open_storyline.config import load_settings
+from open_storyline.mvp.stock import PexelsClient, PexelsError
+
+try:
+    PexelsClient.from_config(load_settings(Path(sys.argv[1])).agentic_editing)
+except PexelsError as exc:
+    raise SystemExit(f"{exc.code}: guarded Pexels configuration is not release-ready") from None
+PY
+}
+
 ensure_kamal() {
   command -v gem >/dev/null 2>&1 \
     || fail "RubyGems is required; install Ruby, then run: gem install kamal -v $KAMAL_CLI_VERSION"
@@ -303,6 +337,7 @@ for arg in "$@"; do
   esac
 done
 if [[ -n "$release_command" ]]; then
+  validate_pexels_release_config "$release_command"
   run_ninerouter_release_gate "$release_command"
   run_mistral_release_gate "$release_command"
 fi

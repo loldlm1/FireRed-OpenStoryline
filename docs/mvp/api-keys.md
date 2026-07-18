@@ -1,12 +1,13 @@
 # Provider credentials and model contracts
 
-FireRed deliberately uses two independent provider boundaries:
+FireRed deliberately uses three independent provider boundaries:
 
 | Layer | Exact model | Credential owner |
 | --- | --- | --- |
 | Text planning and vision | `cx/gpt-5.6-sol` | Codex OAuth in 9Router |
 | Image generation | `cx/gpt-5.5-image` | Codex OAuth in 9Router |
 | Speech-to-text | `voxtral-mini-2602` | Direct Mistral API key ring in FireRed |
+| Optional stock photos/videos | Pexels API | Direct Pexels API key in FireRed |
 
 There is no cross-provider or cross-model fallback. A missing catalog entry,
 expired connection, rate limit, invalid response, or missing STT timestamp is a
@@ -53,7 +54,34 @@ Kamal delivers `NINEROUTER_KEY` and `MISTRAL_API_KEYS` as separate secret
 environment variables. Never place resolved values in `config.toml`, committed
 examples, provider QA output, container image layers, or job artifacts.
 
-## 3. Run the redacted 9Router preflight
+## 3. Configure optional Pexels stock sourcing
+
+Pexels is disabled by default and is not a generated-image fallback. Keep its
+credential only in ignored/local secret storage:
+
+```dotenv
+PEXELS_API_KEY=
+OPENSTORYLINE_PEXELS_ENABLED=false
+OPENSTORYLINE_MAX_STOCK_ASSETS_PER_CLIP=2
+OPENSTORYLINE_PEXELS_LICENSE_REVIEWED_AT=
+```
+
+Before changing the flag to `true`, an operator must review the current
+[Pexels API documentation](https://www.pexels.com/api/documentation/) and
+[Pexels license](https://www.pexels.com/license/) in a browser, then record that
+date as `YYYY-MM-DD`. The runtime rejects missing, future, or older-than-180-day
+reviews. On 2026-07-18 both official pages remained Cloudflare-gated to the
+automated documentation check, so this manual review is intentionally a release
+prerequisite rather than a legal assumption embedded in code.
+
+The adapter fixes the photo/video search endpoints, sends the key only in the
+`Authorization` header, and applies a conservative application cap of 15 results
+per search. It accepts only allowlisted Pexels HTTPS source/CDN URLs and
+stores creator, source, selected-file, license, retrieval-time, and SHA-256
+provenance. A search or download failure aborts the requested asset batch; it
+does not call 9Router or substitute source media.
+
+## 4. Run the redacted 9Router preflight
 
 Load the private env file and validate only the Codex boundary:
 
@@ -81,7 +109,7 @@ evidence. `bin/kamal-mvp` requires both provider gates before `setup`, `deploy`,
 or `redeploy`; read-only diagnostics and rollback remain available while a
 gate is red.
 
-## 4. Useful read-only 9Router checks
+## 5. Useful read-only 9Router checks
 
 ```bash
 curl -fsS \

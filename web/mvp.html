@@ -259,7 +259,15 @@
     .status-card { color: #f3f3ee; background: var(--night); border-color: transparent; }
     .status-card .eyebrow { color: #ff9c80; }
 
-    .settings-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 16px; }
+    .settings-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px; }
+    .asset-control {
+      min-width: 0;
+      margin: 0;
+      padding: 14px;
+      border: 1px solid var(--line);
+      border-radius: 14px;
+    }
+    .asset-control legend { padding: 0 7px; color: var(--ink); font-weight: 800; }
     .policy-panel {
       margin-top: 18px;
       padding: 16px 18px;
@@ -424,19 +432,33 @@
                 </select>
                 <p class="field-help">La opción beta ejecuta encuadres, capas y transiciones por escena.</p>
               </div>
-              <div>
-                <label for="asset-policy">Apoyo visual generado</label>
+              <fieldset class="asset-control">
+                <legend>Imágenes generadas · 9Router</legend>
+                <label for="asset-policy">Política</label>
                 <select id="asset-policy" aria-describedby="asset-policy-help" disabled>
                   <option value="auto">Automático si hace falta</option>
                   <option value="off">Nunca generar imágenes</option>
                 </select>
                 <label for="max-generated-assets">Máximo por clip</label>
                 <input id="max-generated-assets" type="number" min="1" max="8" value="2" disabled>
-              </div>
+              </fieldset>
+              <fieldset class="asset-control">
+                <legend>Stock externo · Pexels</legend>
+                <label for="stock-policy">Política</label>
+                <select id="stock-policy" aria-describedby="stock-policy-help" disabled>
+                  <option value="off">No usar Pexels</option>
+                  <option value="auto">Buscar sólo si hace falta</option>
+                </select>
+                <label for="max-stock-assets">Máximo por clip</label>
+                <input id="max-stock-assets" type="number" min="1" max="8" value="2" disabled>
+              </fieldset>
             </div>
 
             <p id="asset-policy-help" class="policy-panel">
               <strong>No se genera una imagen por defecto.</strong> En modo automático, el plan sólo puede solicitarla cuando identifica un vacío visual concreto y la inserta en una ventana definida. Revisa derechos, marcas y semejanzas antes de publicar cualquier recurso generado.
+            </p>
+            <p id="stock-policy-help" class="policy-panel">
+              <strong>Pexels es una fuente separada y opt-in.</strong> Sólo se consulta cuando seleccionas su modo automático, el servidor lo tiene habilitado y el plan justifica un recurso concreto. El manifiesto conserva autor, enlace, licencia y hash; revisa la licencia vigente y los derechos representados antes de publicar.
             </p>
 
             <p id="job-error" class="form-error" role="alert" aria-live="assertive"></p>
@@ -498,6 +520,8 @@
     const editMode = document.querySelector('#edit-mode');
     const assetPolicy = document.querySelector('#asset-policy');
     const maxGeneratedAssets = document.querySelector('#max-generated-assets');
+    const stockPolicy = document.querySelector('#stock-policy');
+    const maxStockAssets = document.querySelector('#max-stock-assets');
     const jobError = document.querySelector('#job-error');
     const statusBox = document.querySelector('#status');
     const progress = document.querySelector('#progress');
@@ -511,10 +535,13 @@
       const agentic = editMode.value === 'agentic';
       assetPolicy.disabled = !agentic;
       maxGeneratedAssets.disabled = !agentic || assetPolicy.value !== 'auto';
+      stockPolicy.disabled = !agentic;
+      maxStockAssets.disabled = !agentic || stockPolicy.value !== 'auto';
     };
 
     editMode.addEventListener('change', updateAssetPolicyControls);
     assetPolicy.addEventListener('change', updateAssetPolicyControls);
+    stockPolicy.addEventListener('change', updateAssetPolicyControls);
     updateAssetPolicyControls();
 
     class ApiError extends Error {
@@ -863,6 +890,13 @@
         'max_generated_assets_per_clip',
         editMode.value === 'agentic' && assetPolicy.value === 'auto'
           ? maxGeneratedAssets.value
+          : '0',
+      );
+      body.append('stock_policy', editMode.value === 'agentic' ? stockPolicy.value : 'off');
+      body.append(
+        'max_stock_assets_per_clip',
+        editMode.value === 'agentic' && stockPolicy.value === 'auto'
+          ? maxStockAssets.value
           : '0',
       );
       try {

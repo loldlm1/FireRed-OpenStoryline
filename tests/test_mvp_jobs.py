@@ -490,6 +490,8 @@ class JobAPITests(PostgresTestCase):
                     "edit_mode": "agentic",
                     "asset_policy": "off",
                     "max_generated_assets_per_clip": "1",
+                    "stock_policy": "auto",
+                    "max_stock_assets_per_clip": "2",
                 },
                 files={"file": ("talk.mp4", b"fake-video", "video/mp4")},
             )
@@ -500,6 +502,8 @@ class JobAPITests(PostgresTestCase):
             self.assertEqual(job["request"]["edit_mode"], "agentic")
             self.assertEqual(job["request"]["asset_policy"], "off")
             self.assertEqual(job["request"]["max_generated_assets_per_clip"], 1)
+            self.assertEqual(job["request"]["stock_policy"], "auto")
+            self.assertEqual(job["request"]["max_stock_assets_per_clip"], 2)
 
             resumed = await client.get(f"/api/mvp/sessions/{session_id}")
             self.assertEqual(resumed.status_code, 200)

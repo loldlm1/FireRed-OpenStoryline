@@ -10,6 +10,11 @@ import os
 import re
 
 from open_storyline.mvp.edit_plan import AssetPolicy, AssetRequest, EditPlan
+from open_storyline.mvp.stock import (
+    PEXELS_RIGHTS_NOTICE,
+    PexelsClient,
+    PexelsError,
+)
 from open_storyline.utils.generated_media import (
     RIGHTS_NOTICE,
     build_original_image_prompt,
@@ -135,25 +140,42 @@ def _write_manifest(output_dir: Path, payload: dict[str, Any]) -> Path:
     return manifest_path
 
 
+def _rights_payload(requests: Iterable[tuple[int, AssetRequest]]) -> tuple[str, dict[str, str]]:
+    kinds = {request.kind for _clip_index, request in requests}
+    notices: dict[str, str] = {}
+    if "generated_image" in kinds:
+        notices["generated_images"] = RIGHTS_NOTICE
+    if kinds & {"stock_image", "stock_video"}:
+        notices["pexels"] = PEXELS_RIGHTS_NOTICE
+    if not notices:
+        return "No external assets were requested.", {}
+    return " ".join(notices.values()), notices
+
+
 def write_asset_manifest(
     edit_plan: EditPlan,
     *,
     output_dir: str | Path,
     asset_policy: AssetPolicy,
     status: str,
+    stock_policy: AssetPolicy = "off",
 ) -> AssetResolutionResult:
     target = Path(output_dir).resolve()
     target.mkdir(parents=True, exist_ok=True)
     requests = _planned_requests(edit_plan)
+    rights_notice, rights_notices = _rights_payload(requests)
     payload = {
         "version": ASSET_MANIFEST_VERSION,
         "created_at": datetime.now(timezone.utc).isoformat(),
         "status": str(status)[:80],
         "asset_policy": asset_policy,
+        "stock_policy": stock_policy,
         "requested_count": len(requests),
         "resolved_count": 0,
         "provider_call_count": 0,
-        "rights_notice": RIGHTS_NOTICE,
+        "provider_call_counts": {"9router": 0, "pexels": 0},
+        "rights_notice": rights_notice,
+        "rights_notices": rights_notices,
         "requests": [
             _request_metadata(clip_index, request)
             for clip_index, request in requests
@@ -173,6 +195,31 @@ async def resolve_generated_assets(
     cascade: RemoteImageCascade | None,
     size: str,
 ) -> AssetResolutionResult:
+    return await resolve_assets(
+        edit_plan,
+        output_dir=output_dir,
+        asset_policy=asset_policy,
+        stock_policy="off",
+        max_generated_assets_per_clip=max_generated_assets_per_clip,
+        max_stock_assets_per_clip=0,
+        cascade=cascade,
+        pexels=None,
+        size=size,
+    )
+
+
+async def resolve_assets(
+    edit_plan: EditPlan,
+    *,
+    output_dir: str | Path,
+    asset_policy: AssetPolicy,
+    stock_policy: AssetPolicy,
+    max_generated_assets_per_clip: int,
+    max_stock_assets_per_clip: int,
+    cascade: RemoteImageCascade | None,
+    pexels: PexelsClient | None,
+    size: str,
+) -> AssetResolutionResult:
     target = Path(output_dir).resolve()
     target.mkdir(parents=True, exist_ok=True)
     requests = _planned_requests(edit_plan)
@@ -181,35 +228,64 @@ async def resolve_generated_assets(
             edit_plan,
             output_dir=target,
             asset_policy=asset_policy,
+            stock_policy=stock_policy,
             status="no_requests",
         )
-    if asset_policy != "auto":
+    generated_requests = [item for item in requests if item[1].kind == "generated_image"]
+    stock_requests = [
+        item for item in requests if item[1].kind in {"stock_image", "stock_video"}
+    ]
+    if generated_requests and asset_policy != "auto":
         raise AssetResolutionError(
             "ASSET_POLICY_BLOCKED",
-            "the job does not permit generated assets",
+            "the job does not permit generated images",
+        )
+    if stock_requests and stock_policy != "auto":
+        raise AssetResolutionError(
+            "STOCK_POLICY_BLOCKED",
+            "the job does not permit Pexels stock assets",
         )
     if not 0 <= int(max_generated_assets_per_clip) <= 8:
         raise AssetResolutionError(
             "ASSET_LIMIT_INVALID",
             "generated asset limit must be between 0 and 8",
         )
-    by_clip: dict[int, int] = {}
+    if not 0 <= int(max_stock_assets_per_clip) <= 8:
+        raise AssetResolutionError(
+            "ASSET_LIMIT_INVALID",
+            "stock asset limit must be between 0 and 8",
+        )
+    generated_by_clip: dict[int, int] = {}
+    stock_by_clip: dict[int, int] = {}
     for clip_index, request in requests:
-        if request.kind != "generated_image" or request.provider != "9router":
+        if request.kind == "generated_image" and request.provider == "9router":
+            generated_by_clip[clip_index] = generated_by_clip.get(clip_index, 0) + 1
+        elif request.kind in {"stock_image", "stock_video"} and request.provider == "pexels":
+            stock_by_clip[clip_index] = stock_by_clip.get(clip_index, 0) + 1
+        else:
             raise AssetResolutionError(
                 "ASSET_PROVIDER_UNAVAILABLE",
-                "only 9Router generated images are executable in this sprint",
+                "the edit plan selected an unsupported asset provider",
             )
-        by_clip[clip_index] = by_clip.get(clip_index, 0) + 1
-    if any(count > max_generated_assets_per_clip for count in by_clip.values()):
+    if any(count > max_generated_assets_per_clip for count in generated_by_clip.values()):
         raise AssetResolutionError(
             "ASSET_LIMIT_EXCEEDED",
             "the edit plan exceeds the effective generated asset cap",
         )
-    if cascade is None:
+    if any(count > max_stock_assets_per_clip for count in stock_by_clip.values()):
+        raise AssetResolutionError(
+            "ASSET_LIMIT_EXCEEDED",
+            "the edit plan exceeds the effective stock asset cap",
+        )
+    if generated_requests and cascade is None:
         raise AssetResolutionError(
             "ASSET_PROVIDER_UNAVAILABLE",
             "the generated image provider is not configured",
+        )
+    if stock_requests and pexels is None:
+        raise AssetResolutionError(
+            "ASSET_PROVIDER_UNAVAILABLE",
+            "the Pexels stock provider is not configured",
         )
 
     created: list[Path] = []
@@ -217,53 +293,97 @@ async def resolve_generated_assets(
     attempts: list[dict[str, Any]] = []
     paths: dict[str, Path] = {}
     provider_calls = 0
+    provider_call_counts = {"9router": 0, "pexels": 0}
     clip_positions: dict[int, int] = {}
     try:
         for clip_index, request in requests:
-            clip_positions[clip_index] = clip_positions.get(clip_index, 0) + 1
-            final_prompt = build_original_image_prompt(
-                request.prompt,
-                orientation=request.orientation,
-                index=clip_positions[clip_index] - 1,
-                count=by_clip[clip_index],
-            )
             provider_calls += 1
-            try:
-                result = await cascade.generate(final_prompt, size=size)
-            except RemoteImageError as exc:
-                attempts.extend({"asset_id": request.id, **item.to_dict()} for item in exc.attempts)
-                raise AssetResolutionError(
-                    exc.code,
-                    "generated image acquisition failed",
-                    attempts=attempts,
-                ) from exc
-            attempts.extend({"asset_id": request.id, **item.to_dict()} for item in result.attempts)
-            path = target / f"asset-{request.id}.{result.extension}"
-            temporary = path.with_suffix(f".{result.extension}.part")
-            temporary.write_bytes(result.content)
+            if request.kind == "generated_image":
+                provider_call_counts["9router"] += 1
+                clip_positions[clip_index] = clip_positions.get(clip_index, 0) + 1
+                final_prompt = build_original_image_prompt(
+                    request.prompt,
+                    orientation=request.orientation,
+                    index=clip_positions[clip_index] - 1,
+                    count=generated_by_clip[clip_index],
+                )
+                try:
+                    result = await cascade.generate(final_prompt, size=size)  # type: ignore[union-attr]
+                except RemoteImageError as exc:
+                    attempts.extend(
+                        {"asset_id": request.id, **item.to_dict()}
+                        for item in exc.attempts
+                    )
+                    raise AssetResolutionError(
+                        exc.code,
+                        "generated image acquisition failed",
+                        attempts=attempts,
+                    ) from exc
+                attempts.extend(
+                    {"asset_id": request.id, **item.to_dict()}
+                    for item in result.attempts
+                )
+                content = result.content
+                extension = result.extension
+                asset_metadata = {
+                    "content_type": result.content_type,
+                    "model": result.model,
+                    "final_prompt_sha256": hashlib.sha256(
+                        final_prompt.encode("utf-8")
+                    ).hexdigest(),
+                    "safety_suffix_applied": True,
+                }
+            else:
+                provider_call_counts["pexels"] += 1
+                try:
+                    stock = await pexels.acquire(request)  # type: ignore[union-attr]
+                except PexelsError as exc:
+                    attempts.extend(
+                        {"asset_id": request.id, **item.to_dict()}
+                        for item in exc.attempts
+                    )
+                    raise AssetResolutionError(
+                        exc.code,
+                        "Pexels stock acquisition failed",
+                        attempts=attempts,
+                    ) from exc
+                attempts.extend(
+                    {"asset_id": request.id, **item.to_dict()}
+                    for item in stock.attempts
+                )
+                content = stock.content
+                extension = stock.extension
+                asset_metadata = {
+                    "content_type": stock.content_type,
+                    **stock.provenance(),
+                }
+            path = target / f"asset-{request.id}.{extension}"
+            temporary = path.with_suffix(f".{extension}.part")
+            temporary.write_bytes(content)
             os.replace(temporary, path)
             created.append(path)
             paths[request.id] = path
             assets.append({
                 **_request_metadata(clip_index, request),
                 "filename": path.name,
-                "content_type": result.content_type,
-                "bytes": len(result.content),
-                "sha256": hashlib.sha256(result.content).hexdigest(),
-                "model": result.model,
-                "final_prompt_sha256": hashlib.sha256(final_prompt.encode("utf-8")).hexdigest(),
-                "safety_suffix_applied": True,
+                "bytes": len(content),
+                "sha256": hashlib.sha256(content).hexdigest(),
+                **asset_metadata,
             })
 
+        rights_notice, rights_notices = _rights_payload(requests)
         payload = {
             "version": ASSET_MANIFEST_VERSION,
             "created_at": datetime.now(timezone.utc).isoformat(),
             "status": "resolved",
             "asset_policy": asset_policy,
+            "stock_policy": stock_policy,
             "requested_count": len(requests),
             "resolved_count": len(assets),
             "provider_call_count": provider_calls,
-            "rights_notice": RIGHTS_NOTICE,
+            "provider_call_counts": provider_call_counts,
+            "rights_notice": rights_notice,
+            "rights_notices": rights_notices,
             "requests": [
                 _request_metadata(clip_index, request)
                 for clip_index, request in requests

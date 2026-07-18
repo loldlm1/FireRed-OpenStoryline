@@ -185,6 +185,14 @@ class AgenticEditingConfig(ConfigBaseModel):
     max_assets_per_clip: int = Field(default=4, ge=0, le=8)
     generated_assets_enabled: bool = False
     max_generated_assets_per_clip: int = Field(default=2, ge=0, le=8)
+    pexels_enabled: bool = False
+    max_stock_assets_per_clip: int = Field(default=2, ge=0, le=8)
+    pexels_license_reviewed_at: str = ""
+    pexels_search_limit: int = Field(default=8, ge=1, le=15)
+    pexels_timeout: float = Field(default=30.0, gt=0, le=120)
+    pexels_max_retries: int = Field(default=2, ge=0, le=3)
+    pexels_max_bytes: int = Field(default=80 * 1024 * 1024, ge=1_000_000)
+    pexels_max_video_duration_seconds: int = Field(default=60, ge=1, le=300)
     creative_qa_enabled: bool = True
     creative_qa_strict: bool = True
     semantic_qa_enabled: bool = False

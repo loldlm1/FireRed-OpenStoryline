@@ -10,8 +10,10 @@ clips. The MVP is deliberately CPU-first and does not run local AI models.
 - Speech-to-text uses only direct Mistral `voxtral-mini-2602`. FireRed sends
   compressed audio to the fixed official transcription endpoint and requires
   finite, non-empty segment `start`/`end` values.
-- Generated images in the full-agent `SearchMedia` path use only
-  `cx/gpt-5.5-image` through Codex OAuth in 9Router.
+- Generated images use only `cx/gpt-5.5-image` through Codex OAuth in 9Router.
+- Optional stock photos and videos use only the fixed Pexels API boundary. Pexels
+  is independently disabled by default and never acts as a fallback for 9Router,
+  source media, or another provider.
 - There are no provider, model, or local-inference fallbacks in these layers.
 - FFmpeg is allowed because it performs deterministic media processing rather
   than model inference.
@@ -38,8 +40,9 @@ isolated so upstream behavior can continue to be merged into this fork.
    9Router and returns a structured clip plan.
 6. The server validates duration, bounds, overlap, and output count.
 7. In agentic render mode, the server validates an executable edit plan,
-   conditionally resolves approved assets, and FFmpeg renders the typed timeline
-   operations and subtitles on CPU.
+   resolves only the generated-image and/or Pexels capabilities explicitly
+   permitted for that job, and FFmpeg renders the typed timeline operations and
+   subtitles on CPU.
 8. Agentic outputs produce `render_qa.json`, `retention_rhythm_qa.json`, and
    `creative_conformance.json`. Structural, pacing, fallback, operation, and
    asset-use findings are evidence for review and never rewrite a rendered job
@@ -69,6 +72,26 @@ isolated so upstream behavior can continue to be merged into this fork.
   `Sesion prueba 1` is an operator-only regression gate and its media,
   transcript, prompts, frames, and reports must never be committed.
 
+## External asset controls
+
+- `asset_policy` controls 9Router-generated images; `stock_policy` independently
+  controls Pexels photos/videos. Either can be `off` while agentic source-only
+  reframing, cuts, overlays, transitions, subtitles, and QA continue to work.
+- The planner receives only effective server/job capabilities and per-clip
+  budgets. A provider disabled by configuration is excluded before planning;
+  runtime failures fail the complete asset batch and never select another source.
+- Pexels search uses fixed `https://api.pexels.com/v1/search` and
+  `https://api.pexels.com/videos/search` endpoints with the API key in the
+  `Authorization` header. Search count, JSON bytes, redirects, CDN hosts, MIME,
+  magic bytes, dimensions, duration, media bytes, timeout, and retries are bounded.
+- `asset_manifest.json` stores request hashes, provider-separated call counts,
+  SHA-256, creator/source/license provenance, selected-file metadata, and rights
+  notices. It never stores Pexels keys or unredacted provider response bodies.
+- `OPENSTORYLINE_PEXELS_ENABLED=false` is the default. Enabling it also requires
+  `PEXELS_API_KEY` and an `OPENSTORYLINE_PEXELS_LICENSE_REVIEWED_AT=YYYY-MM-DD`
+  value no older than 180 days. The release wrapper validates this configuration
+  without making a live Pexels request.
+
 ## Default remote services
 
 | Purpose | Model | Fallbacks |
@@ -76,6 +99,7 @@ isolated so upstream behavior can continue to be merged into this fork.
 | Planning and vision | `cx/gpt-5.6-sol` | none |
 | Speech-to-text | `voxtral-mini-2602` | key-only, same model |
 | Full-agent generated images | `cx/gpt-5.5-image` | none |
+| Optional stock photos/videos | Pexels API | none |
 | Rendering | FFmpeg on CPU | none |
 
 9Router is intentionally not part of the STT path. Its existing user, port
@@ -88,8 +112,10 @@ endpoint-key behavior, the exact Codex catalogs, SSH, and Docker. With
 image bytes without persisting provider output. Direct-Mistral validation is a
 separate release gate so credentials never cross provider boundaries.
 
-`bin/kamal-mvp` enforces the live provider gates before `setup`, `deploy`, or
-`redeploy`. The Docker build context is allowlisted by
+`bin/kamal-mvp` enforces the live 9Router/Mistral provider gates before `setup`,
+`deploy`, or `redeploy`. When Pexels is enabled, it additionally requires the
+secret and a current recorded license review; no Pexels media is fetched by the
+release wrapper. The Docker build context is allowlisted by
 `.dockerignore`, so local env files, Kamal secrets, outputs, model resources,
 and the development venv never enter the remote-image build context.
 
@@ -140,8 +166,9 @@ and the development venv never enter the remote-image build context.
 - Automatic retention is bounded, advisory-lock protected, and disabled by
   default until a production preview is explicitly reviewed.
 - Inputs and outputs are served only through validated job-scoped paths.
-- The 9Router endpoint key and direct `MISTRAL_API_KEYS` key ring are delivered
-  through Kamal secrets and never written to job state, logs, manifests, or Git.
+- The 9Router endpoint key, direct `MISTRAL_API_KEYS` key ring, and optional
+  `PEXELS_API_KEY` are delivered through Kamal secrets and never written to job
+  state, logs, manifests, or Git.
 - Error bodies are truncated and sanitized before persistence.
 - One in-process worker holds PostgreSQL coordinator and execution advisory
   locks. Overlapping Kamal web containers may serve requests, but only the lock

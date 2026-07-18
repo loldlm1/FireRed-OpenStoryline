@@ -1,4 +1,4 @@
-EDIT_PLAN_PROMPT_VERSION = "mvp-agentic-edit-plan.v2"
+EDIT_PLAN_PROMPT_VERSION = "mvp-agentic-edit-plan.v3"
 VISUAL_UNDERSTANDING_PROMPT_VERSION = "mvp-visual-understanding.v1"
 
 
@@ -9,8 +9,8 @@ EDIT_PLAN_SYSTEM_PROMPT = (
     "visual evidence, or explicit user instructions. Do not invent file paths, "
     "provider capabilities, regions, tracks, or assets. Request an external asset "
     "only when the source cannot satisfy a specific visual purpose. Every request "
-    "must identify the visible gap and be used by a bounded image overlay; otherwise "
-    "use the source video."
+    "must identify the visible gap, use an explicitly enabled provider, and be used "
+    "by a bounded visual overlay; otherwise use the source video."
 )
 
 

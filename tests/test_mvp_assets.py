@@ -12,6 +12,7 @@ from open_storyline.mvp.assets import (
     generated_asset_server_cap,
     generated_asset_size,
     generated_assets_enabled,
+    resolve_assets,
     resolve_generated_assets,
 )
 from open_storyline.mvp.edit_plan import (
@@ -28,6 +29,7 @@ from open_storyline.utils.remote_image import (
     RemoteImageError,
     RemoteImageResult,
 )
+from open_storyline.mvp.stock import PexelsAsset, PexelsAttempt, PexelsError
 
 
 PNG = base64.b64decode(
@@ -100,6 +102,95 @@ class FakeCascade:
             content_type="image/png",
             attempts=[ImageAttempt("cx/gpt-5.5-image", True, 200, "ok")],
         )
+
+
+class FakePexels:
+    def __init__(self, *, fail: bool = False) -> None:
+        self.fail = fail
+        self.calls = []
+
+    async def acquire(self, request: AssetRequest) -> PexelsAsset:
+        self.calls.append(request.id)
+        attempt = PexelsAttempt(1, "search", 200, "ok")
+        if self.fail:
+            raise PexelsError("PEXELS_SEARCH_FAILED", "provider unavailable", attempts=(attempt,))
+        return PexelsAsset(
+            provider_id=42,
+            kind=request.kind,
+            content=PNG,
+            extension="png",
+            content_type="image/png",
+            creator="Example Creator",
+            creator_url="https://www.pexels.com/@example",
+            source_url="https://www.pexels.com/photo/example-42/",
+            media_url="https://images.pexels.com/photos/42/example.png",
+            width=1080,
+            height=1920,
+            duration_seconds=None,
+            file_size=len(PNG),
+            retrieved_at="2026-07-18T00:00:00+00:00",
+            attempts=(attempt,),
+        )
+
+
+def mixed_edit_plan() -> EditPlan:
+    generated_window = TimeWindow(start_ms=1000, end_ms=2500)
+    stock_window = TimeWindow(start_ms=3000, end_ms=4500)
+    return EditPlan(
+        planner_version="test.v1",
+        source_duration_ms=10_000,
+        requested_capabilities=("fit", "hard_cut", "image_overlay", "subtitles"),
+        clips=(ClipEditPlan(
+            clip_index=1,
+            source_window=TimeWindow(start_ms=0, end_ms=10_000),
+            output_name="short-01.mp4",
+            segments=(EditSegment(
+                id="segment-1",
+                source_window=TimeWindow(start_ms=0, end_ms=10_000),
+                timeline_window=TimeWindow(start_ms=0, end_ms=10_000),
+                layout=LayoutSpec(mode="fit"),
+                overlays=(
+                    OverlaySpec(
+                        id="generated-overlay",
+                        kind="image",
+                        timeline_window=generated_window,
+                        asset_id="generated-1",
+                        position="top_right",
+                    ),
+                    OverlaySpec(
+                        id="stock-overlay",
+                        kind="image",
+                        timeline_window=stock_window,
+                        asset_id="stock-1",
+                        position="top_left",
+                    ),
+                ),
+                reason="exercise independent generated and stock providers",
+            ),),
+            asset_requests=(
+                AssetRequest(
+                    id="generated-1",
+                    kind="generated_image",
+                    provider="9router",
+                    timeline_window=generated_window,
+                    visual_gap="the source lacks a diagram",
+                    purpose="clarify the explanation",
+                    rationale="a short diagram fills the visual gap",
+                    prompt="an original simple editorial diagram",
+                ),
+                AssetRequest(
+                    id="stock-1",
+                    kind="stock_image",
+                    provider="pexels",
+                    timeline_window=stock_window,
+                    visual_gap="the source lacks a neutral teamwork cutaway",
+                    purpose="support the spoken example",
+                    rationale="a short stock cutaway prevents an unrelated hold",
+                    prompt="remote teamwork planning",
+                ),
+            ),
+        ),),
+    )
 
 
 class GeneratedAssetTests(unittest.IsolatedAsyncioTestCase):
@@ -179,6 +270,49 @@ class GeneratedAssetTests(unittest.IsolatedAsyncioTestCase):
 
             self.assertEqual(caught.exception.code, "ASSET_LIMIT_EXCEEDED")
             self.assertEqual(cascade.calls, [])
+
+    async def test_resolves_generated_and_pexels_assets_without_provider_fallback(self):
+        cascade = FakeCascade()
+        pexels = FakePexels()
+        with TemporaryDirectory() as tmpdir:
+            result = await resolve_assets(
+                mixed_edit_plan(),
+                output_dir=tmpdir,
+                asset_policy="auto",
+                stock_policy="auto",
+                max_generated_assets_per_clip=1,
+                max_stock_assets_per_clip=1,
+                cascade=cascade,
+                pexels=pexels,
+                size="1024x1024",
+            )
+            manifest = result.manifest
+
+            self.assertEqual(len(cascade.calls), 1)
+            self.assertEqual(pexels.calls, ["stock-1"])
+            self.assertEqual(manifest["provider_call_counts"], {"9router": 1, "pexels": 1})
+            self.assertEqual(manifest["assets"][1]["pexels_asset_id"], 42)
+            self.assertEqual(manifest["assets"][1]["creator"], "Example Creator")
+            self.assertIn("pexels", manifest["rights_notices"])
+            self.assertNotIn("remote teamwork planning", json.dumps(manifest))
+
+    async def test_mixed_provider_failure_removes_the_complete_partial_batch(self):
+        with TemporaryDirectory() as tmpdir:
+            with self.assertRaises(AssetResolutionError) as caught:
+                await resolve_assets(
+                    mixed_edit_plan(),
+                    output_dir=tmpdir,
+                    asset_policy="auto",
+                    stock_policy="auto",
+                    max_generated_assets_per_clip=1,
+                    max_stock_assets_per_clip=1,
+                    cascade=FakeCascade(),
+                    pexels=FakePexels(fail=True),
+                    size="1024x1024",
+                )
+
+            self.assertEqual(caught.exception.code, "PEXELS_SEARCH_FAILED")
+            self.assertEqual(list(Path(tmpdir).iterdir()), [])
 
     def test_environment_overrides_are_strict_and_bounded(self):
         config = SimpleNamespace(

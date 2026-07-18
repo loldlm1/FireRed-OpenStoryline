@@ -1,7 +1,8 @@
 # Plan: General-Purpose Agentic Video Editing For The Remote MVP
 
 **Generated**: 2026-07-18
-**Status**: Execution in progress; sprint gates are recorded in Git history
+**Status**: Implementation complete; production rollout remains disabled pending
+manual Pexels contract/license review and separately authorized canary evidence
 **Estimated Complexity**: High
 
 ## Overview
@@ -37,6 +38,42 @@ source video + user prompt
 Every sprint below must leave a runnable, independently verifiable increment.
 The legacy renderer remains available behind a kill switch until the final
 rollout gate completes.
+
+## Execution Record
+
+Sprints 1-7 were completed sequentially with one commit per sprint. Sprint 8
+completed the guarded implementation and local release gates; it deliberately
+did not call live providers, deploy, inspect private production media, or change
+the production default.
+
+| Sprint | Commit | Rollback point |
+| --- | --- | --- |
+| 1 | `f86114d` | `8c50e54` |
+| 2 | `adafa7f` | `f86114d` |
+| 3 | `4e4c60a` | `adafa7f` |
+| 4 | `73c41b1` | `4e4c60a` |
+| 5 | `29f8ad5` | `73c41b1` |
+| 6 | `3dc89c5` | `29f8ad5` |
+| 7 | `afaa82d` | `3dc89c5` |
+| 8 | `feat(mvp): add guarded pexels sourcing and rollout` | `afaa82d` |
+
+Final local evidence on 2026-07-18:
+
+- Complete deterministic suite: 228 tests passed with 46 expected
+  environment-gated skips.
+- Connected disposable PostgreSQL 17 suite: all 228 tests passed with no skips.
+- Sprint 8 focused suite: 32 tests passed; all 4 FFmpeg render tests passed.
+- Config parse, required shell syntax, `git diff --check`, real Kamal 2.12.0
+  config rendering, and `Dockerfile.remote` build passed.
+- Chromium smoke, desktop auth/session, and mobile responsive controls passed
+  against a local app and disposable database.
+- Both official Pexels documentation URLs returned HTTP 403 to automated access.
+  Therefore `OPENSTORYLINE_PEXELS_ENABLED=false` remains mandatory until an
+  operator reviews the current API/license in a normal browser and records a
+  fresh review date.
+- No production application version was inspected or recorded. Before a future
+  canary, the operator must record the deployed version, verify a database
+  backup, and authorize live 9Router, Mistral, and optional Pexels checks.
 
 ## Scope
 

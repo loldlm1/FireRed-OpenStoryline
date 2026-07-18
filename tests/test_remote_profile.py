@@ -92,11 +92,12 @@ class RemoteProfileTests(unittest.TestCase):
         secrets = (ROOT / ".kamal" / "secrets.example").read_text(encoding="utf-8")
 
         self.assertIn(
-            "  secret:\n    - DATABASE_URL\n    - OPENSTORYLINE_WEB_PASSWORD_HASH\n    - OPENSTORYLINE_SECURITY_PEPPER\n    - NINEROUTER_KEY\n    - MISTRAL_API_KEYS",
+            "  secret:\n    - DATABASE_URL\n    - OPENSTORYLINE_WEB_PASSWORD_HASH\n    - OPENSTORYLINE_SECURITY_PEPPER\n    - NINEROUTER_KEY\n    - MISTRAL_API_KEYS\n    - PEXELS_API_KEY",
             deploy,
         )
         self.assertNotRegex(deploy, r"(?m)^\s+NINEROUTER_KEY:")
         self.assertNotRegex(deploy, r"(?m)^\s+MISTRAL_API_KEYS:")
+        self.assertNotRegex(deploy, r"(?m)^\s+PEXELS_API_KEY:")
         self.assertNotRegex(deploy, r"(?m)^\s+OPENSTORYLINE_WEB_PASSWORD_HASH:")
         self.assertNotRegex(deploy, r"(?m)^\s+OPENSTORYLINE_SECURITY_PEPPER:")
         self.assertEqual(
@@ -109,6 +110,7 @@ class RemoteProfileTests(unittest.TestCase):
                 "OPENSTORYLINE_SECURITY_PEPPER=$OPENSTORYLINE_SECURITY_PEPPER",
                 "NINEROUTER_KEY=$NINEROUTER_KEY",
                 "MISTRAL_API_KEYS=$MISTRAL_API_KEYS",
+                "PEXELS_API_KEY=$PEXELS_API_KEY",
             ],
         )
 

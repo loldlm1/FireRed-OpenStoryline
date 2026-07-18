@@ -317,6 +317,11 @@ class AgenticShortRenderer:
                 asset_id: index
                 for index, asset_id in enumerate(used_asset_ids, start=1)
             }
+            asset_kinds = {
+                request.id: request.kind
+                for request in clip_plan.asset_requests
+                if request.id in used_asset_ids
+            }
             filtergraph, video_label, audio_label = build_reframe_filtergraph(
                 composition.segments,
                 output_width=settings.width,
@@ -324,13 +329,17 @@ class AgenticShortRenderer:
                 subtitle_filename=subtitle_path.name if subtitle_path else None,
                 has_audio=media.has_audio,
                 asset_input_indexes=asset_input_indexes,
+                asset_input_kinds=asset_kinds,
             )
             command = [
                 "ffmpeg", "-y", "-v", "error",
                 "-i", str(Path(source).resolve()),
             ]
             for asset_id in used_asset_ids:
-                command.extend(["-loop", "1", "-i", str(asset_paths[asset_id])])
+                if asset_kinds[asset_id] == "stock_video":
+                    command.extend(["-stream_loop", "-1", "-i", str(asset_paths[asset_id])])
+                else:
+                    command.extend(["-loop", "1", "-i", str(asset_paths[asset_id])])
             command.extend([
                 "-filter_complex", filtergraph,
                 "-map", f"[{video_label}]", "-map", f"[{audio_label}]",
@@ -365,6 +374,7 @@ class AgenticShortRenderer:
                 "filtergraph": filtergraph,
                 "filtergraph_length": len(filtergraph),
                 "asset_ids": used_asset_ids,
+                "asset_kinds": asset_kinds,
             })
 
         return AgenticRenderResult(
