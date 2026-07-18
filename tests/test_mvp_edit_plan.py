@@ -19,6 +19,7 @@ from open_storyline.mvp.edit_plan import (
     build_shadow_edit_plan,
     resolve_agentic_server_mode,
     validate_edit_plan,
+    validate_generated_asset_limit,
     validate_job_controls,
 )
 from open_storyline.mvp.shorts import ShortCandidate, ShortsPlan, build_shorts_plan_artifact
@@ -161,10 +162,27 @@ class EditPlanContractTests(unittest.TestCase):
                 kind="generated_image",
                 provider="pexels",
                 timeline_window=TimeWindow(start_ms=0, end_ms=1_000),
+                visual_gap="the source has no usable diagram",
                 purpose="illustrate",
                 rationale="source has no suitable visual",
                 prompt="a clean diagram",
             )
+
+        with self.assertRaises(ValueError):
+            AssetRequest(
+                id="asset-2",
+                kind="generated_image",
+                provider="9router",
+                timeline_window=TimeWindow(start_ms=0, end_ms=1_000),
+                visual_gap="the source lacks a visual",
+                purpose="illustrate",
+                rationale="a still is justified",
+                prompt="x" * 7001,
+            )
+
+        self.assertEqual(validate_generated_asset_limit(2), 2)
+        with self.assertRaises(EditPlanError):
+            validate_generated_asset_limit(9)
 
     def test_rejects_unknown_capability_and_non_finite_values(self):
         base = build_shadow_edit_plan(

@@ -7,6 +7,7 @@ import unittest
 from types import SimpleNamespace
 
 from open_storyline.mvp.edit_plan import (
+    AssetRequest,
     ClipEditPlan,
     EditPlan,
     EditSegment,
@@ -251,6 +252,16 @@ class CPUShortRendererTests(unittest.TestCase):
                             reason="support the conclusion with visual and text emphasis",
                         ),
                     ),
+                    asset_requests=(AssetRequest(
+                        id="asset-1",
+                        kind="generated_image",
+                        provider="9router",
+                        timeline_window=TimeWindow(start_ms=4100, end_ms=5500),
+                        visual_gap="the source needs one supporting still",
+                        purpose="support the conclusion",
+                        rationale="a bounded still clarifies the final idea",
+                        prompt="an original yellow editorial card",
+                    ),),
                 ),),
             )
             visual = SimpleNamespace(

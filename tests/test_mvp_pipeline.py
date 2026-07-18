@@ -1,6 +1,7 @@
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from types import SimpleNamespace
+import base64
 import json
 import unittest
 from unittest.mock import patch
@@ -12,6 +13,7 @@ from open_storyline.mvp.edit_plan import (
     EditPlanError,
     EditSegment,
     LayoutSpec,
+    OverlaySpec,
     TimeWindow,
     build_shadow_edit_plan,
 )
@@ -20,6 +22,12 @@ from open_storyline.mvp.pipeline import MVPJobProcessor
 from open_storyline.mvp.render import AgenticRenderResult, MediaInfo, RenderedShort
 from open_storyline.mvp.scene_boundaries import build_scene_boundaries
 from open_storyline.mvp.shorts import ShortCandidate, ShortsPlan
+from open_storyline.utils.remote_image import ImageAttempt, RemoteImageResult
+
+
+PNG = base64.b64decode(
+    "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII="
+)
 
 
 class FakeTranscript:
@@ -72,6 +80,14 @@ class FakeAgenticRenderer:
         )
 
 
+class FakeAssetAwareRenderer(FakeAgenticRenderer):
+    resolved_assets = {}
+
+    def render_plan(self, *, resolved_assets, **kwargs):
+        type(self).resolved_assets = dict(resolved_assets)
+        return super().render_plan(**kwargs)
+
+
 class FakeVisualUnderstanding:
     frame_manifest = {"frames": [{"id": "frame-001", "timestamp_ms": 250}]}
     regions = ()
@@ -116,7 +132,7 @@ class FakeBlockedEditPlanner:
         return EditPlan(
             planner_version="agentic-editor.v1",
             source_duration_ms=source_duration_ms,
-            requested_capabilities=("fit", "hard_cut", "subtitles"),
+            requested_capabilities=("fit", "hard_cut", "image_overlay", "subtitles"),
             clips=(ClipEditPlan(
                 clip_index=1,
                 source_window=TimeWindow(start_ms=clip.start_ms, end_ms=clip.end_ms),
@@ -126,6 +142,13 @@ class FakeBlockedEditPlanner:
                     source_window=TimeWindow(start_ms=clip.start_ms, end_ms=clip.end_ms),
                     timeline_window=TimeWindow(start_ms=0, end_ms=clip.duration_ms),
                     layout=LayoutSpec(mode="fit"),
+                    overlays=(OverlaySpec(
+                        id="asset-overlay",
+                        kind="image",
+                        timeline_window=TimeWindow(start_ms=0, end_ms=2000),
+                        asset_id="asset-1",
+                        position="top_right",
+                    ),),
                     reason="keep source visible",
                 ),),
                 asset_requests=(AssetRequest(
@@ -133,11 +156,70 @@ class FakeBlockedEditPlanner:
                     kind="generated_image",
                     provider="9router",
                     timeline_window=TimeWindow(start_ms=0, end_ms=2000),
+                    visual_gap="the source lacks the requested diagram",
                     purpose="explain a visual gap",
                     rationale="the source lacks the requested diagram",
                     prompt="a simple editorial diagram",
                 ),),
             ),),
+        )
+
+
+class FakeGeneratedEditPlanner:
+    def __init__(self, _client):
+        pass
+
+    async def plan(self, *, shorts_plan, source_duration_ms, **_kwargs):
+        clip = shorts_plan.clips[0]
+        asset_window = TimeWindow(start_ms=1000, end_ms=3000)
+        return EditPlan(
+            planner_version="agentic-editor.v1",
+            source_duration_ms=source_duration_ms,
+            requested_capabilities=("fit", "hard_cut", "image_overlay", "subtitles"),
+            clips=(ClipEditPlan(
+                clip_index=1,
+                source_window=TimeWindow(start_ms=clip.start_ms, end_ms=clip.end_ms),
+                output_name="short-01.mp4",
+                segments=(EditSegment(
+                    id="segment-1",
+                    source_window=TimeWindow(start_ms=clip.start_ms, end_ms=clip.end_ms),
+                    timeline_window=TimeWindow(start_ms=0, end_ms=clip.duration_ms),
+                    layout=LayoutSpec(mode="fit"),
+                    overlays=(OverlaySpec(
+                        id="asset-overlay",
+                        kind="image",
+                        timeline_window=asset_window,
+                        asset_id="asset-1",
+                        position="top_right",
+                    ),),
+                    reason="insert one justified supporting still",
+                ),),
+                asset_requests=(AssetRequest(
+                    id="asset-1",
+                    kind="generated_image",
+                    provider="9router",
+                    timeline_window=asset_window,
+                    visual_gap="the source contains no supporting diagram",
+                    purpose="clarify the explanation",
+                    rationale="a brief original diagram closes the visual gap",
+                    prompt="an original editorial diagram with simple shapes",
+                ),),
+            ),),
+        )
+
+
+class FakeAssetCascade:
+    def __init__(self):
+        self.calls = []
+
+    async def generate(self, prompt, *, size):
+        self.calls.append((prompt, size))
+        return RemoteImageResult(
+            model="cx/gpt-5.5-image",
+            content=PNG,
+            extension="png",
+            content_type="image/png",
+            attempts=[ImageAttempt("cx/gpt-5.5-image", True, 200, "ok")],
         )
 
 
@@ -181,7 +263,7 @@ class FakeStore:
         self.registered.append((Path(path).name, kind))
 
 
-def config(mode: str):
+def config(mode: str, *, generated_assets: bool = False):
     return SimpleNamespace(
         remote_asr=SimpleNamespace(language=""),
         ninerouter=SimpleNamespace(),
@@ -191,6 +273,8 @@ def config(mode: str):
             max_segments_per_clip=24,
             max_overlays_per_clip=12,
             max_assets_per_clip=4,
+            generated_assets_enabled=generated_assets,
+            max_generated_assets_per_clip=2,
             scene_threshold=0.35,
             min_scene_duration_ms=1000,
             max_scenes=64,
@@ -211,6 +295,7 @@ def config(mode: str):
             render_crf=23,
         ),
         ffmpega=SimpleNamespace(enabled=False),
+        remote_image=SimpleNamespace(size="1024x1024"),
     )
 
 
@@ -277,7 +362,7 @@ class MVPAgenticPipelineTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(manifest["agentic"]["edit_planner"]["schema_version"], "edit_plan.v1")
             self.assertEqual(
                 manifest["agentic"]["edit_planner"]["prompt_version"],
-                "mvp-agentic-edit-plan.v1",
+                "mvp-agentic-edit-plan.v2",
             )
             registered_names = [name for name, _kind in store.registered]
             self.assertLess(
@@ -398,6 +483,69 @@ class MVPAgenticPipelineTests(unittest.IsolatedAsyncioTestCase):
             self.assertIn("render_execution.json", names)
             self.assertEqual(manifest["agentic"]["render_execution"], "render_execution.json")
             self.assertEqual((root / "output" / "short-01.mp4").read_bytes(), b"agentic-render")
+
+    async def test_render_mode_generates_only_requested_assets_and_inserts_them(self):
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            store = FakeStore(
+                root,
+                server_request={
+                    "max_clips": 1,
+                    "edit_mode": "agentic",
+                    "asset_policy": "auto",
+                    "max_generated_assets_per_clip": 1,
+                },
+            )
+            processor = object.__new__(MVPJobProcessor)
+            processor.config = config("render", generated_assets=True)
+            processor.stt = FakeSTT()
+            scene_report = build_scene_boundaries([], source_duration_ms=30_000, threshold=0.35)
+            frame_manifest = FrameManifest(
+                source_duration_ms=30_000,
+                source_width=1920,
+                source_height=1080,
+                frames=(SampledFrame(
+                    id="frame-001",
+                    timestamp_ms=250,
+                    scene_id="scene-001",
+                    width=512,
+                    height=288,
+                    extraction_reason="scene_opening",
+                    encoded_bytes=4,
+                    data_url="data:image/jpeg;base64,ZmFrZQ==",
+                ),),
+            )
+            cascade = FakeAssetCascade()
+            FakeAssetAwareRenderer.resolved_assets = {}
+
+            with (
+                patch("open_storyline.mvp.pipeline.probe_media", return_value=MediaInfo(30_000, 1920, 1080, True)),
+                patch("open_storyline.mvp.pipeline.extract_audio_for_stt", side_effect=lambda _source, target: target),
+                patch("open_storyline.mvp.pipeline.detect_scene_boundaries", return_value=scene_report),
+                patch("open_storyline.mvp.pipeline.sample_frames", return_value=frame_manifest),
+                patch("open_storyline.mvp.pipeline.VisualUnderstandingPlanner", FakeVisualPlanner),
+                patch("open_storyline.mvp.pipeline.AgenticEditPlanner", FakeGeneratedEditPlanner),
+                patch("open_storyline.mvp.pipeline.NineRouterClient.from_config", return_value=FakeRemoteClient()),
+                patch("open_storyline.mvp.pipeline.RemoteImageCascade.from_config", return_value=cascade),
+                patch("open_storyline.mvp.pipeline.ShortsPlanner", FakePlanner),
+                patch("open_storyline.mvp.pipeline.AgenticShortRenderer", FakeAssetAwareRenderer),
+                patch("open_storyline.mvp.pipeline.CPUShortRenderer", side_effect=AssertionError("legacy renderer called")),
+            ):
+                await processor("e" * 32, store)
+
+            registered = dict(store.registered)
+            manifest = json.loads((root / "output" / "manifest.json").read_text(encoding="utf-8"))
+            asset_manifest = json.loads(
+                (root / "output" / "asset_manifest.json").read_text(encoding="utf-8")
+            )
+            self.assertEqual(len(cascade.calls), 1)
+            self.assertIn("Do not deliberately reproduce", cascade.calls[0][0])
+            self.assertEqual(registered["asset_manifest.json"], "asset_manifest")
+            self.assertEqual(registered["asset-asset-1.png"], "generated_image")
+            self.assertTrue(FakeAssetAwareRenderer.resolved_assets["asset-1"].is_file())
+            self.assertEqual(asset_manifest["resolved_count"], 1)
+            self.assertEqual(manifest["agentic"]["assets"]["provider_calls"], 1)
+            self.assertEqual(manifest["agentic"]["asset_manifest"], "asset_manifest.json")
 
 
 if __name__ == "__main__":

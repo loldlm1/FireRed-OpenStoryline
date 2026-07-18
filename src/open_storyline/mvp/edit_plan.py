@@ -175,17 +175,24 @@ class AssetRequest(PlanModel):
     kind: AssetKind
     provider: AssetProvider
     timeline_window: TimeWindow
+    visual_gap: str = Field(min_length=1, max_length=500)
     purpose: str = Field(min_length=1, max_length=240)
     rationale: str = Field(min_length=1, max_length=500)
-    prompt: str = Field(default="", max_length=8000)
+    prompt: str = Field(default="", max_length=7000)
     orientation: Literal["portrait", "landscape"] = "portrait"
     required: bool = True
     fallback: Literal["source", "fit", "omit"] = "source"
 
-    @field_validator("id", "purpose", "rationale", "prompt")
+    @field_validator("id", "visual_gap", "purpose", "rationale", "prompt")
     @classmethod
     def clean_asset_text(cls, value: str, info: Any) -> str:
-        limits = {"id": 80, "purpose": 240, "rationale": 500, "prompt": 8000}
+        limits = {
+            "id": 80,
+            "visual_gap": 500,
+            "purpose": 240,
+            "rationale": 500,
+            "prompt": 7000,
+        }
         if info.field_name == "id":
             return _safe_identifier(value)
         return _safe_text(value, limit=limits[info.field_name])
@@ -294,6 +301,23 @@ class ClipEditPlan(PlanModel):
         overlay_ids = [overlay.id for segment in self.segments for overlay in segment.overlays]
         if len(set(overlay_ids)) != len(overlay_ids):
             raise ValueError("overlay IDs must be unique inside a clip")
+        image_overlays = [
+            overlay
+            for segment in self.segments
+            for overlay in segment.overlays
+            if overlay.kind == "image"
+        ]
+        request_by_id = {asset.id: asset for asset in self.asset_requests}
+        used_asset_ids = {overlay.asset_id for overlay in image_overlays}
+        if used_asset_ids != set(request_by_id):
+            raise ValueError("image overlays and asset requests must reference the same asset IDs")
+        for overlay in image_overlays:
+            request = request_by_id[overlay.asset_id]
+            if (
+                overlay.timeline_window.start_ms < request.timeline_window.start_ms
+                or overlay.timeline_window.end_ms > request.timeline_window.end_ms
+            ):
+                raise ValueError("image overlay timing must stay inside its asset request window")
         return self
 
 
@@ -326,6 +350,9 @@ class EditPlan(PlanModel):
         indexes = [clip.clip_index for clip in self.clips]
         if len(set(indexes)) != len(indexes):
             raise ValueError("clip indexes must be unique")
+        asset_ids = [asset.id for clip in self.clips for asset in clip.asset_requests]
+        if len(set(asset_ids)) != len(asset_ids):
+            raise ValueError("asset request IDs must be unique across the edit plan")
         for clip in self.clips:
             if clip.source_window.end_ms > self.source_duration_ms:
                 raise ValueError("clip timing exceeds source duration")
@@ -351,7 +378,6 @@ def required_capabilities(plan: EditPlan) -> frozenset[str]:
         "crop": "crop",
         "fit": "fit",
         "letterbox": "letterbox",
-        "pip": "pip",
         "source": "source_cutaway",
     }
     overlay_capabilities = {
@@ -590,6 +616,22 @@ class AgenticEditPlanner:
             "source_duration_ms": source_duration_ms,
         })
         plan = validate_edit_plan(payload, source_duration_ms=source_duration_ms)
+        if asset_policy == "off" and any(clip.asset_requests for clip in plan.clips):
+            raise EditPlanError(
+                "EDIT_PLAN_ASSET_POLICY_BLOCKED",
+                "the planner requested external assets while the job asset policy is off",
+            )
+        unsupported_assets = [
+            asset
+            for clip in plan.clips
+            for asset in clip.asset_requests
+            if asset.kind != "generated_image" or asset.provider != "9router"
+        ]
+        if unsupported_assets:
+            raise EditPlanError(
+                "EDIT_PLAN_ASSET_PROVIDER_UNAVAILABLE",
+                "only 9Router generated images are available in this editing profile",
+            )
         unavailable = sorted(set(plan.requested_capabilities) - available_capabilities)
         if unavailable:
             raise EditPlanError(
@@ -667,6 +709,16 @@ def validate_job_controls(edit_mode: str, asset_policy: str) -> tuple[EditMode, 
     return normalized_edit, normalized_assets  # type: ignore[return-value]
 
 
+def validate_generated_asset_limit(value: int) -> int:
+    limit = int(value)
+    if not 0 <= limit <= 8:
+        raise EditPlanError(
+            "GENERATED_ASSET_LIMIT_INVALID",
+            "max_generated_assets_per_clip must be between 0 and 8",
+        )
+    return limit
+
+
 @dataclass(frozen=True)
 class AgenticArtifactNames:
     scene_boundaries: str = "scene_boundaries.json"
@@ -674,4 +726,5 @@ class AgenticArtifactNames:
     shorts_plan: str = "shorts_plan.json"
     edit_plan: str = "edit_plan.json"
     preflight: str = "edit_preflight.json"
+    asset_manifest: str = "asset_manifest.json"
     render_execution: str = "render_execution.json"

@@ -48,6 +48,14 @@ class GeneratedMediaTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("Variation 1 of 2", prompt)
         self.assertIn(ORIGINALITY_SUFFIX, prompt)
 
+        with self.assertRaises(ValueError):
+            build_original_image_prompt(
+                "x" * 8000,
+                orientation="portrait",
+                index=0,
+                count=1,
+            )
+
     async def test_saves_assets_and_provenance_manifest(self):
         cascade = FakeCascade()
         with TemporaryDirectory() as tmpdir:
