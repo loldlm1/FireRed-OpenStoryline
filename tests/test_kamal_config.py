@@ -127,6 +127,10 @@ class KamalConfigTests(unittest.TestCase):
             config["env"]["clear"]["OPENSTORYLINE_AGENTIC_EDITING_MODE"],
             "off",
         )
+        self.assertEqual(
+            config["env"]["clear"]["OPENSTORYLINE_SESSION_WORKSPACE_MODE"],
+            "legacy",
+        )
         self.assertIs(
             config["env"]["clear"]["OPENSTORYLINE_GENERATED_ASSETS_ENABLED"],
             False,
@@ -152,6 +156,7 @@ class KamalConfigTests(unittest.TestCase):
         self.assertEqual(config["env"]["clear"]["OPENSTORYLINE_SEMANTIC_QA_MAX_FRAMES"], 4)
         secrets = (ROOT / ".kamal" / "secrets.example").read_text(encoding="utf-8")
         kamal_env = (ROOT / ".env.kamal.example").read_text(encoding="utf-8")
+        local_env = (ROOT / ".env.mvp.example").read_text(encoding="utf-8")
         self.assertIn(
             "OPENSTORYLINE_WEB_PASSWORD_HASH=$OPENSTORYLINE_WEB_PASSWORD_HASH",
             secrets,
@@ -170,6 +175,8 @@ class KamalConfigTests(unittest.TestCase):
         self.assertIn("PEXELS_API_KEY=$PEXELS_API_KEY", secrets)
         self.assertNotIn("replace-with", secrets)
         self.assertIn("MISTRAL_QA_STT_AUDIO=", kamal_env)
+        self.assertIn("OPENSTORYLINE_SESSION_WORKSPACE_MODE=legacy", kamal_env)
+        self.assertIn("OPENSTORYLINE_SESSION_WORKSPACE_MODE=legacy", local_env)
         self.assertIn("OPENSTORYLINE_PEXELS_ENABLED=false", kamal_env)
         self.assertIn("OPENSTORYLINE_PEXELS_LICENSE_REVIEWED_AT=", kamal_env)
 

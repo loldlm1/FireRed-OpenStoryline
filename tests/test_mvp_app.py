@@ -1,10 +1,55 @@
+import os
 import httpx
 import unittest
+from unittest.mock import patch
 
-from mvp_fastapi import create_app
+from mvp_fastapi import SessionWorkspaceConfigurationError, create_app
+
+
+class SessionWorkspaceConfigurationTests(unittest.TestCase):
+    def test_workspace_mode_defaults_to_legacy_and_accepts_enabled(self):
+        with patch.dict(os.environ, {}, clear=True):
+            self.assertEqual(create_app().state.session_workspace_mode, "legacy")
+        with patch.dict(
+            os.environ,
+            {"OPENSTORYLINE_SESSION_WORKSPACE_MODE": "enabled"},
+            clear=False,
+        ):
+            self.assertEqual(create_app().state.session_workspace_mode, "enabled")
+
+    def test_invalid_workspace_mode_fails_with_sanitized_error(self):
+        invalid_value = "secret-bearing-unknown-workspace-mode"
+        with patch.dict(
+            os.environ,
+            {"OPENSTORYLINE_SESSION_WORKSPACE_MODE": invalid_value},
+            clear=False,
+        ):
+            with self.assertRaises(SessionWorkspaceConfigurationError) as raised:
+                create_app()
+
+        self.assertNotIn(invalid_value, str(raised.exception))
 
 
 class MVPAppBoundaryTests(unittest.IsolatedAsyncioTestCase):
+    async def test_workspace_modes_serve_the_same_legacy_page(self):
+        bodies = []
+        for mode in ("legacy", "enabled"):
+            with patch.dict(
+                os.environ,
+                {"OPENSTORYLINE_SESSION_WORKSPACE_MODE": mode},
+                clear=False,
+            ):
+                app = create_app()
+            transport = httpx.ASGITransport(app=app)
+            async with httpx.AsyncClient(
+                transport=transport, base_url="http://test"
+            ) as client:
+                response = await client.get("/")
+            self.assertEqual(response.status_code, 200)
+            bodies.append(response.content)
+
+        self.assertEqual(bodies[0], bodies[1])
+
     async def test_health_is_public_and_api_fails_closed_without_auth_service(self):
         app = create_app()
         transport = httpx.ASGITransport(app=app)
@@ -38,6 +83,8 @@ class MVPAppBoundaryTests(unittest.IsolatedAsyncioTestCase):
             healthy = await client.get("/up")
             app.state.database = DatabaseStub(False, "DATABASE_UNAVAILABLE")
             unavailable = await client.get("/up")
+            app.state.database = DatabaseStub(False, "DATABASE_SCHEMA_OUTDATED")
+            outdated = await client.get("/up")
 
         self.assertEqual(healthy.status_code, 200)
         self.assertEqual(healthy.json(), {"status": "ok"})
@@ -47,6 +94,12 @@ class MVPAppBoundaryTests(unittest.IsolatedAsyncioTestCase):
             {"status": "unavailable", "code": "DATABASE_UNAVAILABLE"},
         )
         self.assertNotIn("postgres", unavailable.text.lower())
+        self.assertEqual(outdated.status_code, 503)
+        self.assertEqual(
+            outdated.json(),
+            {"status": "unavailable", "code": "DATABASE_SCHEMA_OUTDATED"},
+        )
+        self.assertNotIn("revision", outdated.text.lower())
 
 
 if __name__ == "__main__":

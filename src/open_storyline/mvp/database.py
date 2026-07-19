@@ -15,7 +15,11 @@ from sqlalchemy.ext.asyncio import (
 )
 
 
-EXPECTED_SCHEMA_REVISION = "20260717_0001"
+LEGACY_SCHEMA_REVISION = "20260717_0001"
+WORKSPACE_SCHEMA_REVISION = "20260719_0002"
+COMPATIBLE_SCHEMA_REVISIONS = frozenset(
+    {LEGACY_SCHEMA_REVISION, WORKSPACE_SCHEMA_REVISION}
+)
 
 
 class DatabaseConfigurationError(RuntimeError):
@@ -78,7 +82,7 @@ class Database:
                     )
         except (TimeoutError, SQLAlchemyError):
             return DatabaseReadiness(False, "DATABASE_UNAVAILABLE")
-        if revision != EXPECTED_SCHEMA_REVISION:
+        if revision not in COMPATIBLE_SCHEMA_REVISIONS:
             return DatabaseReadiness(False, "DATABASE_SCHEMA_OUTDATED")
         return DatabaseReadiness(True, "DATABASE_READY")
 

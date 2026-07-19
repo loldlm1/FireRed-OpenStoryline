@@ -51,6 +51,20 @@ isolated so upstream behavior can continue to be merged into this fork.
    FFprobe/subtitle structural checks without storing media bytes.
 10. The browser downloads individual clips, the manifest, or a ZIP bundle.
 
+## Reusable workspace rollout bridge
+
+- `OPENSTORYLINE_SESSION_WORKSPACE_MODE` accepts only `legacy` or `enabled` and
+  defaults to `legacy`. During the compatibility-bridge release, both values
+  continue to serve the existing page and job flow; later additive releases
+  bind `enabled` to reusable workflow-version-2 sessions.
+- Database readiness uses an explicit compatibility set rather than revision
+  ordering. The current `20260717_0001` schema and planned additive
+  `20260719_0002` schema are accepted; missing, obsolete, and unknown revisions
+  fail closed with `DATABASE_SCHEMA_OUTDATED`.
+- Deploy the compatibility bridge before applying the additive migration. A
+  normal rollback after that migration returns to the bridge application while
+  retaining the additive schema and data; it does not infer downgrade safety.
+
 ## Agentic creative QA
 
 - Deterministic creative QA is enabled independently of agentic rendering with

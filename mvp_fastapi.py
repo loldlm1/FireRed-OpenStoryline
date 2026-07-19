@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 from contextlib import asynccontextmanager
+from dataclasses import dataclass
 from pathlib import Path
 import hmac
+import os
 import sys
 import time
 
@@ -37,7 +39,30 @@ from open_storyline.mvp.retention import (
 )
 
 
+SESSION_WORKSPACE_MODES = frozenset({"legacy", "enabled"})
+
+
+class SessionWorkspaceConfigurationError(RuntimeError):
+    pass
+
+
+@dataclass(frozen=True)
+class SessionWorkspaceSettings:
+    mode: str
+
+    @classmethod
+    def from_env(cls) -> "SessionWorkspaceSettings":
+        mode = os.getenv("OPENSTORYLINE_SESSION_WORKSPACE_MODE", "legacy").strip()
+        if len(mode) > 16 or mode not in SESSION_WORKSPACE_MODES:
+            raise SessionWorkspaceConfigurationError(
+                "OPENSTORYLINE_SESSION_WORKSPACE_MODE must be legacy or enabled"
+            )
+        return cls(mode=mode)
+
+
 def create_app() -> FastAPI:
+    workspace_settings = SessionWorkspaceSettings.from_env()
+
     @asynccontextmanager
     async def lifespan(app: FastAPI):
         config = load_settings(default_config_path())
@@ -81,6 +106,7 @@ def create_app() -> FastAPI:
     app.state.database = None
     app.state.auth_service = None
     app.state.retention_service = None
+    app.state.session_workspace_mode = workspace_settings.mode
 
     @app.middleware("http")
     async def request_observability(request: Request, call_next):
