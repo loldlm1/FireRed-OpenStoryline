@@ -6,10 +6,11 @@ import asyncio
 import mimetypes
 import os
 
-from fastapi import APIRouter, File, Form, HTTPException, Request, UploadFile
-from fastapi.responses import FileResponse, JSONResponse
+from fastapi import APIRouter, File, Form, Header, HTTPException, Request, UploadFile
+from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 from pydantic import BaseModel, Field
 
+from open_storyline.mvp.activity import ActivityService
 from open_storyline.mvp.jobs import JobManager, JobStore, JobStoreError
 from open_storyline.mvp.prompt_versions import (
     PromptVersionService,
@@ -113,6 +114,7 @@ def create_mvp_router(
     get_session_media: Callable[[], SessionMediaStore | None] | None = None,
     get_workspace_mode: Callable[[], str] | None = None,
     get_prompt_versions: Callable[[], PromptVersionService | None] | None = None,
+    get_activity: Callable[[], ActivityService | None] | None = None,
 ) -> APIRouter:
     router = APIRouter(prefix="/api/mvp", tags=["video-mvp"])
 
@@ -288,6 +290,10 @@ def create_mvp_router(
                 detail={"code": "PROMPT_VERSION_SERVICE_UNAVAILABLE"},
             )
         return service
+
+    def activity() -> ActivityService:
+        service = get_activity() if get_activity is not None else None
+        return service or ActivityService(get_store())
 
     @router.post("/sessions/{session_id}/input-video/uploads", status_code=201)
     async def initialize_session_source(
@@ -467,6 +473,67 @@ def create_mvp_router(
             return await get_store().load(job_id)
         except JobStoreError as exc:
             raise _http_error(exc) from exc
+
+    @router.get("/jobs/{job_id}/events")
+    async def replay_job_activity(
+        job_id: str,
+        after: int = 0,
+        limit: int = 100,
+    ):
+        try:
+            return await activity().list(
+                job_id,
+                after_sequence=after,
+                limit=limit,
+            )
+        except JobStoreError as exc:
+            raise _http_error(exc) from exc
+
+    @router.get("/jobs/{job_id}/events/stream")
+    async def stream_job_activity(
+        job_id: str,
+        request: Request,
+        after: int = 0,
+        last_event_id: str | None = Header(default=None, alias="Last-Event-ID"),
+    ):
+        cursor = after
+        if last_event_id is not None:
+            try:
+                cursor = int(last_event_id)
+            except ValueError:
+                raise HTTPException(
+                    status_code=400,
+                    detail={"code": "EVENT_CURSOR_INVALID"},
+                ) from None
+        service = activity()
+        try:
+            await service.list(job_id, after_sequence=cursor, limit=1)
+        except JobStoreError as exc:
+            raise _http_error(exc) from exc
+
+        async def event_stream():
+            try:
+                async for chunk in service.stream(
+                    job_id,
+                    after_sequence=cursor,
+                    disconnected=request.is_disconnected,
+                ):
+                    yield chunk
+            except JobStoreError:
+                yield (
+                    'event: stream_error\ndata: {"code":"ACTIVITY_STREAM_UNAVAILABLE",'
+                    '"retryable":true}\n\n'
+                ).encode("utf-8")
+
+        return StreamingResponse(
+            event_stream(),
+            media_type="text/event-stream",
+            headers={
+                "Cache-Control": "no-cache, no-transform",
+                "Connection": "keep-alive",
+                "X-Accel-Buffering": "no",
+            },
+        )
 
     @router.get("/jobs/{job_id}/artifacts")
     async def list_artifacts(job_id: str):

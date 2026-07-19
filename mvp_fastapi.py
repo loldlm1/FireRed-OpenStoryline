@@ -17,6 +17,7 @@ if str(SRC_DIR) not in sys.path:
     sys.path.insert(0, str(SRC_DIR))
 
 from open_storyline.config import default_config_path, load_settings
+from open_storyline.mvp.activity import ActivityService
 from open_storyline.mvp.api import create_mvp_router
 from open_storyline.mvp.audit import AuditService
 from open_storyline.mvp.auth import (
@@ -85,6 +86,7 @@ def create_app() -> FastAPI:
             incomplete_upload_hours=retention_settings.incomplete_upload_hours,
         )
         prompt_versions = PromptVersionService(store, session_media)
+        activity = ActivityService(store)
         audit_service = AuditService(store)
         store.attach_audit(audit_service)
         retention_service = RetentionService(
@@ -103,6 +105,7 @@ def create_app() -> FastAPI:
         app.state.audit_service = audit_service
         app.state.session_media = session_media
         app.state.prompt_versions = prompt_versions
+        app.state.activity = activity
         app.state.retention_service = retention_service
         app.state.retention_scheduler = retention_scheduler
         try:
@@ -124,6 +127,7 @@ def create_app() -> FastAPI:
     app.state.retention_service = None
     app.state.session_media = None
     app.state.prompt_versions = None
+    app.state.activity = None
     app.state.session_workspace_mode = workspace_settings.mode
 
     @app.middleware("http")
@@ -227,6 +231,7 @@ def create_app() -> FastAPI:
         lambda: app.state.session_media,
         lambda: app.state.session_workspace_mode,
         lambda: app.state.prompt_versions,
+        lambda: app.state.activity,
     ))
     app.include_router(create_auth_router(lambda: app.state.auth_service))
     return app

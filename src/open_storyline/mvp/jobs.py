@@ -19,6 +19,7 @@ from sqlalchemy import and_, func, or_, select, text
 from sqlalchemy.exc import IntegrityError, SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncConnection, AsyncSession
 
+from open_storyline.mvp.activity import ActivityService, retryable_error
 from open_storyline.mvp.database import Database
 from open_storyline.mvp.edit_plan import (
     EditPlanError,
@@ -1041,6 +1042,7 @@ class JobStore:
                     if row is None:
                         return None
                     row.state = "running"
+                    row.stage = "starting"
                     row.progress = max(row.progress, Decimal("0.1"))
                     row.error_data = None
                     row.started_at = row.started_at or now
@@ -1053,6 +1055,14 @@ class JobStore:
         if job_id:
             state = await self.load(job_id)
             await self._snapshot(state)
+            await ActivityService(self).emit_safely(
+                job_id,
+                stage="starting",
+                category="system",
+                status="started",
+                message_key="activity.system.starting",
+                progress=float(state["progress"]),
+            )
         return job_id
 
     async def recover_pending(self, *, limit: int = 100) -> list[str]:
@@ -1090,7 +1100,16 @@ class JobStore:
         except SQLAlchemyError:
             raise JobStoreError("DATABASE_UNAVAILABLE", "job recovery is unavailable") from None
         for job_id in recovered:
-            await self._snapshot(await self.load(job_id))
+            state = await self.load(job_id)
+            await self._snapshot(state)
+            await ActivityService(self).emit_safely(
+                job_id,
+                stage=state.get("stage"),
+                category="queue",
+                status="warning",
+                message_key="activity.queue.recovered",
+                progress=float(state["progress"]),
+            )
         return recovered
 
     async def events(
@@ -1129,6 +1148,114 @@ class JobStore:
             }
             for row in rows
         ]
+
+    async def public_events(
+        self,
+        job_id: str,
+        *,
+        after_sequence: int,
+        limit: int,
+    ) -> tuple[list[dict[str, Any]], str]:
+        state = await self.load(job_id)
+        try:
+            async with self.database.sessions() as session:
+                rows = list(
+                    (
+                        await session.execute(
+                            select(JobEvent)
+                            .where(
+                                JobEvent.job_id == job_id,
+                                JobEvent.audience == "user",
+                                JobEvent.sequence > int(after_sequence),
+                            )
+                            .order_by(JobEvent.sequence)
+                            .limit(int(limit))
+                        )
+                    ).scalars()
+                )
+        except SQLAlchemyError:
+            raise JobStoreError("DATABASE_UNAVAILABLE", "job activity is unavailable") from None
+        events = []
+        for row in rows:
+            payload = dict(row.payload or {})
+            payload.update(
+                {
+                    "sequence": row.sequence,
+                    "stage": row.stage,
+                    "occurred_at": _iso(row.occurred_at),
+                }
+            )
+            events.append(payload)
+        return events, str(state["state"])
+
+    async def record_public_event(
+        self,
+        job_id: str,
+        *,
+        stage: str | None,
+        payload: dict[str, Any],
+    ) -> dict[str, Any]:
+        try:
+            async with self.database.sessions() as session:
+                async with session.begin():
+                    row = await session.scalar(
+                        select(VideoJob)
+                        .where(VideoJob.id == job_id, VideoJob.deleted_at.is_(None))
+                        .with_for_update()
+                    )
+                    if row is None:
+                        raise JobStoreError("JOB_NOT_FOUND", "job not found")
+                    recent = list(
+                        (
+                            await session.execute(
+                                select(JobEvent)
+                                .where(
+                                    JobEvent.job_id == job_id,
+                                    JobEvent.audience == "user",
+                                )
+                                .order_by(JobEvent.sequence.desc())
+                                .limit(100)
+                            )
+                        ).scalars()
+                    )
+                    previous_progress = next(
+                        (
+                            float((event.payload or {})["progress"])
+                            for event in recent
+                            if (event.payload or {}).get("progress") is not None
+                        ),
+                        None,
+                    )
+                    progress = payload.get("progress")
+                    if (
+                        progress is not None
+                        and previous_progress is not None
+                        and float(progress) < previous_progress
+                    ):
+                        raise JobStoreError(
+                            "ACTIVITY_PROGRESS_INVALID",
+                            "public activity progress cannot decrease",
+                        )
+                    event = await self._append_event(
+                        session,
+                        row,
+                        "public_activity",
+                        payload,
+                        audience="user",
+                        stage=stage,
+                    )
+        except JobStoreError:
+            raise
+        except (IntegrityError, SQLAlchemyError):
+            raise JobStoreError(
+                "DATABASE_UNAVAILABLE", "job activity storage is unavailable"
+            ) from None
+        return {
+            **dict(event.payload or {}),
+            "sequence": event.sequence,
+            "stage": event.stage,
+            "occurred_at": _iso(event.occurred_at),
+        }
 
     async def record_event(
         self,
@@ -1386,7 +1513,10 @@ class JobStore:
         row: VideoJob,
         event_type: str,
         payload: Any,
-    ) -> None:
+        *,
+        audience: str = "internal",
+        stage: str | None = None,
+    ) -> JobEvent:
         sequence = await session.scalar(
             select(func.coalesce(func.max(JobEvent.sequence), 0)).where(
                 JobEvent.job_id == row.id
@@ -1395,16 +1525,17 @@ class JobStore:
         clean_payload = sanitize_for_persistence(payload)
         if not isinstance(clean_payload, dict):
             clean_payload = {"value": clean_payload}
-        session.add(
-            JobEvent(
-                job_id=row.id,
-                sequence=int(sequence or 0) + 1,
-                event_type=sanitize_text(event_type, limit=80),
-                state=row.state,
-                stage=row.stage,
-                payload=clean_payload,
-            )
+        event = JobEvent(
+            job_id=row.id,
+            sequence=int(sequence or 0) + 1,
+            event_type=sanitize_text(event_type, limit=80),
+            audience=audience,
+            state=row.state,
+            stage=stage if stage is not None else row.stage,
+            payload=clean_payload,
         )
+        session.add(event)
+        await session.flush()
         emit_event(
             event_type,
             editing_session_id=row.editing_session_id,
@@ -1417,6 +1548,7 @@ class JobStore:
                 else None
             ),
         )
+        return event
 
     async def _snapshot(self, state: dict[str, Any]) -> None:
         try:
@@ -1542,7 +1674,16 @@ class JobManager:
         if state.get("state") in TERMINAL_STATES:
             raise JobStoreError("JOB_TERMINAL", "terminal jobs cannot be queued")
         if state.get("state") != "queued":
-            await self.store.update(job_id, state="queued", event_type="job_queued")
+            state = await self.store.update(job_id, state="queued", event_type="job_queued")
+        await ActivityService(self.store).emit_safely(
+            job_id,
+            stage=state.get("stage") or "queued",
+            category="queue",
+            status="queued",
+            message_key="activity.queue.waiting",
+            progress=float(state["progress"]),
+            attempt_number=state.get("attempt_number"),
+        )
         self._wake.set()
 
     async def stop(self) -> None:
@@ -1649,6 +1790,15 @@ class JobManager:
                     event_type="job_completed",
                     **(result or {}),
                 )
+                await ActivityService(self.store).emit_safely(
+                    job_id,
+                    stage="completed",
+                    category="system",
+                    status="completed",
+                    message_key="activity.system.completed",
+                    progress=1.0,
+                    clip_count=int(current.get("clip_count") or 0),
+                )
             if self.store.audit is not None:
                 await self.store._audit_safely(
                     job_id,
@@ -1668,6 +1818,17 @@ class JobManager:
             code = str(getattr(exc, "code", "JOB_PROCESSING_FAILED"))
             details = getattr(exc, "to_dict", lambda: None)()
             await self.store.fail(job_id, code=code, message=str(exc), details=details)
+            failed = await self.store.load(job_id)
+            await ActivityService(self.store).emit_safely(
+                job_id,
+                stage=failed.get("stage"),
+                category="system",
+                status="failed",
+                message_key="activity.system.failed",
+                progress=float(failed.get("progress") or 0),
+                error_code=code,
+                retryable=retryable_error(code),
+            )
             if self.store.audit is not None:
                 await self.store._audit_safely(
                     job_id,
