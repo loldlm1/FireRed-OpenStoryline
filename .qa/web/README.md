@@ -26,6 +26,10 @@ QA_FAIL_ON_CONSOLE=1 npm run test:smoke
 QA_PASSWORD='local test password' npm run test:auth:desktop
 
 QA_PASSWORD='local test password' npm run test:auth:mobile
+
+QA_PASSWORD='local test password' npm run test:workspace:desktop
+
+QA_PASSWORD='local test password' npm run test:workspace:mobile
 ```
 
 All three commands use Chromium, compact reporters, and one worker. Run the
@@ -38,6 +42,10 @@ Collection-only checks do not require a server:
 npm run test:smoke -- --list
 QA_PASSWORD='local-list-only' npm run test:auth:desktop -- --list
 QA_PASSWORD='local-list-only' npm run test:auth:mobile -- --list
+
+QA_PASSWORD='local-list-only' npm run test:workspace:desktop -- --list
+
+QA_PASSWORD='local-list-only' npm run test:workspace:mobile -- --list
 ```
 
 `tests/smoke.spec.ts` checks one or more paths for fatal HTTP, page, console,
@@ -67,6 +75,14 @@ Useful environment variables:
 - `QA_TRACE`: defaults to `retain-on-failure`.
 - `QA_VIDEO`: set `1` to retain video on failure.
 - `QA_WORKERS`: worker count; defaults to `1`.
+
+The workspace commands mock only `/api/mvp/**` responses while loading the real
+HTML, CSS, and JavaScript modules from the local server. They cover resumable
+upload offsets, monotonic percentage, source immutability, SSE replay and
+deduplication, polling fallback, URL restoration, reduced motion, storage
+absence, keyboard dialogs, and desktop/mobile layout. The auth commands keep
+the real PostgreSQL-backed login, CSRF, reusable-session, deletion, and logout
+boundary in scope.
 
 Focused runs keep screenshots and traces only on failure; video remains off
 unless `QA_VIDEO=1`. Compact JSON/JUnit results stay under

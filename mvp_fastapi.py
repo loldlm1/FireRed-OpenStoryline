@@ -10,6 +10,7 @@ import time
 
 from fastapi import FastAPI, Request
 from fastapi.responses import FileResponse, JSONResponse
+from fastapi.staticfiles import StaticFiles
 
 ROOT_DIR = Path(__file__).resolve().parent
 SRC_DIR = ROOT_DIR / "src"
@@ -200,9 +201,29 @@ def create_app() -> FastAPI:
                 )
         return await call_next(request)
 
+    @app.middleware("http")
+    async def prevent_mixed_workspace_assets(request: Request, call_next):
+        response = await call_next(request)
+        if request.url.path == "/" or request.url.path.startswith("/static/mvp/"):
+            response.headers["Cache-Control"] = "no-store, max-age=0"
+            response.headers["Pragma"] = "no-cache"
+            response.headers["X-Content-Type-Options"] = "nosniff"
+        return response
+
+    app.mount(
+        "/static/mvp",
+        StaticFiles(directory=ROOT_DIR / "web" / "static" / "mvp"),
+        name="mvp-static",
+    )
+
     @app.get("/", include_in_schema=False)
     async def index():
-        return FileResponse(ROOT_DIR / "web" / "mvp.html")
+        page = (
+            "mvp.html"
+            if app.state.session_workspace_mode == "enabled"
+            else "mvp-legacy.html"
+        )
+        return FileResponse(ROOT_DIR / "web" / page)
 
     @app.get("/health")
     async def health():

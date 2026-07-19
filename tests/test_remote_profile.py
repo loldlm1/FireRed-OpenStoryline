@@ -47,6 +47,10 @@ class RemoteProfileTests(unittest.TestCase):
                 "!src/**",
                 "!web/",
                 "!web/mvp.html",
+                "!web/mvp-legacy.html",
+                "!web/static/",
+                "!web/static/mvp/",
+                "!web/static/mvp/**",
             },
         )
         self.assertFalse(
@@ -75,6 +79,13 @@ class RemoteProfileTests(unittest.TestCase):
             re.compile(r'@app\.get\("/up".*?"status": "ok"', re.DOTALL),
         )
         self.assertIn('"renderer": "ffmpeg-cpu"', app)
+
+    def test_remote_container_packages_only_the_scoped_workspace_assets(self):
+        dockerfile = (ROOT / "Dockerfile.remote").read_text(encoding="utf-8")
+
+        self.assertIn("COPY web/mvp.html web/mvp-legacy.html ./web/", dockerfile)
+        self.assertIn("COPY web/static/mvp/ ./web/static/mvp/", dockerfile)
+        self.assertNotIn("COPY web/ ./web/", dockerfile)
 
     def test_remote_image_contains_database_migrations_without_init_secrets(self):
         dockerfile = (ROOT / "Dockerfile.remote").read_text(encoding="utf-8")
