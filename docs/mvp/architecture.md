@@ -31,39 +31,62 @@ isolated so upstream behavior can continue to be merged into this fork.
 1. The browser authenticates with the single project password. The server
    returns an opaque, revocable session cookie and a separate CSRF cookie;
    neither the password nor a reusable API token is stored by JavaScript.
-2. The authenticated browser uploads a source video and an editing prompt.
-3. The server creates the job inside a resumable editing session in PostgreSQL,
-   writes a rollback-compatible `job.json` snapshot, and extracts compressed
-   mono audio with FFmpeg.
-4. Direct Mistral Voxtral transcribes the audio with segment timestamps.
-5. `cx/gpt-5.6-sol` receives the transcript and sampled frames through
+2. With workspace mode enabled, the browser creates a workflow-version-2
+   editing session and uploads one source video in resumable, offset-checked
+   chunks. The server validates the completed file with FFprobe, records its
+   size and SHA-256, and makes it immutable under
+   `outputs/mvp_sessions/<session_id>/input/`.
+3. The browser creates an immutable prompt version. PostgreSQL atomically
+   allocates its first run attempt and references the session source; no media
+   is copied into the job directory. Rerunning the same version allocates a new
+   attempt with the exact stored prompt, settings, and source identity.
+4. The worker writes a rollback-compatible `job.json` snapshot and extracts
+   compressed mono audio with FFmpeg from the session source.
+5. Direct Mistral Voxtral transcribes the audio with segment timestamps.
+6. `cx/gpt-5.6-sol` receives the transcript and sampled frames through
    9Router and returns a structured clip plan.
-6. The server validates duration, bounds, overlap, and output count.
-7. In agentic render mode, the server validates an executable edit plan,
+7. The server validates duration, bounds, overlap, and output count.
+8. In agentic render mode, the server validates an executable edit plan,
    resolves only the generated-image and/or Pexels capabilities explicitly
    permitted for that job, and FFmpeg renders the typed timeline operations and
    subtitles on CPU.
-8. Agentic outputs produce `render_qa.json`, `retention_rhythm_qa.json`, and
+9. Agentic outputs produce `render_qa.json`, `retention_rhythm_qa.json`, and
    `creative_conformance.json`. Structural, pacing, fallback, operation, and
    asset-use findings are evidence for review and never rewrite a rendered job
    to failed. The pacing heuristics do not predict retention or virality.
-9. PostgreSQL ingests the sanitized JSON/SRT evidence and records deterministic
+10. PostgreSQL ingests sanitized JSON/SRT evidence, public activity events, and
+   deterministic
    FFprobe/subtitle structural checks without storing media bytes.
-10. The browser downloads individual clips, the manifest, or a ZIP bundle.
+11. Native FastAPI SSE replays ordered, sanitized processing events and sends
+   heartbeats. The browser reconnects from the last sequence and falls back to
+   bounded event/job polling when the stream is unavailable.
+12. The browser compares prompt versions and attempts, previews or downloads
+   registered outputs, and may mark one completed run as the human favorite.
+   Selecting a favorite never changes deterministic QA verdicts.
 
-## Reusable workspace rollout bridge
+## Reusable workspace contract and rollout bridge
 
 - `OPENSTORYLINE_SESSION_WORKSPACE_MODE` accepts only `legacy` or `enabled` and
-  defaults to `legacy`. During the compatibility-bridge release, both values
-  continue to serve the existing page and job flow; later additive releases
-  bind `enabled` to reusable workflow-version-2 sessions.
+  defaults to `legacy`. `legacy` serves `web/mvp-legacy.html` and creates
+  workflow-version-1 sessions. `enabled` serves the modular reusable workspace
+  and creates workflow-version-2 sessions.
+- A workflow-version-2 session owns exactly one source video. Once validation
+  succeeds it cannot be replaced or modified. A different video always requires
+  a new session. Existing workflow-version-1 sessions remain readable and keep
+  their original job-owned media paths; they are never silently converted into
+  reusable sessions.
+- Prompt text and run settings are immutable per version. Each version can have
+  multiple attempts, all attributable to the same source hash. At most one
+  completed run in the session may be the human-selected favorite.
 - Database readiness uses an explicit compatibility set rather than revision
-  ordering. The current `20260717_0001` schema and planned additive
+  ordering. The legacy `20260717_0001` schema and additive
   `20260719_0002` schema are accepted; missing, obsolete, and unknown revisions
   fail closed with `DATABASE_SCHEMA_OUTDATED`.
-- Deploy the compatibility bridge before applying the additive migration. A
-  normal rollback after that migration returns to the bridge application while
-  retaining the additive schema and data; it does not infer downgrade safety.
+- Deploy the compatibility bridge before applying the additive migration, and
+  keep mode `legacy` until a separately authorized canary. A normal rollback
+  returns to the bridge application while retaining the additive schema, source
+  metadata, prompt versions, activity, and media; it does not infer downgrade
+  safety.
 
 ## Agentic creative QA
 
@@ -151,17 +174,25 @@ and the development venv never enter the remote-image build context.
 - PostgreSQL rate-limit buckets protect failed password submissions only, with
   per-client and global minute/day bounds. Successful logins and authenticated
   API/job requests do not consume application quotas.
-- Every job belongs to exactly one lightweight editing session. Session and job
+- Every job belongs to exactly one editing session. Workflow-version-2 sessions
+  own one row in `session_input_videos`, immutable rows in `prompt_versions`,
+  and versioned attempts in `video_jobs`. Session, prompt-version, job, and event
   lists use bounded cursor pagination; soft-deleted or expired sessions fail
   closed.
-- Every job still owns a directory under `outputs/mvp_jobs/<job_id>` for input,
-  work files, and generated media. PostgreSQL stores only validated relative
-  artifact paths. It reconstructs current job responses without reading
-  `job.json`.
-- Every committed transition updates the PostgreSQL job row and appends a
-  sanitized ordered event in the same transaction. A derived atomic `job.json`
-  snapshot remains during the rollback window; snapshot failure is recorded as
-  an event and never makes the file authoritative again.
+- Workflow-version-2 source media lives under
+  `outputs/mvp_sessions/<session_id>/input/`. Jobs keep work and generated media
+  under `outputs/mvp_jobs/<job_id>` but do not receive a duplicate source.
+  Workflow-version-1 jobs retain their original job-owned input. PostgreSQL
+  stores only validated relative paths and reconstructs current responses
+  without reading `job.json`.
+- Every committed transition updates the PostgreSQL job row and appends an
+  internal ordered event in the same transaction. A separate allowlisted public
+  activity payload exposes only safe message keys, category, status, monotonic
+  progress, bounded counts/labels, and sanitized retry/failure metadata through
+  replay and SSE. Prompts, transcripts, provider bodies, paths, secrets, and
+  internal tool payloads are excluded. A derived atomic `job.json` snapshot
+  remains during the rollback window; snapshot failure is recorded as an event
+  and never makes the file authoritative again.
 - Registered JSON/SRT artifacts and terminal `job.json` snapshots are ingested
   as versioned, hashed audit documents with bounded size and sanitized raw text.
   Binary media is excluded. Audit/QC failure is recorded separately and never
@@ -169,9 +200,13 @@ and the development venv never enter the remote-image build context.
 - Deterministic QC checks output count, FFprobe structure/duration, and subtitle
   ordering against the validated manifest. Its system verdict is explicitly
   structural and does not represent creative or semantic quality.
-- Terminal work files are removed immediately. Source/generated video and ZIP
-  media expire after seven days, or immediately when an editing session is
-  deleted. JSON/SRT evidence and database audit rows remain for 30 days.
+- Terminal work files are removed immediately. Job output media and ZIP bundles
+  expire seven days after terminal completion. A ready workflow-version-2 source
+  expires seven days after the latest run creation or terminal completion, so
+  continued work renews its lifetime. Incomplete uploads expire after
+  `OPENSTORYLINE_INCOMPLETE_UPLOAD_HOURS` (24 by default). Session deletion
+  immediately attempts to purge both session source and job media. JSON/SRT
+  evidence and database audit rows remain for 30 days.
 - Editing-session deletion is a soft delete followed by an idempotent media
   purge. Deleted sessions disappear from the normal UI but remain available to
   the audit CLI until audit expiry.
@@ -179,7 +214,12 @@ and the development venv never enter the remote-image build context.
   deletion but never extend media retention.
 - Automatic retention is bounded, advisory-lock protected, and disabled by
   default until a production preview is explicitly reviewed.
-- Inputs and outputs are served only through validated job-scoped paths.
+- Sources and outputs are served only through validated session/job-scoped
+  paths. The workspace HTML and modules use a self-scoped Content Security
+  Policy, no-store caching, frame denial, MIME-sniff protection, and restrictive
+  browser permissions. Kamal disables response buffering so SSE and streamed
+  downloads remain incremental while request buffering and upload size bounds
+  stay enabled.
 - The 9Router endpoint key, direct `MISTRAL_API_KEYS` key ring, and optional
   `PEXELS_API_KEY` are delivered through Kamal secrets and never written to job
   state, logs, manifests, or Git.

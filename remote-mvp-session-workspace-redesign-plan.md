@@ -1,8 +1,16 @@
 # Plan: Remote MVP Reusable Session Workspace And Streaming UX
 
 **Generated**: 2026-07-19
-**Status**: Execution in progress on `feat/reusable-session-workspace`
+**Status**: Completed locally on `feat/reusable-session-workspace`; rollout remains disabled pending a separately authorized canary
 **Estimated Complexity**: High
+
+## Execution Record
+
+- Sprint commits: `2f544d1`, `3cc90d7`, `e2a614a`, `6f3ad43`, `ad2ce38`, `7328c13`, `4c96ad2`, and the Sprint 8 completion commit containing this record.
+- Final validation: 272 database-free tests passed with 68 expected PostgreSQL skips; 272 connected PostgreSQL tests passed; 5 focused FFmpeg tests passed; Chromium smoke plus 6 desktop and 2 mobile workspace scenarios passed with console failures enabled.
+- Release validation: shell syntax, Python compilation, JavaScript syntax, configuration loading, Alembic upgrade through `20260719_0002`, Kamal/profile tests, diff/privacy checks, and `Dockerfile.remote` build passed.
+- Safety boundary: no live provider was called, no private media was uploaded, no production database/VPS was touched, and no deployment was performed.
+- Rollback floor: keep `OPENSTORYLINE_SESSION_WORKSPACE_MODE=legacy`; if code rollback is required after migration, return to Sprint 1 commit `2f544d1` and retain additive schema `20260719_0002` plus all workflow-v2 rows/files.
 
 ## Overview
 
@@ -438,13 +446,13 @@ CSRF values, and hidden reasoning are forbidden.
 
 ### Sprint 1 Gate
 
-- [ ] All Sprint 1 tasks complete.
-- [ ] Sprint 1 validation passes and evidence is recorded.
-- [ ] No product behavior, schema, media, or provider contract changed.
-- [ ] Residual risks are documented.
-- [ ] Exactly one Sprint 1 commit is created with the proposed sprint message.
-- [ ] The rollback commit SHA is recorded.
-- [ ] Sprint 2 has not started before this gate completes.
+- [x] All Sprint 1 tasks complete.
+- [x] Sprint 1 validation passes and evidence is recorded.
+- [x] No product behavior, schema, media, or provider contract changed.
+- [x] Residual risks are documented.
+- [x] Exactly one Sprint 1 commit is created with the proposed sprint message.
+- [x] The rollback commit SHA is recorded.
+- [x] Sprint 2 has not started before this gate completes.
 
 ## Sprint 2: Additive Session, Prompt, Run, And Event Schema
 
@@ -506,13 +514,13 @@ CSRF values, and hidden reasoning are forbidden.
 
 ### Sprint 2 Gate
 
-- [ ] All Sprint 2 tasks complete.
-- [ ] Upgrade, compatibility, bounded backfill, and fixture validation passes and evidence is recorded.
-- [ ] Migration lock/backfill behavior and downgrade limits are documented.
-- [ ] No source files were moved or copied during backfill.
-- [ ] Exactly one Sprint 2 commit is created with the proposed sprint message.
-- [ ] The Sprint 1 commit is recorded as the code rollback point.
-- [ ] Sprint 3 has not started before this gate completes.
+- [x] All Sprint 2 tasks complete.
+- [x] Upgrade, compatibility, bounded backfill, and fixture validation passes and evidence is recorded.
+- [x] Migration lock/backfill behavior and downgrade limits are documented.
+- [x] No source files were moved or copied during backfill.
+- [x] Exactly one Sprint 2 commit is created with the proposed sprint message.
+- [x] The Sprint 1 commit is recorded as the code rollback point.
+- [x] Sprint 3 has not started before this gate completes.
 
 ## Sprint 3: Immutable Resumable Session Source Video
 
@@ -574,13 +582,13 @@ CSRF values, and hidden reasoning are forbidden.
 
 ### Sprint 3 Gate
 
-- [ ] All Sprint 3 tasks complete.
-- [ ] Upload, resume, validation, preview, concurrency, path-safety, and retention tests pass.
-- [ ] No source replacement path exists after `ready`.
-- [ ] No private media or credentials were added to fixtures or logs.
-- [ ] Exactly one Sprint 3 commit is created with the proposed sprint message.
-- [ ] The Sprint 2 commit and source-file preservation note are recorded as rollback points.
-- [ ] Sprint 4 has not started before this gate completes.
+- [x] All Sprint 3 tasks complete.
+- [x] Upload, resume, validation, preview, concurrency, path-safety, and retention tests pass.
+- [x] No source replacement path exists after `ready`.
+- [x] No private media or credentials were added to fixtures or logs.
+- [x] Exactly one Sprint 3 commit is created with the proposed sprint message.
+- [x] The Sprint 2 commit and source-file preservation note are recorded as rollback points.
+- [x] Sprint 4 has not started before this gate completes.
 
 ## Sprint 4: Immutable Prompt Versions, Run Attempts, Source Reuse, And Favorites
 
@@ -651,13 +659,13 @@ CSRF values, and hidden reasoning are forbidden.
 
 ### Sprint 4 Gate
 
-- [ ] All Sprint 4 tasks complete.
-- [ ] Version numbering, attempt concurrency, source reuse, recovery, favorite, preview, audit, and compatibility tests pass.
-- [ ] Filesystem inspection confirms no v2 job input copies.
-- [ ] Legacy and workflow-version-2 behavior remain explicitly separated.
-- [ ] Exactly one Sprint 4 commit is created with the proposed sprint message.
-- [ ] Workspace-mode rollback and active-job drain requirements are recorded.
-- [ ] Sprint 5 has not started before this gate completes.
+- [x] All Sprint 4 tasks complete.
+- [x] Version numbering, attempt concurrency, source reuse, recovery, favorite, preview, audit, and compatibility tests pass.
+- [x] Filesystem inspection confirms no v2 job input copies.
+- [x] Legacy and workflow-version-2 behavior remain explicitly separated.
+- [x] Exactly one Sprint 4 commit is created with the proposed sprint message.
+- [x] Workspace-mode rollback and active-job drain requirements are recorded.
+- [x] Sprint 5 has not started before this gate completes.
 
 ## Sprint 5: Sanitized Activity Events And SSE Streaming
 
@@ -728,13 +736,13 @@ CSRF values, and hidden reasoning are forbidden.
 
 ### Sprint 5 Gate
 
-- [ ] All Sprint 5 tasks complete.
-- [ ] Event schema, privacy, ordering, reconnect, disconnect, fallback, pipeline, and render callback tests pass.
-- [ ] A redaction review confirms no private reasoning or sensitive payload reaches public events.
-- [ ] Existing polling remains functional as fallback.
-- [ ] Exactly one Sprint 5 commit is created with the proposed sprint message.
-- [ ] The Sprint 4 polling behavior is recorded as rollback.
-- [ ] Sprint 6 has not started before this gate completes.
+- [x] All Sprint 5 tasks complete.
+- [x] Event schema, privacy, ordering, reconnect, disconnect, fallback, pipeline, and render callback tests pass.
+- [x] A redaction review confirms no private reasoning or sensitive payload reaches public events.
+- [x] Existing polling remains functional as fallback.
+- [x] Exactly one Sprint 5 commit is created with the proposed sprint message.
+- [x] The Sprint 4 polling behavior is recorded as rollback.
+- [x] Sprint 6 has not started before this gate completes.
 
 ## Sprint 6: Premium Creative Workspace, Upload UX, And Live Activity UI
 
@@ -811,13 +819,13 @@ CSRF values, and hidden reasoning are forbidden.
 
 ### Sprint 6 Gate
 
-- [ ] All Sprint 6 tasks complete.
-- [ ] Static packaging, legacy toggle, upload, live activity, responsive, keyboard, storage, and focused browser tests pass.
-- [ ] The new UI uses project-owned content and no copied template dependencies/assets.
-- [ ] No screenshots or fixtures contain private media/prompts/provider data.
-- [ ] Exactly one Sprint 6 commit is created with the proposed sprint message.
-- [ ] The `legacy` mode switch is recorded as the immediate rollback point.
-- [ ] Sprint 7 has not started before this gate completes.
+- [x] All Sprint 6 tasks complete.
+- [x] Static packaging, legacy toggle, upload, live activity, responsive, keyboard, storage, and focused browser tests pass.
+- [x] The new UI uses project-owned content and no copied template dependencies/assets.
+- [x] No screenshots or fixtures contain private media/prompts/provider data.
+- [x] Exactly one Sprint 6 commit is created with the proposed sprint message.
+- [x] The `legacy` mode switch is recorded as the immediate rollback point.
+- [x] Sprint 7 has not started before this gate completes.
 
 ## Sprint 7: Prompt History, Output Comparison, Favorites, And State Completeness
 
@@ -895,13 +903,13 @@ CSRF values, and hidden reasoning are forbidden.
 
 ### Sprint 7 Gate
 
-- [ ] All Sprint 7 tasks complete.
-- [ ] History, comparison, preview, favorite, expiry, cleanup, desktop, mobile, keyboard, and reduced-motion checks pass.
-- [ ] Manual favorite and deterministic QA remain clearly separate.
-- [ ] Browser/network behavior is bounded for long sessions.
-- [ ] Exactly one Sprint 7 commit is created with the proposed sprint message.
-- [ ] The Sprint 6 workspace is recorded as rollback.
-- [ ] Sprint 8 has not started before this gate completes.
+- [x] All Sprint 7 tasks complete.
+- [x] History, comparison, preview, favorite, expiry, cleanup, desktop, mobile, keyboard, and reduced-motion checks pass.
+- [x] Manual favorite and deterministic QA remain clearly separate.
+- [x] Browser/network behavior is bounded for long sessions.
+- [x] Exactly one Sprint 7 commit is created with the proposed sprint message.
+- [x] The Sprint 6 workspace is recorded as rollback.
+- [x] Sprint 8 has not started before this gate completes.
 
 ## Sprint 8: Security Headers, Proxy Streaming, Documentation, And Release Readiness
 
@@ -978,13 +986,13 @@ CSRF values, and hidden reasoning are forbidden.
 
 ### Sprint 8 Gate
 
-- [ ] All Sprint 8 tasks complete.
-- [ ] Full local, connected PostgreSQL, FFmpeg, browser, shell, Docker, and Kamal validation evidence is recorded with skips clearly identified.
-- [ ] Security/privacy, accessibility, database, AI activity, and release review gates pass.
-- [ ] Rollout and rollback steps are current and do not require destructive schema downgrade for normal recovery.
-- [ ] Exactly one Sprint 8 commit is created with the proposed sprint message.
-- [ ] The workspace remains in `legacy` mode until a separately authorized canary activation.
-- [ ] The final rollback point and completed plan state are recorded.
+- [x] All Sprint 8 tasks complete.
+- [x] Full local, connected PostgreSQL, FFmpeg, browser, shell, Docker, and Kamal validation evidence is recorded with skips clearly identified.
+- [x] Security/privacy, accessibility, database, AI activity, and release review gates pass.
+- [x] Rollout and rollback steps are current and do not require destructive schema downgrade for normal recovery.
+- [x] Exactly one Sprint 8 commit is created with the proposed sprint message.
+- [x] The workspace remains in `legacy` mode until a separately authorized canary activation.
+- [x] The final rollback point and completed plan state are recorded.
 
 ## Testing Strategy
 
@@ -1148,15 +1156,15 @@ CSRF values, and hidden reasoning are forbidden.
 
 ## Completion Checklist
 
-- [ ] Every sprint passed its validation gate.
-- [ ] Every sprint has exactly one sprint-specific commit.
-- [ ] Sprint 1 compatibility bridge is identified as the post-migration code rollback floor.
-- [ ] Source video uploads once, remains immutable, and is reused without copies.
-- [ ] Prompt versions, attempts, outputs, favorite, audit, and source identity are attributable.
-- [ ] SSE activity is ordered, reconnectable, sanitized, and backed by polling.
-- [ ] Upload percentage/resume and all required async/error/expiry states are usable.
-- [ ] Desktop/mobile accessibility and performance checks pass.
-- [ ] Existing remote auth, CSRF, queue, worker, artifact, audit, retention, provider, and render contracts remain valid.
-- [ ] Full local, connected database, FFmpeg, browser, Docker, shell, and Kamal checks are recorded accurately.
-- [ ] Documentation, env names, profile boundaries, privacy, rollout, and rollback are current.
-- [ ] No implementation validation called live providers, uploaded private media, touched production, or deployed.
+- [x] Every sprint passed its validation gate.
+- [x] Every sprint has exactly one sprint-specific commit.
+- [x] Sprint 1 compatibility bridge is identified as the post-migration code rollback floor.
+- [x] Source video uploads once, remains immutable, and is reused without copies.
+- [x] Prompt versions, attempts, outputs, favorite, audit, and source identity are attributable.
+- [x] SSE activity is ordered, reconnectable, sanitized, and backed by polling.
+- [x] Upload percentage/resume and all required async/error/expiry states are usable.
+- [x] Desktop/mobile accessibility and performance checks pass.
+- [x] Existing remote auth, CSRF, queue, worker, artifact, audit, retention, provider, and render contracts remain valid.
+- [x] Full local, connected database, FFmpeg, browser, Docker, shell, and Kamal checks are recorded accurately.
+- [x] Documentation, env names, profile boundaries, privacy, rollout, and rollback are current.
+- [x] No implementation validation called live providers, uploaded private media, touched production, or deployed.

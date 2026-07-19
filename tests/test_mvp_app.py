@@ -48,6 +48,29 @@ class MVPAppBoundaryTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(response.status_code, 200)
             self.assertEqual(response.headers["cache-control"], "no-store, max-age=0")
             self.assertEqual(response.headers["x-content-type-options"], "nosniff")
+            self.assertEqual(response.headers["referrer-policy"], "no-referrer")
+            self.assertEqual(response.headers["x-frame-options"], "DENY")
+            self.assertEqual(
+                response.headers["cross-origin-opener-policy"], "same-origin"
+            )
+            self.assertEqual(
+                response.headers["cross-origin-resource-policy"], "same-origin"
+            )
+            csp = response.headers["content-security-policy"]
+            for directive in (
+                "default-src 'self'",
+                "script-src 'self'",
+                "style-src 'self'",
+                "connect-src 'self'",
+                "media-src 'self' blob:",
+                "object-src 'none'",
+                "base-uri 'self'",
+                "form-action 'self'",
+                "frame-ancestors 'none'",
+            ):
+                self.assertIn(directive, csp)
+            self.assertNotIn("'unsafe-inline'", csp)
+            self.assertNotIn("'unsafe-eval'", csp)
             bodies[mode] = response.text
 
         self.assertIn("Mesa de shorts", bodies["legacy"])
@@ -74,6 +97,7 @@ class MVPAppBoundaryTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("javascript", module.headers["content-type"])
         self.assertEqual(module.headers["cache-control"], "no-store, max-age=0")
         self.assertEqual(module.headers["x-content-type-options"], "nosniff")
+        self.assertIn("script-src 'self'", module.headers["content-security-policy"])
         self.assertEqual(traversal.status_code, 404)
 
     async def test_health_is_public_and_api_fails_closed_without_auth_service(self):
@@ -88,6 +112,9 @@ class MVPAppBoundaryTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(health.status_code, 200)
         self.assertEqual(health.json()["inference"], "remote-only")
+        self.assertEqual(health.headers["x-content-type-options"], "nosniff")
+        self.assertEqual(health.headers["referrer-policy"], "no-referrer")
+        self.assertNotIn("content-security-policy", health.headers)
         self.assertEqual(protected.status_code, 503)
         self.assertEqual(protected.json()["detail"]["code"], "AUTH_UNAVAILABLE")
         self.assertEqual(session.status_code, 503)

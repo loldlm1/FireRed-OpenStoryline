@@ -26,7 +26,7 @@ proxy:
     timeout: 10
   buffering:
     requests: true
-    responses: true
+    responses: false
     max_request_body: <%= ENV.fetch("OPENSTORYLINE_MAX_UPLOAD_BYTES", "8589934592") %>
     max_response_body: 0
     memory: 1048576
