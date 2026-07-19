@@ -37,6 +37,7 @@ from open_storyline.mvp.retention import (
     RetentionService,
     RetentionSettings,
 )
+from open_storyline.mvp.session_media import SessionMediaStore
 
 
 SESSION_WORKSPACE_MODES = frozenset({"legacy", "enabled"})
@@ -75,9 +76,19 @@ def create_app() -> FastAPI:
             media_retention_days=retention_settings.media_days,
             audit_retention_days=retention_settings.audit_days,
         )
+        session_media = SessionMediaStore(
+            Path(config.project.outputs_dir) / "mvp_sessions",
+            database,
+            media_retention_days=retention_settings.media_days,
+            incomplete_upload_hours=retention_settings.incomplete_upload_hours,
+        )
         audit_service = AuditService(store)
         store.attach_audit(audit_service)
-        retention_service = RetentionService(store, retention_settings)
+        retention_service = RetentionService(
+            store,
+            retention_settings,
+            session_media=session_media,
+        )
         store.attach_retention(retention_service)
         retention_scheduler = RetentionScheduler(retention_service)
         manager = JobManager(store, MVPJobProcessor(config))
@@ -87,6 +98,7 @@ def create_app() -> FastAPI:
         app.state.mvp_jobs = store
         app.state.mvp_manager = manager
         app.state.audit_service = audit_service
+        app.state.session_media = session_media
         app.state.retention_service = retention_service
         app.state.retention_scheduler = retention_scheduler
         try:
@@ -106,6 +118,7 @@ def create_app() -> FastAPI:
     app.state.database = None
     app.state.auth_service = None
     app.state.retention_service = None
+    app.state.session_media = None
     app.state.session_workspace_mode = workspace_settings.mode
 
     @app.middleware("http")
@@ -206,6 +219,8 @@ def create_app() -> FastAPI:
         lambda: app.state.mvp_jobs,
         lambda: app.state.mvp_manager,
         lambda: app.state.retention_service,
+        lambda: app.state.session_media,
+        lambda: app.state.session_workspace_mode,
     ))
     app.include_router(create_auth_router(lambda: app.state.auth_service))
     return app

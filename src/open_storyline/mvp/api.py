@@ -6,12 +6,13 @@ import asyncio
 import mimetypes
 import os
 
-from fastapi import APIRouter, File, Form, HTTPException, UploadFile
+from fastapi import APIRouter, File, Form, HTTPException, Request, UploadFile
 from fastapi.responses import FileResponse, JSONResponse
 from pydantic import BaseModel, Field
 
 from open_storyline.mvp.jobs import JobManager, JobStore, JobStoreError
 from open_storyline.mvp.retention import RetentionService
+from open_storyline.mvp.session_media import SessionMediaStore
 
 
 ALLOWED_VIDEO_SUFFIXES = {".mp4", ".mov", ".mkv", ".webm", ".avi", ".m4v"}
@@ -21,23 +22,63 @@ class SessionPayload(BaseModel):
     title: str = Field(min_length=1, max_length=160)
 
 
+class SessionSourceUploadPayload(BaseModel):
+    original_filename: str = Field(min_length=1, max_length=255)
+    expected_size: int = Field(gt=0)
+    media_type: str | None = Field(default=None, max_length=255)
+
+
 def _http_error(exc: JobStoreError) -> HTTPException:
-    if exc.code in {"JOB_NOT_FOUND", "ARTIFACT_NOT_FOUND", "SESSION_NOT_FOUND"}:
+    if exc.code in {
+        "JOB_NOT_FOUND",
+        "ARTIFACT_NOT_FOUND",
+        "SESSION_NOT_FOUND",
+        "SESSION_SOURCE_NOT_FOUND",
+        "SOURCE_UPLOAD_NOT_FOUND",
+    }:
         status = 404
     elif exc.code in {
         "DATABASE_UNAVAILABLE",
         "JOB_STATE_UNAVAILABLE",
         "JOB_QUEUE_FULL",
         "RETENTION_BUSY",
+        "SOURCE_VALIDATION_UNAVAILABLE",
     }:
         status = 503
-    elif exc.code == "SESSION_ACTIVE_JOBS":
+    elif exc.code in {
+        "SESSION_ACTIVE_JOBS",
+        "SESSION_SOURCE_IMMUTABLE",
+        "SOURCE_UPLOAD_BUSY",
+        "UPLOAD_METADATA_CONFLICT",
+        "UPLOAD_OFFSET_MISMATCH",
+        "UPLOAD_STATE_INVALID",
+        "SESSION_WORKFLOW_LEGACY",
+        "SESSION_WORKFLOW_REUSABLE",
+    }:
         status = 409
+    elif exc.code == "UPLOAD_TOO_LARGE":
+        status = 413
+    elif exc.code == "VIDEO_TYPE_UNSUPPORTED":
+        status = 415
+    elif exc.code in {
+        "SOURCE_VIDEO_INVALID",
+        "SOURCE_VALIDATION_TIMEOUT",
+        "UPLOAD_INCOMPLETE",
+    }:
+        status = 422
+    elif exc.code in {"SESSION_SOURCE_EXPIRED", "SESSION_SOURCE_UNAVAILABLE"}:
+        status = 410
+    elif exc.code in {"UPLOAD_WRITE_FAILED", "SOURCE_VALIDATION_STORAGE_FAILED"}:
+        status = 500
     else:
         status = 400
+    detail: dict[str, object] = {"code": exc.code, "message": str(exc)}
+    details = getattr(exc, "details", None)
+    if isinstance(details, dict) and details:
+        detail["details"] = details
     return HTTPException(
         status_code=status,
-        detail={"code": exc.code, "message": str(exc)},
+        detail=detail,
     )
 
 
@@ -45,13 +86,19 @@ def create_mvp_router(
     get_store: Callable[[], JobStore],
     get_manager: Callable[[], JobManager],
     get_retention: Callable[[], RetentionService | None] | None = None,
+    get_session_media: Callable[[], SessionMediaStore | None] | None = None,
+    get_workspace_mode: Callable[[], str] | None = None,
 ) -> APIRouter:
     router = APIRouter(prefix="/api/mvp", tags=["video-mvp"])
 
     @router.post("/sessions", status_code=201)
     async def create_session(payload: SessionPayload):
         try:
-            return await get_store().create_session(payload.title)
+            mode = get_workspace_mode() if get_workspace_mode is not None else "legacy"
+            return await get_store().create_session(
+                payload.title,
+                workflow_version=2 if mode == "enabled" else 1,
+            )
         except JobStoreError as exc:
             raise _http_error(exc) from exc
 
@@ -127,6 +174,12 @@ def create_mvp_router(
             )
         store = get_store()
         try:
+            editing_session = await store.get_session(session_id)
+            if editing_session["workflow_version"] != 1:
+                raise JobStoreError(
+                    "SESSION_WORKFLOW_REUSABLE",
+                    "create prompt versions and runs for reusable sessions",
+                )
             state = await store.create(
                 editing_session_id=session_id,
                 prompt=prompt,
@@ -192,6 +245,105 @@ def create_mvp_router(
             ) from exc
         finally:
             await file.close()
+
+    def session_media() -> SessionMediaStore:
+        service = get_session_media() if get_session_media is not None else None
+        if service is None:
+            raise HTTPException(
+                status_code=503,
+                detail={"code": "SESSION_MEDIA_UNAVAILABLE"},
+            )
+        return service
+
+    @router.post("/sessions/{session_id}/input-video/uploads", status_code=201)
+    async def initialize_session_source(
+        session_id: str,
+        payload: SessionSourceUploadPayload,
+    ):
+        try:
+            return await session_media().initialize(
+                session_id,
+                original_filename=payload.original_filename,
+                expected_size=payload.expected_size,
+                media_type=payload.media_type,
+            )
+        except JobStoreError as exc:
+            raise _http_error(exc) from exc
+
+    @router.get("/sessions/{session_id}/input-video")
+    async def get_session_source(session_id: str):
+        try:
+            return await session_media().status(session_id)
+        except JobStoreError as exc:
+            raise _http_error(exc) from exc
+
+    @router.patch("/sessions/{session_id}/input-video/uploads/{upload_id}")
+    async def append_session_source(
+        session_id: str,
+        upload_id: str,
+        request: Request,
+    ):
+        raw_offset = request.headers.get("upload-offset", "")
+        try:
+            offset = int(raw_offset)
+        except ValueError:
+            raise HTTPException(
+                status_code=400,
+                detail={"code": "UPLOAD_OFFSET_INVALID"},
+            ) from None
+        content_type = request.headers.get("content-type", "").split(";", 1)[0].lower()
+        if content_type not in {"application/octet-stream", "application/offset+octet-stream"}:
+            raise HTTPException(
+                status_code=415,
+                detail={"code": "UPLOAD_CHUNK_TYPE_UNSUPPORTED"},
+            )
+        raw_length = request.headers.get("content-length")
+        try:
+            content_length = int(raw_length) if raw_length is not None else None
+        except ValueError:
+            raise HTTPException(
+                status_code=400,
+                detail={"code": "UPLOAD_CHUNK_INVALID"},
+            ) from None
+        try:
+            return await session_media().append_chunk(
+                session_id,
+                upload_id,
+                offset=offset,
+                chunks=request.stream(),
+                content_length=content_length,
+            )
+        except JobStoreError as exc:
+            raise _http_error(exc) from exc
+
+    @router.post(
+        "/sessions/{session_id}/input-video/uploads/{upload_id}/complete"
+    )
+    async def complete_session_source(session_id: str, upload_id: str):
+        try:
+            return await session_media().complete(session_id, upload_id)
+        except JobStoreError as exc:
+            raise _http_error(exc) from exc
+
+    @router.delete("/sessions/{session_id}/input-video/uploads/{upload_id}")
+    async def cancel_session_source(session_id: str, upload_id: str):
+        try:
+            return await session_media().cancel(session_id, upload_id)
+        except JobStoreError as exc:
+            raise _http_error(exc) from exc
+
+    @router.get("/sessions/{session_id}/input-video/content")
+    async def preview_session_source(session_id: str):
+        try:
+            path, source = await session_media().resolve_ready(session_id)
+        except JobStoreError as exc:
+            raise _http_error(exc) from exc
+        return FileResponse(
+            path,
+            media_type=source["media_type"],
+            filename=source["original_filename"],
+            content_disposition_type="inline",
+        )
 
     @router.post("/jobs")
     async def unscoped_job_creation_is_retired():
