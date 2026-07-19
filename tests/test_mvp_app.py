@@ -31,8 +31,8 @@ class SessionWorkspaceConfigurationTests(unittest.TestCase):
 
 
 class MVPAppBoundaryTests(unittest.IsolatedAsyncioTestCase):
-    async def test_workspace_modes_serve_the_same_legacy_page(self):
-        bodies = []
+    async def test_workspace_modes_serve_deterministic_pages_without_cache(self):
+        bodies = {}
         for mode in ("legacy", "enabled"):
             with patch.dict(
                 os.environ,
@@ -46,9 +46,35 @@ class MVPAppBoundaryTests(unittest.IsolatedAsyncioTestCase):
             ) as client:
                 response = await client.get("/")
             self.assertEqual(response.status_code, 200)
-            bodies.append(response.content)
+            self.assertEqual(response.headers["cache-control"], "no-store, max-age=0")
+            self.assertEqual(response.headers["x-content-type-options"], "nosniff")
+            bodies[mode] = response.text
 
-        self.assertEqual(bodies[0], bodies[1])
+        self.assertIn("Mesa de shorts", bodies["legacy"])
+        self.assertNotIn('/static/mvp/app.js', bodies["legacy"])
+        self.assertIn("Estudio de edición", bodies["enabled"])
+        self.assertIn('/static/mvp/app.js', bodies["enabled"])
+        self.assertNotEqual(bodies["legacy"], bodies["enabled"])
+
+    async def test_workspace_static_assets_are_scoped_and_not_cached(self):
+        with patch.dict(
+            os.environ,
+            {"OPENSTORYLINE_SESSION_WORKSPACE_MODE": "enabled"},
+            clear=False,
+        ):
+            app = create_app()
+        transport = httpx.ASGITransport(app=app)
+        async with httpx.AsyncClient(
+            transport=transport, base_url="http://test"
+        ) as client:
+            module = await client.get("/static/mvp/app.js")
+            traversal = await client.get("/static/mvp/%2e%2e/mvp-legacy.html")
+
+        self.assertEqual(module.status_code, 200)
+        self.assertIn("javascript", module.headers["content-type"])
+        self.assertEqual(module.headers["cache-control"], "no-store, max-age=0")
+        self.assertEqual(module.headers["x-content-type-options"], "nosniff")
+        self.assertEqual(traversal.status_code, 404)
 
     async def test_health_is_public_and_api_fails_closed_without_auth_service(self):
         app = create_app()

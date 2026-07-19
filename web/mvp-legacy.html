@@ -1,0 +1,927 @@
+<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>OpenStoryline · Mesa de shorts</title>
+  <style>
+    :root {
+      color-scheme: light;
+      --paper: #f5f0e6;
+      --paper-deep: #e9dfcf;
+      --ink: #17201d;
+      --muted: #68716c;
+      --line: #c8c0b2;
+      --signal: #d65337;
+      --signal-dark: #9f321f;
+      --danger: #8f2619;
+      --mint: #b7d5c7;
+      --night: #1c2824;
+      --white: #fffdf8;
+      --shadow: 0 24px 70px rgb(45 38 29 / 14%);
+      --radius: 22px;
+      font-family: "Avenir Next", Avenir, "Segoe UI", sans-serif;
+    }
+
+    * { box-sizing: border-box; }
+
+    body {
+      margin: 0;
+      min-height: 100vh;
+      color: var(--ink);
+      background:
+        linear-gradient(90deg, rgb(23 32 29 / 4%) 1px, transparent 1px) 0 0 / 32px 32px,
+        linear-gradient(rgb(23 32 29 / 4%) 1px, transparent 1px) 0 0 / 32px 32px,
+        radial-gradient(circle at 8% 12%, #f9d5bd 0, transparent 32%),
+        radial-gradient(circle at 92% 85%, #cce2d7 0, transparent 34%),
+        var(--paper);
+    }
+
+    button, input, select, textarea { font: inherit; }
+    button, input, select, textarea, progress { accent-color: var(--signal); }
+    button { touch-action: manipulation; }
+    [hidden] { display: none !important; }
+
+    .shell {
+      width: min(1120px, calc(100% - 32px));
+      margin: 0 auto;
+      padding: 28px 0 72px;
+    }
+
+    .masthead {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 20px;
+      padding: 0 4px 24px;
+      border-bottom: 1px solid var(--line);
+    }
+
+    .brand {
+      display: inline-flex;
+      align-items: center;
+      gap: 11px;
+      color: inherit;
+      text-decoration: none;
+      font-weight: 800;
+      letter-spacing: -.02em;
+    }
+
+    .brand-mark {
+      display: grid;
+      width: 34px;
+      height: 34px;
+      place-items: center;
+      border-radius: 50% 50% 12% 50%;
+      color: var(--white);
+      background: var(--signal);
+      transform: rotate(-8deg);
+    }
+
+    .eyebrow, .meta, label, .status-label {
+      font-family: "Cascadia Code", "IBM Plex Mono", monospace;
+      font-size: .76rem;
+      letter-spacing: .08em;
+      text-transform: uppercase;
+    }
+
+    .eyebrow { margin: 0 0 14px; color: var(--signal-dark); font-weight: 800; }
+    .meta { color: var(--muted); }
+
+    h1, h2 {
+      font-family: "Iowan Old Style", "Palatino Linotype", Palatino, serif;
+      font-weight: 600;
+      letter-spacing: -.045em;
+    }
+
+    h1 { margin: 0; max-width: 760px; font-size: clamp(3rem, 9vw, 6.8rem); line-height: .88; }
+    h2 { margin: 0; font-size: clamp(2rem, 4vw, 3.4rem); line-height: 1; }
+    p { line-height: 1.65; }
+
+    .login-layout {
+      display: grid;
+      min-height: calc(100vh - 130px);
+      grid-template-columns: minmax(0, 1.25fr) minmax(320px, .75fr);
+      align-items: center;
+      gap: clamp(38px, 8vw, 110px);
+      padding: 70px 4px;
+    }
+
+    .login-copy { align-self: end; padding-bottom: 24px; }
+    .login-copy .lead { max-width: 610px; color: #4c5751; font-size: 1.08rem; }
+    .login-copy strong { color: var(--ink); }
+
+    .card {
+      border: 1px solid rgb(83 77 68 / 25%);
+      border-radius: var(--radius);
+      background: rgb(255 253 248 / 88%);
+      box-shadow: var(--shadow);
+      backdrop-filter: blur(16px);
+    }
+
+    .login-card { position: relative; padding: clamp(26px, 5vw, 42px); overflow: hidden; }
+    .login-card::before {
+      position: absolute;
+      inset: 0 0 auto;
+      height: 7px;
+      content: "";
+      background: linear-gradient(90deg, var(--signal) 0 58%, var(--mint) 58%);
+    }
+
+    .login-card h2 { margin-top: 18px; font-size: 2.5rem; }
+    .login-card p { margin: 12px 0 24px; color: var(--muted); }
+
+    label { display: block; margin: 18px 0 8px; color: #34413b; font-weight: 750; }
+
+    input, select, textarea {
+      width: 100%;
+      min-height: 48px;
+      padding: 13px 14px;
+      border: 1px solid #aaa295;
+      border-radius: 12px;
+      color: var(--ink);
+      background: var(--white);
+      outline: none;
+      transition: border-color 150ms ease, box-shadow 150ms ease, transform 150ms ease;
+    }
+
+    textarea { min-height: 154px; resize: vertical; line-height: 1.5; }
+    input:focus-visible, select:focus-visible, textarea:focus-visible {
+      border-color: var(--signal);
+      box-shadow: 0 0 0 4px rgb(214 83 55 / 17%);
+    }
+
+    .button {
+      display: inline-flex;
+      min-height: 48px;
+      align-items: center;
+      justify-content: center;
+      gap: 9px;
+      padding: 12px 18px;
+      border: 1px solid transparent;
+      border-radius: 999px;
+      color: var(--white);
+      background: var(--signal);
+      font-weight: 800;
+      cursor: pointer;
+      transition: transform 150ms ease, background 150ms ease, box-shadow 150ms ease;
+    }
+
+    .button:hover { background: var(--signal-dark); transform: translateY(-1px); }
+    .button:focus-visible { outline: 3px solid var(--ink); outline-offset: 3px; }
+    .button:disabled { opacity: .58; cursor: wait; transform: none; }
+    .button.full { width: 100%; margin-top: 22px; }
+    .button.secondary { color: var(--ink); border-color: var(--line); background: transparent; }
+    .button.secondary:hover { background: var(--paper-deep); }
+    .button.danger { color: var(--white); background: var(--danger); }
+    .button.danger:hover { background: #681a11; }
+    .button.compact { min-height: 40px; padding: 8px 14px; font-size: .9rem; }
+
+    .form-error {
+      min-height: 24px;
+      margin: 14px 0 0;
+      color: #8f2619;
+      font-weight: 700;
+    }
+
+    .app-layout { padding: 50px 4px 0; }
+    .app-hero {
+      display: grid;
+      grid-template-columns: minmax(0, 1.4fr) minmax(240px, .6fr);
+      align-items: end;
+      gap: 36px;
+      margin-bottom: 34px;
+    }
+
+    .app-hero h1 { font-size: clamp(3.1rem, 8vw, 6rem); }
+    .app-note { margin: 0; padding: 18px 0 4px 22px; border-left: 4px solid var(--mint); color: #4c5751; }
+
+    .session-deck {
+      display: grid;
+      grid-template-columns: minmax(180px, .55fr) minmax(260px, .8fr) minmax(260px, 1fr);
+      gap: 24px;
+      margin-bottom: 24px;
+      padding: clamp(22px, 4vw, 32px);
+      box-shadow: none;
+    }
+
+    .session-deck h2 { font-size: clamp(2rem, 4vw, 3rem); }
+    .session-deck form .button { width: 100%; margin-top: 12px; }
+    .session-summary { margin: 10px 0 0; color: var(--muted); font-size: .92rem; }
+    .session-actions { display: flex; justify-content: flex-end; margin-top: 16px; }
+    .session-notice { min-height: 24px; margin: 14px 0 0; color: #315c4b; font-weight: 750; }
+
+    .confirm-dialog {
+      width: min(520px, calc(100% - 32px));
+      padding: 0;
+      border: 1px solid rgb(83 77 68 / 35%);
+      border-radius: var(--radius);
+      color: var(--ink);
+      background: var(--white);
+      box-shadow: var(--shadow);
+    }
+    .confirm-dialog::backdrop { background: rgb(23 32 29 / 58%); backdrop-filter: blur(4px); }
+    .confirm-dialog form { padding: clamp(24px, 5vw, 36px); }
+    .confirm-dialog h2 { font-size: clamp(2rem, 8vw, 3rem); }
+    .confirm-dialog p { color: #4c5751; }
+    .dialog-actions { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 10px; margin-top: 24px; }
+
+    .recent-jobs { display: grid; gap: 8px; margin-top: 10px; }
+    .recent-job {
+      display: grid;
+      grid-template-columns: 1fr auto;
+      gap: 10px;
+      width: 100%;
+      min-height: 44px;
+      align-items: center;
+      padding: 9px 12px;
+      border: 1px solid var(--line);
+      border-radius: 12px;
+      color: var(--ink);
+      background: var(--white);
+      text-align: left;
+      cursor: pointer;
+    }
+    .recent-job:hover { border-color: var(--signal); }
+    .recent-job:focus-visible { outline: 3px solid var(--signal); outline-offset: 2px; }
+    .recent-job code { overflow: hidden; text-overflow: ellipsis; }
+    .recent-job span { color: var(--muted); font-size: .82rem; }
+
+    .workspace {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) minmax(320px, .72fr);
+      gap: 24px;
+      align-items: start;
+    }
+
+    .job-card, .status-card { padding: clamp(22px, 4vw, 34px); }
+    .job-card { box-shadow: none; }
+    .status-card { color: #f3f3ee; background: var(--night); border-color: transparent; }
+    .status-card .eyebrow { color: #ff9c80; }
+
+    .settings-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px; }
+    .asset-control {
+      min-width: 0;
+      margin: 0;
+      padding: 14px;
+      border: 1px solid var(--line);
+      border-radius: 14px;
+    }
+    .asset-control legend { padding: 0 7px; color: var(--ink); font-weight: 800; }
+    .policy-panel {
+      margin-top: 18px;
+      padding: 16px 18px;
+      border: 1px solid #b9b09f;
+      border-radius: 14px;
+      background: #f3eadb;
+      color: #46514b;
+      font-size: .92rem;
+      line-height: 1.55;
+    }
+    .policy-panel strong { color: var(--ink); }
+    .field-help { margin: 7px 0 0; color: var(--muted); font-size: .84rem; line-height: 1.45; }
+    .file-field { padding: 18px; border: 1px dashed #958d80; background: #faf6ee; }
+
+    progress { width: 100%; height: 9px; border: 0; border-radius: 99px; overflow: hidden; }
+    progress::-webkit-progress-bar { background: #3f4c47; }
+    progress::-webkit-progress-value { background: #ff7c5c; }
+
+    .status-label { margin: 18px 0 8px; color: #9fb7ad; }
+    pre { margin: 0; white-space: pre-wrap; overflow-wrap: anywhere; color: #e2e8e4; line-height: 1.55; }
+
+    .artifact {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      padding: 13px 0;
+      border-top: 1px solid #43514b;
+    }
+
+    .artifact span { flex: 1; overflow-wrap: anywhere; }
+    .artifact .button, #bundle { color: #f7f4ee; border-color: #596861; }
+    #bundle { margin-top: 18px; }
+
+    .loading-state { padding: 70px 4px; text-align: center; }
+    .loading-state::before {
+      display: block;
+      width: 42px;
+      height: 42px;
+      margin: 0 auto 18px;
+      border: 4px solid var(--paper-deep);
+      border-top-color: var(--signal);
+      border-radius: 50%;
+      content: "";
+      animation: spin 800ms linear infinite;
+    }
+
+    @keyframes spin { to { transform: rotate(360deg); } }
+
+    @media (max-width: 820px) {
+      .login-layout, .app-hero, .session-deck, .workspace { grid-template-columns: 1fr; }
+      .login-layout { min-height: auto; padding-top: 54px; }
+      .login-copy { align-self: auto; }
+      .app-note { max-width: 620px; }
+    }
+
+    @media (max-width: 560px) {
+      .shell { width: min(100% - 20px, 1120px); padding-top: 18px; }
+      .masthead { align-items: flex-start; }
+      .masthead .meta { max-width: 120px; text-align: right; }
+      .login-layout { gap: 30px; padding: 42px 0; }
+      .settings-grid { grid-template-columns: 1fr; }
+      .app-layout { padding-top: 36px; }
+      .artifact { align-items: flex-start; flex-direction: column; }
+      .artifact .button { width: 100%; }
+    }
+
+    @media (prefers-reduced-motion: reduce) {
+      *, *::before, *::after { scroll-behavior: auto !important; animation-duration: .01ms !important; transition-duration: .01ms !important; }
+    }
+  </style>
+</head>
+<body>
+  <div class="shell">
+    <header class="masthead">
+      <a class="brand" href="/" aria-label="OpenStoryline, inicio">
+        <span class="brand-mark" aria-hidden="true">OS</span>
+        <span>OpenStoryline</span>
+      </a>
+      <span class="meta">Mesa remota · FFmpeg CPU</span>
+    </header>
+
+    <main>
+      <section id="loading-state" class="loading-state" aria-live="polite">
+        Comprobando tu sesión…
+      </section>
+
+      <section id="login-view" class="login-layout" hidden>
+        <div class="login-copy">
+          <p class="eyebrow">Acceso privado</p>
+          <h1>Convierte una conversación larga en momentos que merecen quedarse.</h1>
+          <p class="lead"><strong>Una contraseña, ninguna cuenta.</strong> Tu sesión vive en el servidor y el navegador nunca guarda la clave compartida.</p>
+        </div>
+
+        <form id="login-form" class="card login-card" novalidate>
+          <p class="eyebrow">01 · Entrar</p>
+          <h2>Abre la mesa</h2>
+          <p>Usa la contraseña privada del proyecto para continuar.</p>
+          <label for="password">Contraseña</label>
+          <input id="password" name="password" type="password" autocomplete="current-password" required aria-describedby="login-error">
+          <p id="login-error" class="form-error" role="alert" aria-live="assertive"></p>
+          <button id="login-submit" class="button full" type="submit">Entrar a OpenStoryline</button>
+        </form>
+      </section>
+
+      <section id="app-view" class="app-layout" hidden>
+        <div class="app-hero">
+          <div>
+            <p class="eyebrow">02 · Crear</p>
+            <h1>Video largo,<br>shorts precisos.</h1>
+          </div>
+          <p class="app-note">La planificación y la transcripción se ejecutan remotamente. Este servidor conserva el flujo y renderiza con FFmpeg en CPU.</p>
+        </div>
+
+        <section class="card session-deck" aria-labelledby="sessions-heading">
+          <div>
+            <p class="eyebrow">Sesión de edición</p>
+            <h2 id="sessions-heading">Retoma el hilo.</h2>
+            <p class="session-summary">Cada sesión agrupa varios trabajos sin convertir este proyecto personal en un sistema multiusuario.</p>
+          </div>
+
+          <form id="session-form">
+            <label for="session-title">Nueva sesión</label>
+            <input id="session-title" name="title" maxlength="160" required placeholder="Podcast de julio">
+            <button id="session-submit" class="button compact" type="submit">Crear sesión</button>
+            <p id="session-error" class="form-error" role="alert" aria-live="assertive"></p>
+          </form>
+
+          <div>
+            <label for="session-select">Sesión activa</label>
+            <select id="session-select" disabled>
+              <option value="">Crea una sesión para empezar</option>
+            </select>
+            <p id="session-summary" class="session-summary" aria-live="polite">No hay una sesión seleccionada.</p>
+            <div id="recent-jobs" class="recent-jobs" aria-label="Trabajos recientes"></div>
+            <div class="session-actions">
+              <button id="session-delete" class="button danger compact" type="button" aria-describedby="session-delete-help" disabled>Eliminar sesión</button>
+            </div>
+            <p id="session-delete-help" class="session-summary">La eliminación sólo está disponible cuando no hay trabajos activos.</p>
+          </div>
+        </section>
+
+        <p id="session-notice" class="session-notice" role="status" aria-live="polite"></p>
+
+        <div class="workspace">
+          <form id="job-form" class="card job-card">
+            <label for="video">Video de entrada</label>
+            <input id="video" class="file-field" type="file" accept="video/*,.mkv,.mov,.webm" required>
+
+            <label for="prompt">Plan de edición</label>
+            <textarea id="prompt" required placeholder="Extrae momentos contundentes sobre consejos prácticos, con un buen gancho y sin repetir ideas."></textarea>
+
+            <div class="settings-grid">
+              <div>
+                <label for="max-clips">Máximo de clips</label>
+                <input id="max-clips" type="number" min="1" max="50" value="8" required>
+              </div>
+              <div>
+                <label for="edit-mode">Modo de edición</label>
+                <select id="edit-mode">
+                  <option value="legacy">Clips rápidos · actual</option>
+                  <option value="agentic">Edición agentiva · beta</option>
+                </select>
+                <p class="field-help">La opción beta ejecuta encuadres, capas y transiciones por escena.</p>
+              </div>
+              <fieldset class="asset-control">
+                <legend>Imágenes generadas · 9Router</legend>
+                <label for="asset-policy">Política</label>
+                <select id="asset-policy" aria-describedby="asset-policy-help" disabled>
+                  <option value="auto">Automático si hace falta</option>
+                  <option value="off">Nunca generar imágenes</option>
+                </select>
+                <label for="max-generated-assets">Máximo por clip</label>
+                <input id="max-generated-assets" type="number" min="1" max="8" value="2" disabled>
+              </fieldset>
+              <fieldset class="asset-control">
+                <legend>Stock externo · Pexels</legend>
+                <label for="stock-policy">Política</label>
+                <select id="stock-policy" aria-describedby="stock-policy-help" disabled>
+                  <option value="off">No usar Pexels</option>
+                  <option value="auto">Buscar sólo si hace falta</option>
+                </select>
+                <label for="max-stock-assets">Máximo por clip</label>
+                <input id="max-stock-assets" type="number" min="1" max="8" value="2" disabled>
+              </fieldset>
+            </div>
+
+            <p id="asset-policy-help" class="policy-panel">
+              <strong>No se genera una imagen por defecto.</strong> En modo automático, el plan sólo puede solicitarla cuando identifica un vacío visual concreto y la inserta en una ventana definida. Revisa derechos, marcas y semejanzas antes de publicar cualquier recurso generado.
+            </p>
+            <p id="stock-policy-help" class="policy-panel">
+              <strong>Pexels es una fuente separada y opt-in.</strong> Sólo se consulta cuando seleccionas su modo automático, el servidor lo tiene habilitado y el plan justifica un recurso concreto. El manifiesto conserva autor, enlace, licencia y hash; revisa la licencia vigente y los derechos representados antes de publicar.
+            </p>
+
+            <p id="job-error" class="form-error" role="alert" aria-live="assertive"></p>
+            <button id="submit" class="button full" type="submit">Crear shorts</button>
+          </form>
+
+          <section id="status-card" class="card status-card" aria-live="polite">
+            <p class="eyebrow">03 · Estado</p>
+            <progress id="progress" max="1" value="0" aria-label="Progreso del trabajo"></progress>
+            <p class="status-label">Trabajo actual</p>
+            <pre id="status">Todavía no hay un trabajo activo.</pre>
+            <div id="artifacts"></div>
+            <button id="bundle" class="button secondary compact" type="button" hidden>Descargar todo (.zip)</button>
+          </section>
+        </div>
+
+        <button id="logout" class="button secondary compact" type="button">Cerrar sesión</button>
+      </section>
+
+      <dialog id="session-delete-dialog" class="confirm-dialog" aria-labelledby="session-delete-title" aria-describedby="session-delete-description">
+        <form method="dialog">
+          <p class="eyebrow">Acción irreversible</p>
+          <h2 id="session-delete-title">¿Eliminar esta sesión?</h2>
+          <p id="session-delete-description"><strong id="session-delete-name"></strong> dejará de aparecer en la aplicación. Sus videos se eliminarán permanentemente ahora; los prompts, planes, subtítulos y resultados de auditoría se conservarán durante 30 días.</p>
+          <p id="session-delete-error" class="form-error" role="alert" aria-live="assertive"></p>
+          <div class="dialog-actions">
+            <button class="button secondary compact" type="submit" value="cancel">Cancelar</button>
+            <button id="session-delete-confirm" class="button danger compact" type="button">Eliminar videos y sesión</button>
+          </div>
+        </form>
+      </dialog>
+    </main>
+  </div>
+
+  <script>
+    const loadingView = document.querySelector('#loading-state');
+    const loginView = document.querySelector('#login-view');
+    const appView = document.querySelector('#app-view');
+    const loginForm = document.querySelector('#login-form');
+    const passwordInput = document.querySelector('#password');
+    const loginButton = document.querySelector('#login-submit');
+    const loginError = document.querySelector('#login-error');
+    const logoutButton = document.querySelector('#logout');
+    const sessionForm = document.querySelector('#session-form');
+    const sessionTitle = document.querySelector('#session-title');
+    const sessionSubmit = document.querySelector('#session-submit');
+    const sessionError = document.querySelector('#session-error');
+    const sessionSelect = document.querySelector('#session-select');
+    const sessionSummary = document.querySelector('#session-summary');
+    const sessionNotice = document.querySelector('#session-notice');
+    const sessionDeleteButton = document.querySelector('#session-delete');
+    const sessionDeleteDialog = document.querySelector('#session-delete-dialog');
+    const sessionDeleteName = document.querySelector('#session-delete-name');
+    const sessionDeleteError = document.querySelector('#session-delete-error');
+    const sessionDeleteConfirm = document.querySelector('#session-delete-confirm');
+    const recentJobs = document.querySelector('#recent-jobs');
+    const form = document.querySelector('#job-form');
+    const submit = document.querySelector('#submit');
+    const editMode = document.querySelector('#edit-mode');
+    const assetPolicy = document.querySelector('#asset-policy');
+    const maxGeneratedAssets = document.querySelector('#max-generated-assets');
+    const stockPolicy = document.querySelector('#stock-policy');
+    const maxStockAssets = document.querySelector('#max-stock-assets');
+    const jobError = document.querySelector('#job-error');
+    const statusBox = document.querySelector('#status');
+    const progress = document.querySelector('#progress');
+    const artifactsBox = document.querySelector('#artifacts');
+    const bundleButton = document.querySelector('#bundle');
+    let currentSession = '';
+    let currentJob = '';
+    let pollTimer = 0;
+
+    const updateAssetPolicyControls = () => {
+      const agentic = editMode.value === 'agentic';
+      assetPolicy.disabled = !agentic;
+      maxGeneratedAssets.disabled = !agentic || assetPolicy.value !== 'auto';
+      stockPolicy.disabled = !agentic;
+      maxStockAssets.disabled = !agentic || stockPolicy.value !== 'auto';
+    };
+
+    editMode.addEventListener('change', updateAssetPolicyControls);
+    assetPolicy.addEventListener('change', updateAssetPolicyControls);
+    stockPolicy.addEventListener('change', updateAssetPolicyControls);
+    updateAssetPolicyControls();
+
+    class ApiError extends Error {
+      constructor(response, payload) {
+        const detail = payload?.detail || payload || {};
+        super(detail.message || response.statusText || 'La solicitud no pudo completarse.');
+        this.code = detail.code || 'REQUEST_FAILED';
+        this.status = response.status;
+        this.retryAfter = Number(response.headers.get('Retry-After') || 0);
+      }
+    }
+
+    const readCookie = (name) => {
+      const prefix = `${encodeURIComponent(name)}=`;
+      const item = document.cookie.split('; ').find((value) => value.startsWith(prefix));
+      return item ? decodeURIComponent(item.slice(prefix.length)) : '';
+    };
+
+    const api = async (url, options = {}) => {
+      const method = (options.method || 'GET').toUpperCase();
+      const headers = new Headers(options.headers || {});
+      if (!['GET', 'HEAD', 'OPTIONS'].includes(method) && !url.endsWith('/auth/login')) {
+        const csrfToken = readCookie('openstoryline_csrf');
+        if (csrfToken) headers.set('X-CSRF-Token', csrfToken);
+      }
+      const response = await fetch(url, {
+        ...options,
+        method,
+        headers,
+        credentials: 'same-origin',
+      });
+      if (!response.ok) {
+        let payload = {};
+        try { payload = await response.json(); } catch { /* Response body is optional. */ }
+        if (response.status === 401 && !url.includes('/auth/login')) showLogin();
+        throw new ApiError(response, payload);
+      }
+      return response;
+    };
+
+    const showLogin = (message = '') => {
+      window.clearTimeout(pollTimer);
+      loadingView.hidden = true;
+      appView.hidden = true;
+      loginView.hidden = false;
+      loginError.textContent = message;
+      window.requestAnimationFrame(() => passwordInput.focus());
+    };
+
+    const showApp = async () => {
+      loadingView.hidden = true;
+      loginView.hidden = true;
+      appView.hidden = false;
+      loginError.textContent = '';
+      passwordInput.value = '';
+      try {
+        await loadSessions(new URL(window.location.href).searchParams.get('session'));
+      } catch (error) {
+        sessionError.textContent = error.message;
+      }
+    };
+
+    const checkSession = async () => {
+      try {
+        const response = await fetch('/api/mvp/auth/session', { credentials: 'same-origin' });
+        if (!response.ok) throw new Error('El servicio de acceso no está disponible.');
+        const state = await response.json();
+        if (state.authenticated) await showApp();
+        else showLogin();
+      } catch (error) {
+        showLogin(error.message);
+      }
+    };
+
+    loginForm.addEventListener('submit', async (event) => {
+      event.preventDefault();
+      loginError.textContent = '';
+      loginButton.disabled = true;
+      loginForm.setAttribute('aria-busy', 'true');
+      try {
+        await api('/api/mvp/auth/login', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ password: passwordInput.value }),
+        });
+        await showApp();
+      } catch (error) {
+        if (error.code === 'LOGIN_RATE_LIMITED') {
+          const wait = error.retryAfter || 60;
+          loginError.textContent = `Demasiados intentos fallidos. Intenta de nuevo en ${wait} segundos.`;
+        } else if (error.code === 'INVALID_CREDENTIALS') {
+          loginError.textContent = 'La contraseña no es válida.';
+        } else {
+          loginError.textContent = 'No pudimos iniciar la sesión. Intenta de nuevo.';
+        }
+        passwordInput.select();
+      } finally {
+        loginButton.disabled = false;
+        loginForm.removeAttribute('aria-busy');
+      }
+    });
+
+    logoutButton.addEventListener('click', async () => {
+      logoutButton.disabled = true;
+      try { await api('/api/mvp/auth/logout', { method: 'POST' }); }
+      catch { /* The local UI still returns to the locked state. */ }
+      finally {
+        logoutButton.disabled = false;
+        currentSession = '';
+        currentJob = '';
+        showLogin();
+      }
+    });
+
+    const setSessionUrl = (sessionId) => {
+      const url = new URL(window.location.href);
+      if (sessionId) url.searchParams.set('session', sessionId);
+      else url.searchParams.delete('session');
+      window.history.replaceState({}, '', url);
+    };
+
+    const renderRecentJobs = (jobs) => {
+      recentJobs.replaceChildren();
+      for (const job of jobs) {
+        const button = document.createElement('button');
+        button.type = 'button';
+        button.className = 'recent-job';
+        const identifier = document.createElement('code');
+        identifier.textContent = job.id.slice(0, 12);
+        const state = document.createElement('span');
+        state.textContent = job.state;
+        button.append(identifier, state);
+        button.addEventListener('click', () => {
+          currentJob = job.id;
+          renderJob(job);
+          if (!['completed', 'failed', 'cancelled'].includes(job.state)) poll();
+        });
+        recentJobs.append(button);
+      }
+    };
+
+    const updateDeleteAvailability = (jobs) => {
+      const hasActiveJob = jobs.some((job) => !['completed', 'failed', 'cancelled'].includes(job.state));
+      sessionDeleteButton.disabled = !currentSession || hasActiveJob;
+    };
+
+    const selectSession = async (sessionId) => {
+      const session = await (await api(`/api/mvp/sessions/${sessionId}`)).json();
+      currentSession = session.id;
+      sessionSelect.value = session.id;
+      sessionSummary.textContent = `${session.title} · ${session.jobs.length} trabajo(s) recientes`;
+      setSessionUrl(session.id);
+      renderRecentJobs(session.jobs);
+      updateDeleteAvailability(session.jobs);
+      submit.disabled = false;
+      const active = session.jobs.find((job) => !['completed', 'failed', 'cancelled'].includes(job.state));
+      const selected = active || session.jobs[0];
+      if (selected) {
+        currentJob = selected.id;
+        renderJob(selected);
+        if (active) poll();
+      } else {
+        currentJob = '';
+        progress.value = 0;
+        statusBox.textContent = 'Todavía no hay un trabajo activo.';
+        artifactsBox.replaceChildren();
+        bundleButton.hidden = true;
+      }
+      window.requestAnimationFrame(() => document.querySelector('#video').focus());
+    };
+
+    const loadSessions = async (preferred = '') => {
+      const response = await api('/api/mvp/sessions?limit=50');
+      const payload = await response.json();
+      sessionSelect.replaceChildren();
+      if (!payload.items.length) {
+        currentSession = '';
+        setSessionUrl('');
+        sessionSelect.disabled = true;
+        sessionSelect.append(new Option('Crea una sesión para empezar', ''));
+        sessionSummary.textContent = 'No hay una sesión seleccionada.';
+        recentJobs.replaceChildren();
+        sessionDeleteButton.disabled = true;
+        submit.disabled = true;
+        window.requestAnimationFrame(() => sessionTitle.focus());
+        return;
+      }
+      for (const session of payload.items) {
+        sessionSelect.append(new Option(session.title, session.id));
+      }
+      sessionSelect.disabled = false;
+      const selected = payload.items.some((session) => session.id === preferred)
+        ? preferred
+        : payload.items[0].id;
+      await selectSession(selected);
+    };
+
+    sessionForm.addEventListener('submit', async (event) => {
+      event.preventDefault();
+      sessionError.textContent = '';
+      sessionSubmit.disabled = true;
+      try {
+        const created = await (await api('/api/mvp/sessions', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ title: sessionTitle.value }),
+        })).json();
+        sessionTitle.value = '';
+        await loadSessions(created.id);
+      } catch (error) {
+        sessionError.textContent = error.message;
+      } finally {
+        sessionSubmit.disabled = false;
+      }
+    });
+
+    sessionSelect.addEventListener('change', () => {
+      sessionError.textContent = '';
+      selectSession(sessionSelect.value).catch((error) => {
+        sessionError.textContent = error.message;
+      });
+    });
+
+    sessionDeleteButton.addEventListener('click', () => {
+      sessionDeleteError.textContent = '';
+      sessionDeleteName.textContent = sessionSelect.selectedOptions[0]?.textContent || 'Esta sesión';
+      sessionDeleteDialog.showModal();
+      window.requestAnimationFrame(() => sessionDeleteConfirm.focus());
+    });
+
+    sessionDeleteConfirm.addEventListener('click', async () => {
+      sessionDeleteError.textContent = '';
+      sessionDeleteConfirm.disabled = true;
+      sessionDeleteDialog.setAttribute('aria-busy', 'true');
+      const deletedSession = currentSession;
+      try {
+        const result = await (await api(`/api/mvp/sessions/${deletedSession}`, {
+          method: 'DELETE',
+        })).json();
+        window.clearTimeout(pollTimer);
+        currentSession = '';
+        currentJob = '';
+        sessionDeleteDialog.close();
+        progress.value = 0;
+        artifactsBox.replaceChildren();
+        bundleButton.hidden = true;
+        statusBox.textContent = 'La sesión fue eliminada. Sus videos ya no están disponibles.';
+        await loadSessions();
+        const retainedUntil = new Date(result.audit_expires_at).toLocaleDateString('es-ES', {
+          dateStyle: 'long',
+        });
+        sessionNotice.textContent = result.ok
+          ? `Videos eliminados. La auditoría se conserva hasta ${retainedUntil}.`
+          : `La sesión se ocultó, pero algunos archivos no pudieron eliminarse. La retención volverá a intentarlo; la auditoría se conserva hasta ${retainedUntil}.`;
+      } catch (error) {
+        sessionDeleteError.textContent = error.code === 'SESSION_ACTIVE_JOBS'
+          ? 'Espera a que terminen los trabajos activos antes de eliminar la sesión.'
+          : error.message;
+      } finally {
+        sessionDeleteConfirm.disabled = false;
+        sessionDeleteDialog.removeAttribute('aria-busy');
+      }
+    });
+
+    const saveBlob = async (url, filename) => {
+      const response = await api(url);
+      const blobUrl = URL.createObjectURL(await response.blob());
+      const link = document.createElement('a');
+      link.href = blobUrl;
+      link.download = filename;
+      link.click();
+      window.setTimeout(() => URL.revokeObjectURL(blobUrl), 2000);
+    };
+
+    const showArtifacts = (job) => {
+      artifactsBox.replaceChildren();
+      for (const artifact of job.artifacts || []) {
+        const row = document.createElement('div');
+        row.className = 'artifact';
+        const name = document.createElement('span');
+        name.textContent = `${artifact.name} · ${artifact.kind}`;
+        const button = document.createElement('button');
+        button.type = 'button';
+        button.className = 'button secondary compact';
+        button.textContent = 'Descargar';
+        button.addEventListener('click', () => saveBlob(
+          `/api/mvp/jobs/${job.id}/artifacts/${encodeURIComponent(artifact.name)}`,
+          artifact.name,
+        ));
+        row.append(name, button);
+        artifactsBox.append(row);
+      }
+      bundleButton.hidden = !(job.artifacts || []).length;
+    };
+
+    const renderJob = (job) => {
+      progress.value = job.progress || 0;
+      statusBox.textContent = JSON.stringify({
+        id: job.id,
+        estado: job.state,
+        etapa: job.stage,
+        clips: job.clip_count,
+        error: job.error,
+      }, null, 2);
+      showArtifacts(job);
+    };
+
+    const poll = async () => {
+      window.clearTimeout(pollTimer);
+      try {
+        const job = await (await api(`/api/mvp/jobs/${currentJob}`)).json();
+        renderJob(job);
+        if (!['completed', 'failed', 'cancelled'].includes(job.state)) {
+          pollTimer = window.setTimeout(poll, 2000);
+        } else {
+          submit.disabled = false;
+          if (currentSession) {
+            const session = await (await api(`/api/mvp/sessions/${currentSession}`)).json();
+            renderRecentJobs(session.jobs);
+            updateDeleteAvailability(session.jobs);
+          }
+        }
+      } catch (error) {
+        statusBox.textContent = error.message;
+        submit.disabled = false;
+      }
+    };
+
+    form.addEventListener('submit', async (event) => {
+      event.preventDefault();
+      jobError.textContent = '';
+      if (!currentSession) {
+        jobError.textContent = 'Crea o selecciona una sesión antes de subir el video.';
+        sessionTitle.focus();
+        return;
+      }
+      submit.disabled = true;
+      artifactsBox.replaceChildren();
+      const body = new FormData();
+      body.append('file', document.querySelector('#video').files[0]);
+      body.append('prompt', document.querySelector('#prompt').value);
+      body.append('max_clips', document.querySelector('#max-clips').value);
+      body.append('edit_mode', editMode.value);
+      body.append('asset_policy', editMode.value === 'agentic' ? assetPolicy.value : 'off');
+      body.append(
+        'max_generated_assets_per_clip',
+        editMode.value === 'agentic' && assetPolicy.value === 'auto'
+          ? maxGeneratedAssets.value
+          : '0',
+      );
+      body.append('stock_policy', editMode.value === 'agentic' ? stockPolicy.value : 'off');
+      body.append(
+        'max_stock_assets_per_clip',
+        editMode.value === 'agentic' && stockPolicy.value === 'auto'
+          ? maxStockAssets.value
+          : '0',
+      );
+      try {
+        const job = await (await api(`/api/mvp/sessions/${currentSession}/jobs`, { method: 'POST', body })).json();
+        currentJob = job.id;
+        renderJob(job);
+        const session = await (await api(`/api/mvp/sessions/${currentSession}`)).json();
+        renderRecentJobs(session.jobs);
+        updateDeleteAvailability(session.jobs);
+        pollTimer = window.setTimeout(poll, 800);
+      } catch (error) {
+        jobError.textContent = error.code === 'JOB_QUEUE_FULL'
+          ? 'La cola está llena. Espera a que termine un trabajo activo.'
+          : error.message;
+        statusBox.textContent = 'El trabajo no pudo iniciarse.';
+        submit.disabled = false;
+      }
+    });
+
+    bundleButton.addEventListener('click', () => saveBlob(
+      `/api/mvp/jobs/${currentJob}/bundle`,
+      `${currentJob}-artifacts.zip`,
+    ));
+
+    checkSession();
+  </script>
+</body>
+</html>
