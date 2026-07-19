@@ -27,7 +27,13 @@ from open_storyline.mvp.edit_plan import (
     validate_stock_asset_limit,
     validate_stock_policy,
 )
-from open_storyline.mvp.models import Artifact, EditingSession, JobEvent, VideoJob
+from open_storyline.mvp.models import (
+    Artifact,
+    EditingSession,
+    JobEvent,
+    SessionInputVideo,
+    VideoJob,
+)
 from open_storyline.mvp.observability import emit_event
 from open_storyline.mvp.security import sanitize_for_persistence, sanitize_text
 
@@ -283,6 +289,7 @@ class JobStore:
         title: str,
         *,
         session_id: str | None = None,
+        workflow_version: int = 1,
     ) -> dict[str, Any]:
         clean_title = str(title or "").strip()
         if not clean_title:
@@ -292,10 +299,15 @@ class JobStore:
         identifier = session_id or uuid.uuid4().hex
         if not JOB_ID_PATTERN.fullmatch(identifier):
             raise JobStoreError("SESSION_ID_INVALID", "invalid session id")
+        if int(workflow_version) not in {1, 2}:
+            raise JobStoreError(
+                "SESSION_WORKFLOW_VERSION_INVALID", "invalid session workflow version"
+            )
         now = _utcnow()
         row = EditingSession(
             id=identifier,
             title=clean_title,
+            workflow_version=int(workflow_version),
             updated_at=now,
             audit_expires_at=now + self.audit_retention,
         )
@@ -307,7 +319,7 @@ class JobStore:
             raise JobStoreError("SESSION_ALREADY_EXISTS", "session already exists") from None
         except SQLAlchemyError:
             raise JobStoreError("DATABASE_UNAVAILABLE", "session storage is unavailable") from None
-        return self._session_state(row)
+        return self._session_state(row, None)
 
     async def get_session(self, session_id: str) -> dict[str, Any]:
         if not JOB_ID_PATTERN.fullmatch(str(session_id or "")):
@@ -315,6 +327,11 @@ class JobStore:
         try:
             async with self.database.sessions() as session:
                 row = await session.get(EditingSession, session_id)
+                input_video = await session.scalar(
+                    select(SessionInputVideo).where(
+                        SessionInputVideo.editing_session_id == session_id
+                    )
+                )
         except SQLAlchemyError:
             raise JobStoreError("DATABASE_UNAVAILABLE", "session storage is unavailable") from None
         if (
@@ -323,7 +340,7 @@ class JobStore:
             or row.audit_expires_at <= _utcnow()
         ):
             raise JobStoreError("SESSION_NOT_FOUND", "session not found")
-        return self._session_state(row)
+        return self._session_state(row, input_video)
 
     async def list_sessions(
         self,
@@ -358,12 +375,34 @@ class JobStore:
         try:
             async with self.database.sessions() as session:
                 rows = list((await session.execute(query)).scalars())
+                selected = rows[: int(limit)]
+                input_videos = (
+                    list(
+                        (
+                            await session.execute(
+                                select(SessionInputVideo).where(
+                                    SessionInputVideo.editing_session_id.in_(
+                                        [row.id for row in selected]
+                                    )
+                                )
+                            )
+                        ).scalars()
+                    )
+                    if selected
+                    else []
+                )
         except SQLAlchemyError:
             raise JobStoreError("DATABASE_UNAVAILABLE", "session storage is unavailable") from None
         has_more = len(rows) > int(limit)
-        items = rows[: int(limit)]
+        items = selected
+        input_videos_by_session = {
+            item.editing_session_id: item for item in input_videos
+        }
         return {
-            "items": [self._session_state(row) for row in items],
+            "items": [
+                self._session_state(row, input_videos_by_session.get(row.id))
+                for row in items
+            ],
             "next_cursor": (
                 _encode_cursor(items[-1].updated_at, items[-1].id)
                 if has_more and items
@@ -975,6 +1014,7 @@ class JobStore:
             {
                 "sequence": row.sequence,
                 "event_type": row.event_type,
+                "audience": row.audience,
                 "state": row.state,
                 "stage": row.stage,
                 "payload": row.payload,
@@ -1157,6 +1197,9 @@ class JobStore:
             "stage",
             "progress",
             "prompt",
+            "prompt_version_id",
+            "attempt_number",
+            "is_favorite",
             "request",
             "input",
             "artifacts",
@@ -1289,10 +1332,30 @@ class JobStore:
                 pass
 
     @staticmethod
-    def _session_state(row: EditingSession) -> dict[str, Any]:
+    def _session_state(
+        row: EditingSession,
+        input_video: SessionInputVideo | None,
+    ) -> dict[str, Any]:
         return {
             "id": row.id,
             "title": row.title,
+            "workflow_version": row.workflow_version,
+            "input_video": (
+                {
+                    "id": input_video.id,
+                    "state": input_video.state,
+                    "original_filename": input_video.original_filename,
+                    "expected_size": input_video.expected_size,
+                    "received_bytes": input_video.received_bytes,
+                    "media_type": input_video.media_type,
+                    "sha256": input_video.sha256,
+                    "completed_at": _iso(input_video.completed_at),
+                    "expires_at": _iso(input_video.expires_at),
+                    "purged_at": _iso(input_video.purged_at),
+                }
+                if input_video is not None
+                else None
+            ),
             "created_at": _iso(row.created_at),
             "updated_at": _iso(row.updated_at),
             "deleted_at": _iso(row.deleted_at),
@@ -1303,6 +1366,9 @@ class JobStore:
         state: dict[str, Any] = {
             "id": row.id,
             "editing_session_id": row.editing_session_id,
+            "prompt_version_id": row.prompt_version_id,
+            "attempt_number": row.attempt_number,
+            "is_favorite": row.is_favorite,
             "state": row.state,
             "stage": row.stage,
             "progress": float(row.progress),

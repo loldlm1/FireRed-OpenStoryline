@@ -54,7 +54,8 @@ class AuditPostgresTestCase(unittest.IsolatedAsyncioTestCase):
             await connection.execute(
                 text(
                     "TRUNCATE audit_reviews, audit_documents, artifacts, job_events, "
-                    "video_jobs, editing_sessions, auth_sessions, login_attempt_buckets"
+                    "video_jobs, prompt_versions, session_input_videos, editing_sessions, "
+                    "auth_sessions, login_attempt_buckets"
                 )
             )
         self.temporary_directory = TemporaryDirectory()

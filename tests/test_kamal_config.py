@@ -237,7 +237,9 @@ class KamalConfigTests(unittest.TestCase):
 
     def test_admin_commands_use_the_primary_container_without_provider_gates(self):
         wrapper = (ROOT / "bin" / "kamal-mvp").read_text(encoding="utf-8")
-        dispatch = wrapper.index('if [[ "${1:-}" == "audit" || "${1:-}" == "retention" ]]')
+        dispatch = wrapper.index(
+            'if [[ "${1:-}" == "audit" || "${1:-}" == "retention" || "${1:-}" == "workspace" ]]'
+        )
         provider_requirements = wrapper.index("require_value NINEROUTER_URL")
         release_scan = wrapper.index('for arg in "$@"')
 
@@ -245,6 +247,7 @@ class KamalConfigTests(unittest.TestCase):
         self.assertLess(dispatch, release_scan)
         self.assertIn("app exec --primary --reuse", wrapper)
         self.assertIn('open_storyline.mvp.admin "$admin_command"', wrapper)
+        self.assertIn('"${1:-}" == "workspace"', wrapper)
 
 
 if __name__ == "__main__":

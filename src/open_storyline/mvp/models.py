@@ -6,6 +6,7 @@ from typing import Any
 
 from sqlalchemy import (
     BigInteger,
+    Boolean,
     CheckConstraint,
     DateTime,
     ForeignKey,
@@ -79,6 +80,9 @@ class EditingSession(Base):
 
     id: Mapped[str] = mapped_column(String(32), primary_key=True)
     title: Mapped[str] = mapped_column(String(160), nullable=False)
+    workflow_version: Mapped[int] = mapped_column(
+        Integer, nullable=False, server_default="1"
+    )
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )
@@ -93,8 +97,115 @@ class EditingSession(Base):
     __table_args__ = (
         CheckConstraint("id ~ '^[a-f0-9]{32}$'", name="ck_editing_sessions_id"),
         CheckConstraint("length(btrim(title)) > 0", name="ck_editing_sessions_title_present"),
+        CheckConstraint(
+            "workflow_version IN (1, 2)",
+            name="ck_editing_sessions_workflow_version",
+        ),
         Index("ix_editing_sessions_active_updated", "deleted_at", "updated_at"),
         Index("ix_editing_sessions_audit_expiry", "audit_expires_at"),
+    )
+
+
+class SessionInputVideo(Base):
+    __tablename__ = "session_input_videos"
+
+    id: Mapped[str] = mapped_column(String(32), primary_key=True)
+    editing_session_id: Mapped[str] = mapped_column(
+        ForeignKey("editing_sessions.id", ondelete="RESTRICT"), nullable=False
+    )
+    state: Mapped[str] = mapped_column(String(16), nullable=False)
+    original_filename: Mapped[str] = mapped_column(String(255), nullable=False)
+    expected_size: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    received_bytes: Mapped[int] = mapped_column(
+        BigInteger, nullable=False, server_default="0"
+    )
+    media_type: Mapped[str | None] = mapped_column(String(255))
+    relative_path: Mapped[str | None] = mapped_column(String(1024))
+    sha256: Mapped[str | None] = mapped_column(String(64))
+    failure_code: Mapped[str | None] = mapped_column(String(80))
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+    completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    purged_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+    __table_args__ = (
+        UniqueConstraint(
+            "editing_session_id", name="uq_session_input_videos_session"
+        ),
+        CheckConstraint("id ~ '^[a-f0-9]{32}$'", name="ck_session_input_videos_id"),
+        CheckConstraint(
+            "state IN ('pending', 'uploading', 'validating', 'ready', 'failed', 'expired', 'deleted')",
+            name="ck_session_input_videos_state",
+        ),
+        CheckConstraint(
+            "length(btrim(original_filename)) > 0",
+            name="ck_session_input_videos_filename_present",
+        ),
+        CheckConstraint(
+            "expected_size > 0", name="ck_session_input_videos_expected_size_positive"
+        ),
+        CheckConstraint(
+            "received_bytes >= 0 AND received_bytes <= expected_size",
+            name="ck_session_input_videos_received_bytes",
+        ),
+        CheckConstraint(
+            "sha256 IS NULL OR length(sha256) = 64",
+            name="ck_session_input_videos_sha256_length",
+        ),
+        CheckConstraint(
+            "state <> 'ready' OR (received_bytes = expected_size AND relative_path IS NOT NULL AND length(btrim(relative_path)) > 0 AND media_type IS NOT NULL AND length(btrim(media_type)) > 0 AND sha256 IS NOT NULL AND length(sha256) = 64 AND completed_at IS NOT NULL AND expires_at IS NOT NULL)",
+            name="ck_session_input_videos_ready_metadata",
+        ),
+        CheckConstraint(
+            "relative_path IS NULL OR state IN ('ready', 'expired', 'deleted')",
+            name="ck_session_input_videos_path_state",
+        ),
+        Index("ix_session_input_videos_state_expiry", "state", "expires_at"),
+        Index("ix_session_input_videos_updated", "updated_at"),
+    )
+
+
+class PromptVersion(Base):
+    __tablename__ = "prompt_versions"
+
+    id: Mapped[str] = mapped_column(String(32), primary_key=True)
+    editing_session_id: Mapped[str] = mapped_column(
+        ForeignKey("editing_sessions.id", ondelete="RESTRICT"), nullable=False
+    )
+    version_number: Mapped[int] = mapped_column(Integer, nullable=False)
+    prompt: Mapped[str] = mapped_column(Text, nullable=False)
+    settings_data: Mapped[dict[str, Any]] = mapped_column(
+        JSONB, nullable=False, server_default=text("'{}'::jsonb")
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+
+    __table_args__ = (
+        UniqueConstraint(
+            "editing_session_id",
+            "version_number",
+            name="uq_prompt_versions_session_number",
+        ),
+        CheckConstraint("id ~ '^[a-f0-9]{32}$'", name="ck_prompt_versions_id"),
+        CheckConstraint(
+            "version_number >= 1", name="ck_prompt_versions_number_positive"
+        ),
+        CheckConstraint(
+            "length(btrim(prompt)) > 0 AND length(prompt) <= 12000",
+            name="ck_prompt_versions_prompt",
+        ),
+        Index(
+            "ix_prompt_versions_session_created",
+            "editing_session_id",
+            "created_at",
+            "id",
+        ),
     )
 
 
@@ -104,6 +215,13 @@ class VideoJob(Base):
     id: Mapped[str] = mapped_column(String(32), primary_key=True)
     editing_session_id: Mapped[str] = mapped_column(
         ForeignKey("editing_sessions.id", ondelete="RESTRICT"), nullable=False
+    )
+    prompt_version_id: Mapped[str | None] = mapped_column(
+        ForeignKey("prompt_versions.id", ondelete="RESTRICT")
+    )
+    attempt_number: Mapped[int | None] = mapped_column(Integer)
+    is_favorite: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, server_default=text("false")
     )
     state: Mapped[str] = mapped_column(String(24), nullable=False)
     stage: Mapped[str | None] = mapped_column(String(64))
@@ -145,10 +263,29 @@ class VideoJob(Base):
         CheckConstraint("length(prompt) <= 12000", name="ck_video_jobs_prompt_length"),
         CheckConstraint("recovery_count >= 0", name="ck_video_jobs_recovery_nonnegative"),
         CheckConstraint("version >= 1", name="ck_video_jobs_version_positive"),
+        CheckConstraint(
+            "attempt_number IS NULL OR attempt_number >= 1",
+            name="ck_video_jobs_attempt_positive",
+        ),
+        CheckConstraint(
+            "NOT is_favorite OR (prompt_version_id IS NOT NULL AND attempt_number IS NOT NULL)",
+            name="ck_video_jobs_favorite_versioned",
+        ),
+        UniqueConstraint(
+            "prompt_version_id",
+            "attempt_number",
+            name="uq_video_jobs_prompt_attempt",
+        ),
         Index("ix_video_jobs_session_created", "editing_session_id", "created_at"),
         Index("ix_video_jobs_state_created", "state", "created_at"),
         Index("ix_video_jobs_media_expiry", "media_expires_at"),
         Index("ix_video_jobs_audit_expiry", "audit_expires_at"),
+        Index(
+            "uq_video_jobs_session_favorite",
+            "editing_session_id",
+            unique=True,
+            postgresql_where=text("is_favorite AND deleted_at IS NULL"),
+        ),
     )
 
 
@@ -161,6 +298,9 @@ class JobEvent(Base):
     )
     sequence: Mapped[int] = mapped_column(Integer, nullable=False)
     event_type: Mapped[str] = mapped_column(String(80), nullable=False)
+    audience: Mapped[str] = mapped_column(
+        String(16), nullable=False, server_default="internal"
+    )
     state: Mapped[str | None] = mapped_column(String(24))
     stage: Mapped[str | None] = mapped_column(String(64))
     payload: Mapped[dict[str, Any]] = mapped_column(
@@ -173,7 +313,16 @@ class JobEvent(Base):
     __table_args__ = (
         UniqueConstraint("job_id", "sequence", name="uq_job_events_job_sequence"),
         CheckConstraint("sequence >= 1", name="ck_job_events_sequence_positive"),
+        CheckConstraint(
+            "audience IN ('internal', 'user')", name="ck_job_events_audience"
+        ),
         Index("ix_job_events_job_time", "job_id", "occurred_at"),
+        Index(
+            "ix_job_events_job_audience_sequence",
+            "job_id",
+            "audience",
+            "sequence",
+        ),
         Index("ix_job_events_type_time", "event_type", "occurred_at"),
     )
 

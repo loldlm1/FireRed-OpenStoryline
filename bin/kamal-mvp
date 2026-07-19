@@ -282,7 +282,7 @@ if [[ "${1:-}" == "db" ]]; then
   exit 0
 fi
 
-if [[ "${1:-}" == "audit" || "${1:-}" == "retention" ]]; then
+if [[ "${1:-}" == "audit" || "${1:-}" == "retention" || "${1:-}" == "workspace" ]]; then
   admin_command="$1"
   shift
   require_value KAMAL_HOST

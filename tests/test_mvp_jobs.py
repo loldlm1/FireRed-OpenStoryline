@@ -56,7 +56,8 @@ class PostgresTestCase(unittest.IsolatedAsyncioTestCase):
             await connection.execute(
                 text(
                     "TRUNCATE audit_reviews, audit_documents, artifacts, job_events, "
-                    "video_jobs, editing_sessions, auth_sessions, login_attempt_buckets"
+                    "video_jobs, prompt_versions, session_input_videos, editing_sessions, "
+                    "auth_sessions, login_attempt_buckets"
                 )
             )
         self.temporary_directory = TemporaryDirectory()
@@ -86,6 +87,10 @@ class JobStoreTests(PostgresTestCase):
         artifact = self.store.output_dir(state["id"]) / "short-01.mp4"
         artifact.write_bytes(b"result")
         await self.store.register_artifact(state["id"], artifact, kind="video")
+        snapshot = json.loads(self.store._state_path(state["id"]).read_text(encoding="utf-8"))
+        self.assertIn("prompt_version_id", snapshot)
+        self.assertIn("attempt_number", snapshot)
+        self.assertIn("is_favorite", snapshot)
 
         self.store._state_path(state["id"]).write_text("{broken", encoding="utf-8")
         restored = await JobStore(
@@ -94,6 +99,9 @@ class JobStoreTests(PostgresTestCase):
         ).load(state["id"])
 
         self.assertEqual(restored["input"]["original_filename"], "talk.mp4")
+        self.assertIsNone(restored["prompt_version_id"])
+        self.assertIsNone(restored["attempt_number"])
+        self.assertFalse(restored["is_favorite"])
         self.assertEqual(restored["artifacts"][0]["name"], "short-01.mp4")
         self.assertEqual(
             await self.store.resolve_artifact(state["id"], "short-01.mp4"),
@@ -104,6 +112,7 @@ class JobStoreTests(PostgresTestCase):
         events = await self.store.events(state["id"])
         self.assertEqual([event["sequence"] for event in events], list(range(1, len(events) + 1)))
         self.assertIn("artifact_registered", [event["event_type"] for event in events])
+        self.assertTrue(all(event["audience"] == "internal" for event in events))
 
     async def test_concurrent_updates_are_serialized_without_lost_versions(self):
         _editing_session, state = await self.create_queued_job()
