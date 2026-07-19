@@ -27,13 +27,22 @@ password hashes, session cookies, CSRF values, addresses, and user-agent text
 must not enter application logs or audit documents. Authenticated API and job
 activity has no RPM/RPD quota.
 
-Editing sessions, video jobs, artifacts, and ordered job events are also
-PostgreSQL-authoritative. Media remains under `outputs/mvp_jobs/<job_id>`, while
-artifact rows retain traversal-safe relative paths, hashes, availability, and
-retention timestamps. Each committed job transition writes a compatibility
-`job.json` snapshot after the database transaction. Keep those snapshots while
-Sprint 2 rollback remains possible, but never treat them as the live source of
-truth.
+Editing sessions, session input videos, immutable prompt versions, video-job
+attempts, artifacts, favorites, and ordered events are PostgreSQL-authoritative.
+Workflow-version-2 source media remains under
+`outputs/mvp_sessions/<session_id>/input/`; job work and outputs remain under
+`outputs/mvp_jobs/<job_id>`. Artifact and source rows retain traversal-safe
+relative paths, hashes, availability, and retention timestamps. Each committed
+job transition writes a compatibility `job.json` snapshot after the database
+transaction. Keep those snapshots during the rollback window, but never treat
+them as the live source of truth.
+
+The additive `20260719_0002` revision introduces workflow versions,
+`session_input_videos`, `prompt_versions`, run attempts, favorites, and public
+activity without removing legacy job columns. `/up` accepts both
+`20260717_0001` and `20260719_0002` for the compatibility bridge and fails
+closed on unknown revisions. Apply the bridge before the migration; do not
+enable reusable sessions until migration, backup, restore, and canary gates pass.
 
 Create or inspect the schema with:
 
@@ -50,6 +59,18 @@ direct-port container; rollback skips this forward-migration step.
 
 Code rollback after an additive migration leaves the database directory and
 tables in place. Do not use Alembic downgrade as a production rollback method.
+
+After migrating, link legacy jobs to immutable compatibility prompt versions in
+bounded, advisory-locked batches. This does not change workflow version or move
+media:
+
+```bash
+./bin/kamal-mvp workspace backfill-prompts --dry-run --limit 1000 --batch-size 100
+./bin/kamal-mvp workspace backfill-prompts --apply --limit 1000 --batch-size 100
+```
+
+Repeat apply until no eligible unlinked jobs remain. Existing sessions stay at
+workflow version 1 and remain readable through the legacy interface.
 
 ## One-file migration backup
 
@@ -126,6 +147,17 @@ versioned `job.json` snapshots, every registered JSON/SRT document up to
 deterministic structural reviews, and optional agent/human reviews. Video,
 audio, frame, thumbnail, and ZIP bytes never enter PostgreSQL.
 
+Reusable runs also retain the session source hash, prompt version and attempt
+number, settings snapshot, and whether the user selected the completed run as
+the favorite. Favorite selection is human creative preference, not an audit or
+QA verdict. Public activity is a separate allowlisted projection: it may expose
+safe message keys, stage categories, monotonic percentage, bounded counts, and
+sanitized retry/failure metadata, but never prompt/transcript text, provider
+bodies, internal tool arguments, filesystem paths, cookies, or credentials.
+Authenticated clients replay it with `GET /api/mvp/jobs/<job_id>/events` or
+stream it with `GET /api/mvp/jobs/<job_id>/events/stream`; SSE resumes from the
+last sequence and the browser falls back to bounded polling.
+
 Use bounded JSON or NDJSON output when another agent will inspect the result:
 
 ```bash
@@ -167,13 +199,22 @@ secrets are deliberately absent from stdout.
 
 ## Media and audit retention
 
-Source videos, rendered clips, and generated ZIP bundles remain on the output
-volume for seven days after a job reaches a terminal state. Work files are
-removed immediately after terminal processing. Deleting an editing session in
-the browser soft-deletes its database rows and immediately attempts to remove
-all of its video media. The browser hides the session at once; the audit CLI can
-still inspect its prompts, plans, JSON/SRT evidence, events, QC results, and
-reviews until the 30-day audit deadline.
+Workflow-version-1 source videos, rendered clips, and generated ZIP bundles
+remain on the output volume for seven days after their job reaches a terminal
+state. Workflow-version-2 rendered clips and ZIP bundles follow the same job
+deadline, while the one session-owned source expires seven days after the latest
+run creation or terminal completion. Reuse therefore renews the source deadline
+without copying the media. Work files are removed immediately after terminal
+processing.
+
+Incomplete session-source uploads expire after
+`OPENSTORYLINE_INCOMPLETE_UPLOAD_HOURS` (24 by default). Retention removes their
+`.part` data idempotently and records a failed/expired source state. Deleting an
+editing session soft-deletes its database rows and immediately attempts to
+remove its session source and all job media. The browser hides the session at
+once; the audit CLI can still inspect prompt versions, attempts, plans, JSON/SRT
+evidence, events, QA results, favorites, and reviews until the 30-day audit
+deadline.
 
 Retention uses database timestamps, bounded batches, validated job-root paths,
 and one PostgreSQL advisory lock. It never relies on file modification times.
@@ -205,38 +246,49 @@ The committed production default is
 `OPENSTORYLINE_RETENTION_ENABLED=false`. Keep it disabled on the initial
 deployment, run and review the preview, then enable the daily scheduler only
 with explicit operator approval. `OPENSTORYLINE_MEDIA_RETENTION_DAYS=7`,
+`OPENSTORYLINE_INCOMPLETE_UPLOAD_HOURS=24`,
 `OPENSTORYLINE_AUDIT_RETENTION_DAYS=30`,
 `OPENSTORYLINE_RETENTION_INTERVAL_SECONDS=86400`, and
 `OPENSTORYLINE_RETENTION_BATCH_SIZE=100` are bounded operational controls; the
 example production policy preserves seven and 30 days.
 
-## Initial cutover and rollback gate
+## Reusable workspace rollout and rollback gate
 
-Use this order for the first PostgreSQL/audit release. Real server commands
-require a separately authorized maintenance window.
+Real server commands require a separately authorized maintenance window. Keep
+`OPENSTORYLINE_SESSION_WORKSPACE_MODE=legacy` throughout steps 1–9.
 
-1. Boot and verify the private `db` accessory, then deliver the candidate image.
-2. Run `./bin/kamal-mvp db migrate` and `./bin/kamal-mvp db current` against
-   that exact image.
-3. Run `./bin/kamal-mvp db backup` and `./bin/kamal-mvp db restore-check`.
-4. Deploy the application with `OPENSTORYLINE_RETENTION_ENABLED=false`.
-5. Run the legacy import dry-run, apply it, then repeat apply to prove
-   idempotency.
-6. Run audit backfill dry-run/apply and verify bounded job/document counts.
-7. Run retention preview twice and review job counts and estimated bytes; the
-   output intentionally excludes private payload text.
-8. Enable retention only after explicit approval, then redeploy/restart.
-9. Verify `/up`, `/health`, `kamal app details`, `kamal accessory details db`,
-   recent redacted app logs, audit CLI output, and retention status.
+1. Deploy the `20260717_0001` compatibility bridge and verify `/up`, `/health`,
+   legacy login/session/job behavior, backup, and isolated restore.
+2. Apply additive migration `20260719_0002` from the exact candidate image and
+   verify `db current`; never hand-create the new tables.
+3. Run `workspace backfill-prompts` in dry-run mode, then apply bounded batches
+   until verification reports no eligible unlinked jobs.
+4. Deploy the completed image with workspace mode still `legacy` and
+   `OPENSTORYLINE_RETENTION_ENABLED=false`.
+5. Verify the legacy UI/API, worker recovery, audit, static modules, authenticated
+   SSE, polling fallback, and that the domain proxy has response buffering off.
+6. Run retention preview twice and review job/source counts and estimated bytes;
+   the output intentionally excludes private payload text.
+7. Inspect `outputs/mvp_sessions/` for files not represented by
+   `session_input_videos`. Do not delete suspected orphans during rollback;
+   preserve the volume and use the workspace-capable code plus retention records
+   for an idempotent cleanup review.
+8. Enable automatic retention only after explicit approval.
+9. Enable workspace mode for one controlled synthetic/private canary only after
+   separate authorization. Verify one upload, two prompt versions, one rerun,
+   output playback, favorite switching, retention renewal, and SSE timing before
+   expanding activation.
 
-The rollback point is the Sprint 4-compatible image/commit, a restore-checked
-`openstoryline.latest.dump`, current compatibility snapshots, and retention
-disabled. Stop future deletion first by setting
-`OPENSTORYLINE_RETENTION_ENABLED=false`. Additive tables remain compatible with
-a code rollback; do not downgrade them automatically. Restore the dump only
-with writes stopped and an empty/isolated target check. Media already purged by
-expiry or session deletion is irreversible and cannot be recovered from the
-database dump.
+The normal emergency action is to set
+`OPENSTORYLINE_SESSION_WORKSPACE_MODE=legacy` and redeploy/restart, preserving
+all workflow-v2 rows and files. If code rollback is required, return to the
+Sprint 1 compatibility bridge, not a pre-bridge image. Keep schema
+`20260719_0002`; do not downgrade after workflow-v2 data exists. Disable
+retention before investigating inconsistent state, preserve the output volume
+and restore-checked `openstoryline.latest.dump`, and repair bounded records
+idempotently. Restore only with writes stopped and an empty/isolated target.
+Media already purged by expiry or session deletion is irreversible and cannot
+be recovered from the database dump.
 
 ## Password and session operations
 

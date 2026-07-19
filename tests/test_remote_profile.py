@@ -86,6 +86,33 @@ class RemoteProfileTests(unittest.TestCase):
         self.assertIn("COPY web/mvp.html web/mvp-legacy.html ./web/", dockerfile)
         self.assertIn("COPY web/static/mvp/ ./web/static/mvp/", dockerfile)
         self.assertNotIn("COPY web/ ./web/", dockerfile)
+        for module in (
+            "activity.js",
+            "api.js",
+            "app.js",
+            "messages.js",
+            "styles.css",
+            "upload.js",
+            "views.js",
+        ):
+            with self.subTest(module=module):
+                self.assertTrue((ROOT / "web" / "static" / "mvp" / module).is_file())
+
+    def test_domain_proxy_disables_response_buffering_for_sse(self):
+        deploy = (ROOT / "config" / "deploy.yml").read_text(encoding="utf-8")
+
+        self.assertIn("response_timeout: 3600", deploy)
+        self.assertRegex(
+            deploy,
+            re.compile(
+                r"buffering:\s+requests: true\s+responses: false",
+                re.MULTILINE,
+            ),
+        )
+        self.assertIn(
+            'max_request_body: <%= ENV.fetch("OPENSTORYLINE_MAX_UPLOAD_BYTES", "8589934592") %>',
+            deploy,
+        )
 
     def test_remote_image_contains_database_migrations_without_init_secrets(self):
         dockerfile = (ROOT / "Dockerfile.remote").read_text(encoding="utf-8")

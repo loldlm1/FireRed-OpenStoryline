@@ -44,6 +44,24 @@ from open_storyline.mvp.session_media import SessionMediaStore
 
 
 SESSION_WORKSPACE_MODES = frozenset({"legacy", "enabled"})
+WORKSPACE_CONTENT_SECURITY_POLICY = "; ".join(
+    (
+        "default-src 'self'",
+        "script-src 'self'",
+        "style-src 'self'",
+        "connect-src 'self'",
+        "img-src 'self'",
+        "font-src 'self'",
+        "media-src 'self' blob:",
+        "object-src 'none'",
+        "base-uri 'self'",
+        "form-action 'self'",
+        "frame-ancestors 'none'",
+        "frame-src 'none'",
+        "worker-src 'none'",
+        "manifest-src 'self'",
+    )
+)
 
 
 class SessionWorkspaceConfigurationError(RuntimeError):
@@ -202,12 +220,22 @@ def create_app() -> FastAPI:
         return await call_next(request)
 
     @app.middleware("http")
-    async def prevent_mixed_workspace_assets(request: Request, call_next):
+    async def harden_browser_responses(request: Request, call_next):
         response = await call_next(request)
+        response.headers["X-Content-Type-Options"] = "nosniff"
+        response.headers["Referrer-Policy"] = "no-referrer"
+        response.headers["X-Frame-Options"] = "DENY"
+        response.headers["Permissions-Policy"] = (
+            "camera=(), microphone=(), geolocation=(), payment=(), usb=()"
+        )
         if request.url.path == "/" or request.url.path.startswith("/static/mvp/"):
             response.headers["Cache-Control"] = "no-store, max-age=0"
             response.headers["Pragma"] = "no-cache"
-            response.headers["X-Content-Type-Options"] = "nosniff"
+            response.headers["Content-Security-Policy"] = (
+                WORKSPACE_CONTENT_SECURITY_POLICY
+            )
+            response.headers["Cross-Origin-Opener-Policy"] = "same-origin"
+            response.headers["Cross-Origin-Resource-Policy"] = "same-origin"
         return response
 
     app.mount(

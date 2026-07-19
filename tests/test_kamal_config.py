@@ -78,6 +78,9 @@ class KamalConfigTests(unittest.TestCase):
         self.assertEqual(config["proxy"]["host"], "video.example.test")
         self.assertIs(config["proxy"]["ssl"], True)
         self.assertIs(config["proxy"]["forward_headers"], True)
+        self.assertIs(config["proxy"]["buffering"]["requests"], True)
+        self.assertIs(config["proxy"]["buffering"]["responses"], False)
+        self.assertEqual(config["proxy"]["response_timeout"], 3600)
         self.assertNotIn("proxy", config["servers"]["web"])
         self.assertNotIn("publish", config["servers"]["web"]["options"])
 
