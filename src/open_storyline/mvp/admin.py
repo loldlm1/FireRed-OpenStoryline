@@ -6,12 +6,21 @@ import argparse
 import asyncio
 import json
 import sys
+import uuid
+
+from sqlalchemy import func, select, text
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from open_storyline.config import default_config_path, load_settings
 from open_storyline.mvp.audit import AuditService, parse_since
 from open_storyline.mvp.database import Database, DatabaseConfigurationError
 from open_storyline.mvp.jobs import JobStore, JobStoreError
+from open_storyline.mvp.models import EditingSession, PromptVersion, VideoJob
 from open_storyline.mvp.retention import RetentionService, RetentionSettings
+from open_storyline.mvp.security import sanitize_for_persistence
+
+
+WORKSPACE_BACKFILL_ADVISORY_LOCK = 7_303_110_792_764
 
 
 def _format_value(value: Any, output_format: str) -> None:
@@ -187,6 +196,174 @@ async def _retention_command(
     raise JobStoreError("RETENTION_COMMAND_INVALID", "retention command is invalid")
 
 
+async def backfill_legacy_prompt_versions(
+    database: Database,
+    *,
+    dry_run: bool,
+    limit: int,
+    batch_size: int,
+) -> dict[str, Any]:
+    if not 1 <= int(limit) <= 10_000:
+        raise JobStoreError("WORKSPACE_BACKFILL_INVALID", "limit is invalid")
+    if not 1 <= int(batch_size) <= 500:
+        raise JobStoreError("WORKSPACE_BACKFILL_INVALID", "batch size is invalid")
+
+    async with database.engine.connect() as connection:
+        async with AsyncSession(bind=connection, expire_on_commit=False) as session:
+            acquired = await session.scalar(
+                text("SELECT pg_try_advisory_lock(:key)"),
+                {"key": WORKSPACE_BACKFILL_ADVISORY_LOCK},
+            )
+            await session.commit()
+            if not acquired:
+                raise JobStoreError(
+                    "WORKSPACE_BACKFILL_BUSY", "workspace backfill is already running"
+                )
+            try:
+                eligible = int(
+                    await session.scalar(
+                        select(func.count())
+                        .select_from(VideoJob)
+                        .join(
+                            EditingSession,
+                            EditingSession.id == VideoJob.editing_session_id,
+                        )
+                        .where(
+                            VideoJob.prompt_version_id.is_(None),
+                            EditingSession.workflow_version == 1,
+                        )
+                    )
+                    or 0
+                )
+                await session.commit()
+                if dry_run:
+                    return {
+                        "ok": True,
+                        "dry_run": True,
+                        "eligible": eligible,
+                        "processed": 0,
+                        "remaining": eligible,
+                        "complete": eligible == 0,
+                    }
+
+                processed = 0
+                while processed < int(limit):
+                    current_batch = min(int(batch_size), int(limit) - processed)
+                    async with session.begin():
+                        rows = list(
+                            (
+                                await session.execute(
+                                    select(VideoJob)
+                                    .join(
+                                        EditingSession,
+                                        EditingSession.id == VideoJob.editing_session_id,
+                                    )
+                                    .where(
+                                        VideoJob.prompt_version_id.is_(None),
+                                        EditingSession.workflow_version == 1,
+                                    )
+                                    .order_by(
+                                        VideoJob.editing_session_id,
+                                        VideoJob.created_at,
+                                        VideoJob.id,
+                                    )
+                                    .limit(current_batch)
+                                    .with_for_update(skip_locked=True)
+                                )
+                            ).scalars()
+                        )
+                        if not rows:
+                            break
+                        next_versions: dict[str, int] = {}
+                        for row in rows:
+                            if row.editing_session_id not in next_versions:
+                                owner = await session.scalar(
+                                    select(EditingSession)
+                                    .where(EditingSession.id == row.editing_session_id)
+                                    .with_for_update()
+                                )
+                                if owner is None:
+                                    raise JobStoreError(
+                                        "WORKSPACE_BACKFILL_INVALID",
+                                        "job session is unavailable",
+                                    )
+                                current = await session.scalar(
+                                    select(
+                                        func.coalesce(
+                                            func.max(PromptVersion.version_number), 0
+                                        )
+                                    ).where(
+                                        PromptVersion.editing_session_id
+                                        == row.editing_session_id
+                                    )
+                                )
+                                next_versions[row.editing_session_id] = int(current or 0)
+                            next_versions[row.editing_session_id] += 1
+                            settings = sanitize_for_persistence(row.request_data or {})
+                            if not isinstance(settings, dict):
+                                settings = {}
+                            prompt_version = PromptVersion(
+                                id=uuid.uuid4().hex,
+                                editing_session_id=row.editing_session_id,
+                                version_number=next_versions[row.editing_session_id],
+                                prompt=row.prompt,
+                                settings_data=settings,
+                                created_at=row.created_at,
+                            )
+                            session.add(prompt_version)
+                            await session.flush()
+                            row.prompt_version_id = prompt_version.id
+                            row.attempt_number = 1
+                        processed += len(rows)
+
+                remaining = int(
+                    await session.scalar(
+                        select(func.count())
+                        .select_from(VideoJob)
+                        .join(
+                            EditingSession,
+                            EditingSession.id == VideoJob.editing_session_id,
+                        )
+                        .where(
+                            VideoJob.prompt_version_id.is_(None),
+                            EditingSession.workflow_version == 1,
+                        )
+                    )
+                    or 0
+                )
+                await session.commit()
+                return {
+                    "ok": True,
+                    "dry_run": False,
+                    "eligible": eligible,
+                    "processed": processed,
+                    "remaining": remaining,
+                    "complete": remaining == 0,
+                }
+            finally:
+                if session.in_transaction():
+                    await session.rollback()
+                await session.execute(
+                    text("SELECT pg_advisory_unlock(:key)"),
+                    {"key": WORKSPACE_BACKFILL_ADVISORY_LOCK},
+                )
+                await session.commit()
+
+
+async def _workspace_command(
+    arguments: argparse.Namespace,
+    database: Database,
+) -> dict[str, Any]:
+    if arguments.workspace_command == "backfill-prompts":
+        return await backfill_legacy_prompt_versions(
+            database,
+            dry_run=arguments.dry_run,
+            limit=arguments.limit,
+            batch_size=arguments.batch_size,
+        )
+    raise JobStoreError("WORKSPACE_COMMAND_INVALID", "workspace command is invalid")
+
+
 async def _run(arguments: argparse.Namespace) -> int:
     database: Database | None = None
     try:
@@ -200,6 +377,9 @@ async def _run(arguments: argparse.Namespace) -> int:
         elif arguments.command == "retention":
             result = await _retention_command(arguments, database)
             _format_value(result, arguments.format)
+        elif arguments.command == "workspace":
+            result = await _workspace_command(arguments, database)
+            _format_value(result, "json")
         else:
             raise JobStoreError("ADMIN_COMMAND_INVALID", "admin command is invalid")
     except (DatabaseConfigurationError, JobStoreError, OSError) as exc:
@@ -304,6 +484,22 @@ def main() -> int:
                 help="perform deletion; without this flag the command previews only",
             )
         _add_format(command, default="json")
+
+    workspace = subparsers.add_parser(
+        "workspace", help="manage reusable workspace data"
+    )
+    workspace_commands = workspace.add_subparsers(
+        dest="workspace_command",
+        required=True,
+    )
+    prompt_backfill = workspace_commands.add_parser(
+        "backfill-prompts", help="link legacy jobs to immutable prompt versions"
+    )
+    prompt_backfill_mode = prompt_backfill.add_mutually_exclusive_group(required=True)
+    prompt_backfill_mode.add_argument("--dry-run", action="store_true")
+    prompt_backfill_mode.add_argument("--apply", action="store_true")
+    prompt_backfill.add_argument("--limit", type=int, default=1000)
+    prompt_backfill.add_argument("--batch-size", type=int, default=100)
 
     return asyncio.run(_run(parser.parse_args()))
 

@@ -21,6 +21,7 @@ from open_storyline.mvp.database import (
     DatabaseConfigurationError,
     normalize_database_url,
 )
+from open_storyline.mvp.models import Base
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -33,6 +34,8 @@ REQUIRED_TABLES = {
     "editing_sessions",
     "job_events",
     "login_attempt_buckets",
+    "prompt_versions",
+    "session_input_videos",
     "video_jobs",
 }
 
@@ -66,6 +69,53 @@ class DatabaseConfigurationTests(unittest.TestCase):
             with self.assertRaises(DatabaseConfigurationError) as raised:
                 Database("postgresql+psycopg://user:password@db/example")
         self.assertNotIn("password", str(raised.exception))
+
+
+class WorkspaceModelContractTests(unittest.TestCase):
+    def test_workspace_metadata_exposes_additive_constraints_and_indexes(self):
+        tables = Base.metadata.tables
+        self.assertTrue((REQUIRED_TABLES - {"alembic_version"}).issubset(tables))
+        self.assertIn("workflow_version", tables["editing_sessions"].c)
+        self.assertIn("prompt_version_id", tables["video_jobs"].c)
+        self.assertIn("attempt_number", tables["video_jobs"].c)
+        self.assertIn("is_favorite", tables["video_jobs"].c)
+        self.assertIn("audience", tables["job_events"].c)
+
+        constraint_names = {
+            constraint.name
+            for table_name in (
+                "editing_sessions",
+                "session_input_videos",
+                "prompt_versions",
+                "video_jobs",
+                "job_events",
+            )
+            for constraint in tables[table_name].constraints
+        }
+        self.assertIn("uq_session_input_videos_session", constraint_names)
+        self.assertIn("uq_prompt_versions_session_number", constraint_names)
+        self.assertIn("uq_video_jobs_prompt_attempt", constraint_names)
+        self.assertIn("ck_session_input_videos_ready_metadata", constraint_names)
+        self.assertIn("ck_job_events_audience", constraint_names)
+        self.assertIn(
+            "uq_video_jobs_session_favorite",
+            {index.name for index in tables["video_jobs"].indexes},
+        )
+
+    def test_workspace_migration_is_schema_only(self):
+        migration = (
+            ROOT
+            / "migrations"
+            / "versions"
+            / "20260719_0002_add_reusable_session_workspace.py"
+        ).read_text(encoding="utf-8")
+        self.assertNotIn("UPDATE video_jobs", migration)
+        self.assertNotIn("SELECT * FROM video_jobs", migration)
+        restore_check = (ROOT / "scripts" / "mvp-postgres-restore-check.sh").read_text(
+            encoding="utf-8"
+        )
+        self.assertIn("20260719_0002", restore_check)
+        self.assertIn("REQUIRED_TABLE_COUNT=10", restore_check)
 
 
 class _FakeConnection:
@@ -359,6 +409,10 @@ class MigrationTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(readiness.ready)
         self.assertTrue(REQUIRED_TABLES.issubset(table_names))
         self.assertIn("ck_video_jobs_progress", constraints)
+        self.assertIn("ck_session_input_videos_ready_metadata", constraints)
+        self.assertIn("uq_prompt_versions_session_number", constraints)
+        self.assertIn("uq_video_jobs_prompt_attempt", constraints)
+        self.assertIn("ck_job_events_audience", constraints)
         self.assertIn("uq_job_events_job_sequence", constraints)
         self.assertIn("ck_audit_reviews_verdict", constraints)
 
