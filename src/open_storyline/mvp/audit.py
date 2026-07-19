@@ -23,6 +23,7 @@ from open_storyline.mvp.models import (
     AuditDocument,
     AuditReview,
     EditingSession,
+    SessionInputVideo,
     VideoJob,
 )
 from open_storyline.mvp.security import (
@@ -566,6 +567,14 @@ class AuditService:
                 {
                     "id": row.id,
                     "editing_session_id": row.editing_session_id,
+                    "prompt_version_id": row.prompt_version_id,
+                    "attempt_number": row.attempt_number,
+                    "is_favorite": row.is_favorite,
+                    "favorite_selection_source": "human" if row.is_favorite else None,
+                    "source_sha256": (row.input_data or {}).get("sha256"),
+                    "settings_version": (row.request_data or {}).get(
+                        "settings_version"
+                    ),
                     "state": row.state,
                     "stage": row.stage,
                     "error_code": (
@@ -596,6 +605,12 @@ class AuditService:
         try:
             async with self.database.sessions() as session:
                 editing_session = await session.get(EditingSession, job["editing_session_id"])
+                input_video = await session.scalar(
+                    select(SessionInputVideo).where(
+                        SessionInputVideo.editing_session_id
+                        == job["editing_session_id"]
+                    )
+                )
                 documents = list(
                     (
                         await session.execute(
@@ -624,6 +639,18 @@ class AuditService:
                 {
                     "id": editing_session.id,
                     "title": editing_session.title,
+                    "workflow_version": editing_session.workflow_version,
+                    "input_video": (
+                        {
+                            "id": input_video.id,
+                            "state": input_video.state,
+                            "sha256": input_video.sha256,
+                            "expires_at": _iso(input_video.expires_at),
+                            "purged_at": _iso(input_video.purged_at),
+                        }
+                        if input_video is not None
+                        else None
+                    ),
                     "deleted_at": _iso(editing_session.deleted_at),
                     "audit_expires_at": _iso(editing_session.audit_expires_at),
                     "audit_hold_at": _iso(editing_session.audit_hold_at),

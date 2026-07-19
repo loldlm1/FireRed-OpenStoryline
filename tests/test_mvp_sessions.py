@@ -144,11 +144,13 @@ class EditingSessionTests(unittest.IsolatedAsyncioTestCase):
         workspace_session = await self.store.create_session(
             "Future workspace", workflow_version=2
         )
-        await self.store.create(
-            editing_session_id=workspace_session["id"],
-            prompt="must not be backfilled",
-            filename="talk.mp4",
-        )
+        with self.assertRaises(JobStoreError) as reusable:
+            await self.store.create(
+                editing_session_id=workspace_session["id"],
+                prompt="must use prompt-version creation",
+                filename="talk.mp4",
+            )
+        self.assertEqual(reusable.exception.code, "SESSION_WORKFLOW_REUSABLE")
 
         async with self.database.sessions() as session:
             async with session.begin():

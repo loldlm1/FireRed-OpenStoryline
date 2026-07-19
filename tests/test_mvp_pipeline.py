@@ -329,8 +329,15 @@ class FakeStore:
     async def load(self, _job_id):
         return {
             "prompt": "make a strong short",
-            "request": self.request,
-            "input": {"original_filename": "source.mp4"},
+            "prompt_version_id": "b" * 32,
+            "attempt_number": 2,
+            "is_favorite": True,
+            "request": {"settings_version": 1, **self.request},
+            "input": {
+                "input_video_id": "c" * 32,
+                "original_filename": "source.mp4",
+                "sha256": "d" * 64,
+            },
         }
 
     async def source_path(self, _job_id):
@@ -463,6 +470,12 @@ class MVPAgenticPipelineTests(unittest.IsolatedAsyncioTestCase):
                 (Path(directory) / "output" / "manifest.json").read_text(encoding="utf-8")
             )
             self.assertEqual(shorts_artifact["version"], "shorts_plan.v1")
+            self.assertEqual(manifest["run"]["prompt_version_id"], "b" * 32)
+            self.assertEqual(manifest["run"]["attempt_number"], 2)
+            self.assertEqual(manifest["run"]["settings_version"], 1)
+            self.assertTrue(manifest["run"]["is_favorite"])
+            self.assertEqual(manifest["source"]["input_video_id"], "c" * 32)
+            self.assertEqual(manifest["source"]["sha256"], "d" * 64)
             self.assertEqual(manifest["agentic"]["edit_planner"]["schema_version"], "edit_plan.v1")
             self.assertEqual(
                 manifest["agentic"]["edit_planner"]["prompt_version"],

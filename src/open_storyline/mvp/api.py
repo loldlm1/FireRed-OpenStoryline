@@ -11,6 +11,10 @@ from fastapi.responses import FileResponse, JSONResponse
 from pydantic import BaseModel, Field
 
 from open_storyline.mvp.jobs import JobManager, JobStore, JobStoreError
+from open_storyline.mvp.prompt_versions import (
+    PromptVersionService,
+    validate_run_settings,
+)
 from open_storyline.mvp.retention import RetentionService
 from open_storyline.mvp.session_media import SessionMediaStore
 
@@ -28,6 +32,20 @@ class SessionSourceUploadPayload(BaseModel):
     media_type: str | None = Field(default=None, max_length=255)
 
 
+class PromptVersionPayload(BaseModel):
+    prompt: str = Field(min_length=1, max_length=12000)
+    max_clips: int = Field(default=8, ge=1, le=50)
+    edit_mode: str = Field(default="legacy", max_length=32)
+    asset_policy: str = Field(default="auto", max_length=32)
+    max_generated_assets_per_clip: int = Field(default=2, ge=0, le=20)
+    stock_policy: str = Field(default="off", max_length=32)
+    max_stock_assets_per_clip: int = Field(default=0, ge=0, le=20)
+
+
+class FavoriteRunPayload(BaseModel):
+    run_id: str = Field(min_length=32, max_length=32)
+
+
 def _http_error(exc: JobStoreError) -> HTTPException:
     if exc.code in {
         "JOB_NOT_FOUND",
@@ -35,6 +53,7 @@ def _http_error(exc: JobStoreError) -> HTTPException:
         "SESSION_NOT_FOUND",
         "SESSION_SOURCE_NOT_FOUND",
         "SOURCE_UPLOAD_NOT_FOUND",
+        "PROMPT_VERSION_NOT_FOUND",
     }:
         status = 404
     elif exc.code in {
@@ -54,6 +73,10 @@ def _http_error(exc: JobStoreError) -> HTTPException:
         "UPLOAD_STATE_INVALID",
         "SESSION_WORKFLOW_LEGACY",
         "SESSION_WORKFLOW_REUSABLE",
+        "PROMPT_VERSION_CONFLICT",
+        "PROMPT_RUN_CONFLICT",
+        "FAVORITE_RUN_INVALID",
+        "SESSION_SOURCE_CHANGED",
     }:
         status = 409
     elif exc.code == "UPLOAD_TOO_LARGE":
@@ -64,6 +87,7 @@ def _http_error(exc: JobStoreError) -> HTTPException:
         "SOURCE_VIDEO_INVALID",
         "SOURCE_VALIDATION_TIMEOUT",
         "UPLOAD_INCOMPLETE",
+        "PROMPT_INVALID",
     }:
         status = 422
     elif exc.code in {"SESSION_SOURCE_EXPIRED", "SESSION_SOURCE_UNAVAILABLE"}:
@@ -88,6 +112,7 @@ def create_mvp_router(
     get_retention: Callable[[], RetentionService | None] | None = None,
     get_session_media: Callable[[], SessionMediaStore | None] | None = None,
     get_workspace_mode: Callable[[], str] | None = None,
+    get_prompt_versions: Callable[[], PromptVersionService | None] | None = None,
 ) -> APIRouter:
     router = APIRouter(prefix="/api/mvp", tags=["video-mvp"])
 
@@ -255,6 +280,15 @@ def create_mvp_router(
             )
         return service
 
+    def prompt_versions() -> PromptVersionService:
+        service = get_prompt_versions() if get_prompt_versions is not None else None
+        if service is None:
+            raise HTTPException(
+                status_code=503,
+                detail={"code": "PROMPT_VERSION_SERVICE_UNAVAILABLE"},
+            )
+        return service
+
     @router.post("/sessions/{session_id}/input-video/uploads", status_code=201)
     async def initialize_session_source(
         session_id: str,
@@ -345,6 +379,76 @@ def create_mvp_router(
             content_disposition_type="inline",
         )
 
+    @router.get("/sessions/{session_id}/prompt-versions")
+    async def list_prompt_versions(
+        session_id: str,
+        limit: int = 20,
+        cursor: str | None = None,
+    ):
+        try:
+            return await prompt_versions().list_versions(
+                session_id,
+                limit=limit,
+                cursor=cursor,
+            )
+        except JobStoreError as exc:
+            raise _http_error(exc) from exc
+
+    @router.post("/sessions/{session_id}/prompt-versions", status_code=202)
+    async def create_prompt_version(
+        session_id: str,
+        payload: PromptVersionPayload,
+    ):
+        try:
+            result = await prompt_versions().create_version(
+                session_id,
+                prompt=payload.prompt,
+                settings=validate_run_settings(
+                    max_clips=payload.max_clips,
+                    edit_mode=payload.edit_mode,
+                    asset_policy=payload.asset_policy,
+                    max_generated_assets_per_clip=(
+                        payload.max_generated_assets_per_clip
+                    ),
+                    stock_policy=payload.stock_policy,
+                    max_stock_assets_per_clip=payload.max_stock_assets_per_clip,
+                ),
+            )
+            await get_manager().enqueue(result["run"]["id"])
+            return result
+        except JobStoreError as exc:
+            raise _http_error(exc) from exc
+
+    @router.get("/prompt-versions/{prompt_version_id}")
+    async def get_prompt_version(prompt_version_id: str):
+        try:
+            return await prompt_versions().get_version(prompt_version_id)
+        except JobStoreError as exc:
+            raise _http_error(exc) from exc
+
+    @router.post("/prompt-versions/{prompt_version_id}/runs", status_code=202)
+    async def rerun_prompt_version(prompt_version_id: str):
+        try:
+            run = await prompt_versions().rerun(prompt_version_id)
+            await get_manager().enqueue(run["id"])
+            return run
+        except JobStoreError as exc:
+            raise _http_error(exc) from exc
+
+    @router.put("/sessions/{session_id}/favorite-run")
+    async def select_favorite_run(session_id: str, payload: FavoriteRunPayload):
+        try:
+            return await prompt_versions().select_favorite(session_id, payload.run_id)
+        except JobStoreError as exc:
+            raise _http_error(exc) from exc
+
+    @router.delete("/sessions/{session_id}/favorite-run")
+    async def clear_favorite_run(session_id: str):
+        try:
+            return await prompt_versions().clear_favorite(session_id)
+        except JobStoreError as exc:
+            raise _http_error(exc) from exc
+
     @router.post("/jobs")
     async def unscoped_job_creation_is_retired():
         return JSONResponse(
@@ -380,6 +484,25 @@ def create_mvp_router(
             raise _http_error(exc) from exc
         media_type = mimetypes.guess_type(path.name)[0] or "application/octet-stream"
         return FileResponse(path, filename=path.name, media_type=media_type)
+
+    @router.get("/jobs/{job_id}/artifacts/{artifact_name}/preview")
+    async def preview_artifact(job_id: str, artifact_name: str):
+        try:
+            path = await get_store().resolve_artifact(job_id, artifact_name)
+        except JobStoreError as exc:
+            raise _http_error(exc) from exc
+        media_type = mimetypes.guess_type(path.name)[0] or "application/octet-stream"
+        if not media_type.startswith(("video/", "image/", "audio/")):
+            raise HTTPException(
+                status_code=415,
+                detail={"code": "ARTIFACT_PREVIEW_UNSUPPORTED"},
+            )
+        return FileResponse(
+            path,
+            filename=path.name,
+            media_type=media_type,
+            content_disposition_type="inline",
+        )
 
     @router.get("/jobs/{job_id}/bundle")
     async def download_bundle(job_id: str):

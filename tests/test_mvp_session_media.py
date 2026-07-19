@@ -22,6 +22,7 @@ from open_storyline.mvp.database import Database, normalize_database_url
 from open_storyline.mvp.jobs import JobManager, JobStore
 from open_storyline.mvp.models import SessionInputVideo
 from open_storyline.mvp.retention import RetentionService, RetentionSettings
+from open_storyline.mvp.prompt_versions import PromptVersionService, validate_run_settings
 from open_storyline.mvp.session_media import SessionMediaError, SessionMediaStore
 
 
@@ -339,11 +340,13 @@ class SessionMediaPostgresTests(unittest.IsolatedAsyncioTestCase):
         )
         ready = await self.media.complete(editing_session["id"], initialized["upload_id"])
         source_path, _state = await self.media.resolve_ready(editing_session["id"])
-        active = await self.store.create(
-            editing_session_id=editing_session["id"],
-            prompt="active retention guard",
-            filename="clip.mp4",
-        )
+        active = (
+            await PromptVersionService(self.store, self.media).create_version(
+                editing_session["id"],
+                prompt="active retention guard",
+                settings=validate_run_settings(max_clips=1),
+            )
+        )["run"]
         self.now += timedelta(days=8)
         async with self.database.engine.begin() as connection:
             await connection.execute(
