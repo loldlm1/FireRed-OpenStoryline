@@ -546,35 +546,56 @@ class SessionMediaStore:
             return {**state, "purge": result}
 
     async def resolve_ready(self, session_id: str) -> tuple[Path, dict[str, Any]]:
-        async with self._session_lock(session_id) as connection:
-            try:
-                async with self._session(connection) as session:
-                    await self._active_owner(session, session_id)
-                    row = await session.scalar(
-                        select(SessionInputVideo).where(
-                            SessionInputVideo.editing_session_id == session_id
-                        )
+        async with self.coordination(session_id) as connection:
+            return await self.resolve_ready_coordinated(
+                session_id,
+                connection=connection,
+            )
+
+    @asynccontextmanager
+    async def coordination(
+        self,
+        session_id: str,
+        *,
+        wait: bool = False,
+    ) -> AsyncIterator[AsyncConnection]:
+        async with self._session_lock(session_id, wait=wait) as connection:
+            yield connection
+
+    async def resolve_ready_coordinated(
+        self,
+        session_id: str,
+        *,
+        connection: AsyncConnection,
+    ) -> tuple[Path, dict[str, Any]]:
+        try:
+            async with self._session(connection) as session:
+                await self._active_owner(session, session_id)
+                row = await session.scalar(
+                    select(SessionInputVideo).where(
+                        SessionInputVideo.editing_session_id == session_id
                     )
-            except JobStoreError:
-                raise
-            except SQLAlchemyError:
-                raise SessionMediaError(
-                    "DATABASE_UNAVAILABLE", "source preview is unavailable"
-                ) from None
-            if row is None:
-                raise SessionMediaError("SESSION_SOURCE_NOT_FOUND", "source not found")
-            if row.state == "ready" and row.expires_at and row.expires_at <= self._now():
-                raise SessionMediaError("SESSION_SOURCE_EXPIRED", "source media has expired")
-            if row.state != "ready" or row.purged_at is not None:
-                raise SessionMediaError("SESSION_SOURCE_UNAVAILABLE", "source is unavailable")
-            try:
-                path = self._resolve_relative(row.relative_path)
-                path = self._validated_existing_file(path)
-            except SessionMediaError:
-                raise SessionMediaError(
-                    "SESSION_SOURCE_UNAVAILABLE", "source is unavailable"
-                ) from None
-            return path, self._state(row)
+                )
+        except JobStoreError:
+            raise
+        except SQLAlchemyError:
+            raise SessionMediaError(
+                "DATABASE_UNAVAILABLE", "source preview is unavailable"
+            ) from None
+        if row is None:
+            raise SessionMediaError("SESSION_SOURCE_NOT_FOUND", "source not found")
+        if row.state == "ready" and row.expires_at and row.expires_at <= self._now():
+            raise SessionMediaError("SESSION_SOURCE_EXPIRED", "source media has expired")
+        if row.state != "ready" or row.purged_at is not None:
+            raise SessionMediaError("SESSION_SOURCE_UNAVAILABLE", "source is unavailable")
+        try:
+            path = self._resolve_relative(row.relative_path)
+            path = self._validated_existing_file(path)
+        except SessionMediaError:
+            raise SessionMediaError(
+                "SESSION_SOURCE_UNAVAILABLE", "source is unavailable"
+            ) from None
+        return path, self._state(row)
 
     async def purge(
         self,
@@ -830,31 +851,48 @@ class SessionMediaStore:
         return owner
 
     @asynccontextmanager
-    async def _session_lock(self, session_id: str) -> AsyncIterator[AsyncConnection]:
+    async def _session_lock(
+        self,
+        session_id: str,
+        *,
+        wait: bool = False,
+    ) -> AsyncIterator[AsyncConnection]:
         if not JOB_ID_PATTERN.fullmatch(str(session_id or "")):
             raise SessionMediaError("SESSION_NOT_FOUND", "session not found")
         connection = None
         acquired = False
         try:
             connection = await self.database.engine.connect()
-            acquired = bool(
-                await connection.scalar(
+            parameters = {
+                "lock_name": f"openstoryline:session-source:{session_id}",
+                "seed": SESSION_MEDIA_LOCK_SEED,
+            }
+            if wait:
+                async with asyncio.timeout(max(5, self.database.query_timeout)):
+                    await connection.execute(
+                        text(
+                            "SELECT pg_advisory_lock("
+                            "hashtextextended(:lock_name, :seed))"
+                        ),
+                        parameters,
+                    )
+                acquired = True
+            else:
+                acquired = bool(await connection.scalar(
                     text(
                         "SELECT pg_try_advisory_lock("
                         "hashtextextended(:lock_name, :seed))"
                     ),
-                    {
-                        "lock_name": f"openstoryline:session-source:{session_id}",
-                        "seed": SESSION_MEDIA_LOCK_SEED,
-                    },
-                )
-            )
+                    parameters,
+                ))
             await connection.commit()
             if not acquired:
                 raise SessionMediaError("SOURCE_UPLOAD_BUSY", "source upload is busy")
             yield connection
         except JobStoreError:
             raise
+        except TimeoutError:
+            raise SessionMediaError("SOURCE_UPLOAD_BUSY", "source upload is busy") from None
         except SQLAlchemyError:
             raise SessionMediaError(
                 "DATABASE_UNAVAILABLE", "source upload coordination is unavailable"

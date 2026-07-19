@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from datetime import UTC, datetime, timedelta
+from decimal import Decimal
 from pathlib import Path
 from tempfile import TemporaryDirectory
 import asyncio
@@ -10,15 +12,22 @@ import shutil
 import subprocess
 import sys
 import unittest
+import uuid
 from unittest.mock import patch
 
-from sqlalchemy import func, select, text
+from sqlalchemy import func, select, text, update
 from sqlalchemy.engine import make_url
 
 from open_storyline.mvp.audit import AuditService
 from open_storyline.mvp.database import Database, normalize_database_url
 from open_storyline.mvp.jobs import JobManager, JobStore
-from open_storyline.mvp.models import AuditDocument, AuditReview
+from open_storyline.mvp.models import (
+    AuditDocument,
+    AuditReview,
+    PromptVersion,
+    SessionInputVideo,
+    VideoJob,
+)
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -82,6 +91,78 @@ class AuditPostgresTestCase(unittest.IsolatedAsyncioTestCase):
 
 @unittest.skipUnless(os.getenv("TEST_DATABASE_URL"), "TEST_DATABASE_URL is not configured")
 class AuditDocumentTests(AuditPostgresTestCase):
+    async def test_version_attempt_source_and_human_favorite_are_attributable(self):
+        editing_session = await self.store.create_session(
+            "Versioned audit",
+            workflow_version=2,
+        )
+        now = datetime.now(UTC)
+        source = SessionInputVideo(
+            id=uuid.uuid4().hex,
+            editing_session_id=editing_session["id"],
+            state="ready",
+            original_filename="source.mp4",
+            expected_size=12,
+            received_bytes=12,
+            media_type="video/mp4",
+            relative_path=f"{editing_session['id']}/input/source.mp4",
+            sha256="a" * 64,
+            completed_at=now,
+            expires_at=now + timedelta(days=7),
+        )
+        version = PromptVersion(
+            id=uuid.uuid4().hex,
+            editing_session_id=editing_session["id"],
+            version_number=1,
+            prompt="auditable immutable prompt",
+            settings_data={"settings_version": 1, "max_clips": 1},
+        )
+        async with self.database.sessions() as session:
+            async with session.begin():
+                session.add_all((source, version))
+        job_id = uuid.uuid4().hex
+        self.store._prepare_job_directories(job_id, include_input=False)
+        async with self.database.sessions() as session:
+            async with session.begin():
+                session.add(
+                    VideoJob(
+                        id=job_id,
+                        editing_session_id=editing_session["id"],
+                        prompt_version_id=version.id,
+                        attempt_number=1,
+                        is_favorite=True,
+                        state="completed",
+                        progress=Decimal("1"),
+                        prompt=version.prompt,
+                        request_data={"settings_version": 1, "max_clips": 1},
+                        input_data={
+                            "source_kind": "session_input_video",
+                            "input_video_id": source.id,
+                            "sha256": source.sha256,
+                            "size": source.expected_size,
+                        },
+                        result_data={},
+                        completed_at=now,
+                        media_expires_at=now + timedelta(days=7),
+                        audit_expires_at=now + timedelta(days=30),
+                    )
+                )
+        job = await self.store.load(job_id)
+
+        listed = await self.audit.list_jobs(limit=10)
+        item = listed["items"][0]
+        self.assertEqual(item["prompt_version_id"], version.id)
+        self.assertEqual(item["attempt_number"], 1)
+        self.assertTrue(item["is_favorite"])
+        self.assertEqual(item["favorite_selection_source"], "human")
+        self.assertEqual(item["source_sha256"], source.sha256)
+        self.assertEqual(item["settings_version"], 1)
+
+        shown = await self.audit.show_job(job["id"])
+        self.assertEqual(shown["editing_session"]["workflow_version"], 2)
+        self.assertEqual(shown["editing_session"]["input_video"]["id"], source.id)
+        self.assertEqual(shown["job"]["prompt_version_id"], version.id)
+
     async def test_json_is_full_sanitized_versioned_and_idempotent(self):
         job = await self.create_job(prompt="retain the complete plan")
         document = self.store.output_dir(job["id"]) / "manifest.json"

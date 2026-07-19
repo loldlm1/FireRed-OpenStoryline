@@ -161,10 +161,16 @@ class JobStore:
         max_active_jobs: int | None = None,
         media_retention_days: int | None = None,
         audit_retention_days: int | None = None,
+        session_media_root: str | Path | None = None,
     ) -> None:
         self.root = Path(root).expanduser().resolve()
         self.root.mkdir(parents=True, exist_ok=True)
         self.database = database
+        self.session_media_root = (
+            Path(session_media_root).expanduser().resolve()
+            if session_media_root is not None
+            else (self.root.parent / "mvp_sessions").resolve()
+        )
         self.max_active_jobs = max_active_jobs or _bounded_int(
             "OPENSTORYLINE_MAX_ACTIVE_JOBS", 20, 1, 1000
         )
@@ -277,9 +283,16 @@ class JobStore:
         finally:
             temporary.unlink(missing_ok=True)
 
-    def _prepare_job_directories(self, job_id: str) -> Path:
+    def _prepare_job_directories(
+        self,
+        job_id: str,
+        *,
+        include_input: bool = True,
+    ) -> Path:
         job_dir = self._job_dir(job_id)
-        (job_dir / "input").mkdir(parents=True)
+        job_dir.mkdir(parents=True)
+        if include_input:
+            (job_dir / "input").mkdir()
         (job_dir / "output").mkdir()
         (job_dir / "work").mkdir()
         return job_dir
@@ -441,7 +454,12 @@ class JobStore:
             stock_asset_limit = validate_stock_asset_limit(max_stock_assets_per_clip)
         except EditPlanError as exc:
             raise JobStoreError(exc.code, str(exc)) from exc
-        await self.get_session(editing_session_id)
+        editing_session = await self.get_session(editing_session_id)
+        if editing_session["workflow_version"] != 1:
+            raise JobStoreError(
+                "SESSION_WORKFLOW_REUSABLE",
+                "reusable sessions require prompt-version run creation",
+            )
         identifier = job_id or uuid.uuid4().hex
         if not JOB_ID_PATTERN.fullmatch(identifier):
             raise JobStoreError("JOB_ID_INVALID", "invalid job id")
@@ -652,6 +670,20 @@ class JobStore:
                             if owner is not None and owner.audit_expires_at < row.audit_expires_at:
                                 owner.audit_expires_at = row.audit_expires_at
                                 owner.updated_at = now
+                            if row.prompt_version_id is not None:
+                                source = await session.scalar(
+                                    select(SessionInputVideo)
+                                    .where(
+                                        SessionInputVideo.editing_session_id
+                                        == row.editing_session_id,
+                                        SessionInputVideo.state == "ready",
+                                        SessionInputVideo.purged_at.is_(None),
+                                    )
+                                    .with_for_update()
+                                )
+                                if source is not None:
+                                    source.expires_at = now + self.media_retention
+                                    source.updated_at = now
                             artifacts = list(
                                 (
                                     await session.execute(
@@ -756,13 +788,88 @@ class JobStore:
 
     async def source_path(self, job_id: str) -> Path:
         state = await self.load(job_id)
-        filename = str((state.get("input") or {}).get("stored_filename") or "")
+        input_data = state.get("input") or {}
+        if input_data.get("source_kind") == "session_input_video":
+            return await self._session_source_path(state)
+        filename = str(input_data.get("stored_filename") or "")
         if not filename or Path(filename).name != filename:
             raise JobStoreError("JOB_INPUT_MISSING", "job input is missing")
         path = (self._job_dir(job_id) / "input" / filename).resolve()
         input_dir = (self._job_dir(job_id) / "input").resolve()
         if input_dir not in path.parents or not path.is_file():
             raise JobStoreError("JOB_INPUT_MISSING", "job input is missing")
+        return path
+
+    async def _session_source_path(self, state: dict[str, Any]) -> Path:
+        input_data = state.get("input") or {}
+        source_id = str(input_data.get("input_video_id") or "")
+        relative_value = str(input_data.get("relative_path") or "")
+        expected_hash = str(input_data.get("sha256") or "")
+        expected_size = int(input_data.get("size") or 0)
+        if (
+            not JOB_ID_PATTERN.fullmatch(source_id)
+            or len(expected_hash) != 64
+            or expected_size <= 0
+        ):
+            raise JobStoreError("SESSION_SOURCE_UNAVAILABLE", "session source is unavailable")
+        try:
+            async with self.database.sessions() as session:
+                source = await session.scalar(
+                    select(SessionInputVideo).where(
+                        SessionInputVideo.id == source_id,
+                        SessionInputVideo.editing_session_id
+                        == state["editing_session_id"],
+                    )
+                )
+        except SQLAlchemyError:
+            raise JobStoreError(
+                "DATABASE_UNAVAILABLE", "session source is unavailable"
+            ) from None
+        now = _utcnow()
+        if (
+            source is None
+            or source.state != "ready"
+            or source.purged_at is not None
+            or source.expires_at is None
+            or source.expires_at <= now
+        ):
+            raise JobStoreError("SESSION_SOURCE_UNAVAILABLE", "session source is unavailable")
+        if (
+            source.relative_path != relative_value
+            or source.sha256 != expected_hash
+            or source.expected_size != expected_size
+            or source.received_bytes != expected_size
+        ):
+            raise JobStoreError("SESSION_SOURCE_CHANGED", "session source identity changed")
+        relative = Path(relative_value)
+        if (
+            relative.is_absolute()
+            or ".." in relative.parts
+            or len(relative.parts) != 3
+            or relative.parts[0] != state["editing_session_id"]
+            or relative.parts[1] != "input"
+            or not relative.parts[2].startswith("source.")
+        ):
+            raise JobStoreError("SESSION_SOURCE_PATH_INVALID", "session source path is invalid")
+        path = self.session_media_root / relative
+        current = self.session_media_root
+        for part in relative.parts[:-1]:
+            current /= part
+            if current.is_symlink():
+                raise JobStoreError(
+                    "SESSION_SOURCE_PATH_INVALID", "session source path is invalid"
+                )
+        resolved = path.resolve(strict=False)
+        if (
+            self.session_media_root not in resolved.parents
+            or path.is_symlink()
+            or not path.is_file()
+            or path.stat().st_size != expected_size
+        ):
+            raise JobStoreError("SESSION_SOURCE_UNAVAILABLE", "session source is unavailable")
+        digest = await asyncio.to_thread(_sha256_file, path)
+        if digest != expected_hash:
+            raise JobStoreError("SESSION_SOURCE_CHANGED", "session source identity changed")
         return path
 
     async def register_artifact(

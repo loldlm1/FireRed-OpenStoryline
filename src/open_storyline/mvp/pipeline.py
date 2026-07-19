@@ -552,8 +552,16 @@ class MVPJobProcessor:
         manifest_path = output_dir / "manifest.json"
         manifest_path.write_text(json.dumps({
             "job_id": job_id,
+            "run": {
+                "prompt_version_id": state.get("prompt_version_id"),
+                "attempt_number": state.get("attempt_number"),
+                "settings_version": request.get("settings_version"),
+                "is_favorite": bool(state.get("is_favorite")),
+            },
             "source": {
+                "input_video_id": state["input"].get("input_video_id"),
                 "filename": state["input"]["original_filename"],
+                "sha256": state["input"].get("sha256"),
                 "duration_ms": media.duration_ms,
                 "width": media.width,
                 "height": media.height,

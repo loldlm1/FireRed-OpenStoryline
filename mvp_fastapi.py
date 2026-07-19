@@ -32,6 +32,7 @@ from open_storyline.mvp.database import Database
 from open_storyline.mvp.jobs import JobManager, JobStore
 from open_storyline.mvp.observability import emit_event, finish_request, start_request
 from open_storyline.mvp.pipeline import MVPJobProcessor
+from open_storyline.mvp.prompt_versions import PromptVersionService
 from open_storyline.mvp.retention import (
     RetentionScheduler,
     RetentionService,
@@ -75,6 +76,7 @@ def create_app() -> FastAPI:
             database,
             media_retention_days=retention_settings.media_days,
             audit_retention_days=retention_settings.audit_days,
+            session_media_root=Path(config.project.outputs_dir) / "mvp_sessions",
         )
         session_media = SessionMediaStore(
             Path(config.project.outputs_dir) / "mvp_sessions",
@@ -82,6 +84,7 @@ def create_app() -> FastAPI:
             media_retention_days=retention_settings.media_days,
             incomplete_upload_hours=retention_settings.incomplete_upload_hours,
         )
+        prompt_versions = PromptVersionService(store, session_media)
         audit_service = AuditService(store)
         store.attach_audit(audit_service)
         retention_service = RetentionService(
@@ -99,6 +102,7 @@ def create_app() -> FastAPI:
         app.state.mvp_manager = manager
         app.state.audit_service = audit_service
         app.state.session_media = session_media
+        app.state.prompt_versions = prompt_versions
         app.state.retention_service = retention_service
         app.state.retention_scheduler = retention_scheduler
         try:
@@ -119,6 +123,7 @@ def create_app() -> FastAPI:
     app.state.auth_service = None
     app.state.retention_service = None
     app.state.session_media = None
+    app.state.prompt_versions = None
     app.state.session_workspace_mode = workspace_settings.mode
 
     @app.middleware("http")
@@ -221,6 +226,7 @@ def create_app() -> FastAPI:
         lambda: app.state.retention_service,
         lambda: app.state.session_media,
         lambda: app.state.session_workspace_mode,
+        lambda: app.state.prompt_versions,
     ))
     app.include_router(create_auth_router(lambda: app.state.auth_service))
     return app
