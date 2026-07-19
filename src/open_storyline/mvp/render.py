@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from dataclasses import asdict, dataclass
 from pathlib import Path
-from typing import Any, Sequence
+from typing import Any, Callable, Sequence
 import base64
 import json
 import re
@@ -16,6 +16,7 @@ from open_storyline.mvp.compositor import (
 )
 from open_storyline.mvp.edit_plan import EditPlan
 from open_storyline.mvp.ffmpeg_filters import build_reframe_filtergraph
+from open_storyline.mvp.observability import emit_event
 from open_storyline.mvp.visual_understanding import VisualUnderstanding
 
 
@@ -26,6 +27,27 @@ class RenderError(RuntimeError):
 
     def to_dict(self) -> dict[str, str]:
         return {"code": self.code, "message": str(self)}
+
+
+RenderProgressCallback = Callable[[str, int, int], None]
+
+
+def _notify_render_progress(
+    callback: RenderProgressCallback | None,
+    phase: str,
+    current: int,
+    total: int,
+) -> None:
+    if callback is None:
+        return
+    try:
+        callback(phase, current, total)
+    except Exception:
+        emit_event(
+            "render_activity_callback_failed",
+            stage="rendering",
+            error_code="RENDER_ACTIVITY_CALLBACK_FAILED",
+        )
 
 
 @dataclass(frozen=True)
@@ -222,17 +244,21 @@ class CPUShortRenderer:
         clips: Sequence[ShortCandidate],
         transcript_segments: Sequence[dict[str, Any]],
         destination_dir: str | Path,
+        progress_callback: RenderProgressCallback | None = None,
     ) -> list[RenderedShort]:
-        return [
-            self.render(
+        total = len(clips)
+        rendered = []
+        for index, clip in enumerate(clips, start=1):
+            _notify_render_progress(progress_callback, "started", index, total)
+            rendered.append(self.render(
                 source=source,
                 clip=clip,
                 transcript_segments=transcript_segments,
                 destination_dir=destination_dir,
                 index=index,
-            )
-            for index, clip in enumerate(clips, start=1)
-        ]
+            ))
+            _notify_render_progress(progress_callback, "completed", index, total)
+        return rendered
 
 
 class AgenticShortRenderer:
@@ -253,6 +279,7 @@ class AgenticShortRenderer:
         crop_smoothing_alpha: float = 0.65,
         max_crop_velocity_ratio_per_second: float = 0.45,
         resolved_assets: dict[str, str | Path] | None = None,
+        progress_callback: RenderProgressCallback | None = None,
     ) -> AgenticRenderResult:
         if len(edit_plan.clips) != len(selected_clips):
             raise RenderError(
@@ -276,7 +303,12 @@ class AgenticShortRenderer:
         rendered: list[RenderedShort] = []
         executions: list[dict[str, Any]] = []
 
-        for clip_plan, selected_clip in zip(edit_plan.clips, selected_clips):
+        total = len(selected_clips)
+        for index, (clip_plan, selected_clip) in enumerate(
+            zip(edit_plan.clips, selected_clips),
+            start=1,
+        ):
+            _notify_render_progress(progress_callback, "started", index, total)
             if (
                 clip_plan.source_window.start_ms != selected_clip.start_ms
                 or clip_plan.source_window.end_ms != selected_clip.end_ms
@@ -376,6 +408,7 @@ class AgenticShortRenderer:
                 "asset_ids": used_asset_ids,
                 "asset_kinds": asset_kinds,
             })
+            _notify_render_progress(progress_callback, "completed", index, total)
 
         return AgenticRenderResult(
             rendered=tuple(rendered),

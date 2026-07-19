@@ -4,6 +4,7 @@ from tempfile import TemporaryDirectory
 import shutil
 import subprocess
 import unittest
+from unittest.mock import patch
 
 from types import SimpleNamespace
 
@@ -25,6 +26,44 @@ from open_storyline.mvp.visual_understanding import NormalizedBox, RegionObserva
 
 @unittest.skipUnless(shutil.which("ffmpeg") and shutil.which("ffprobe"), "FFmpeg is required")
 class CPUShortRendererTests(unittest.TestCase):
+    def test_render_plan_callbacks_are_ordered_and_non_fatal(self):
+        clips = [
+            ShortCandidate(0, 1000, "One", "Hook", "Reason", 1.0),
+            ShortCandidate(1000, 2000, "Two", "Hook", "Reason", 0.9),
+        ]
+        renderer = CPUShortRenderer()
+        calls = []
+        with patch.object(renderer, "render", side_effect=["one", "two"]):
+            rendered = renderer.render_plan(
+                source="source.mp4",
+                clips=clips,
+                transcript_segments=[],
+                destination_dir="output",
+                progress_callback=lambda phase, current, total: calls.append(
+                    (phase, current, total)
+                ),
+            )
+        self.assertEqual(rendered, ["one", "two"])
+        self.assertEqual(
+            calls,
+            [
+                ("started", 1, 2),
+                ("completed", 1, 2),
+                ("started", 2, 2),
+                ("completed", 2, 2),
+            ],
+        )
+
+        with patch.object(renderer, "render", return_value="ok"):
+            rendered = renderer.render_plan(
+                source="source.mp4",
+                clips=clips[:1],
+                transcript_segments=[],
+                destination_dir="output",
+                progress_callback=lambda *_args: (_ for _ in ()).throw(RuntimeError()),
+            )
+        self.assertEqual(rendered, ["ok"])
+
     def test_renders_vertical_h264_short_with_subtitles(self):
         with TemporaryDirectory() as tmpdir:
             root = Path(tmpdir)
@@ -133,6 +172,7 @@ class CPUShortRendererTests(unittest.TestCase):
                 crf=30,
                 timeout=120,
             ))
+            progress = []
             result = renderer.render_plan(
                 source=source,
                 edit_plan=edit_plan,
@@ -140,6 +180,9 @@ class CPUShortRendererTests(unittest.TestCase):
                 visual_understanding=visual,
                 transcript_segments=[{"start": 200, "end": 1500, "text": "Target visible"}],
                 destination_dir=root / "agentic",
+                progress_callback=lambda phase, current, total: progress.append(
+                    (phase, current, total)
+                ),
             )
 
             rendered = result.rendered[0]
@@ -150,6 +193,7 @@ class CPUShortRendererTests(unittest.TestCase):
             self.assertTrue(info.has_audio)
             self.assertEqual(result.execution["summary"]["encodes"], 1)
             self.assertEqual(result.execution["summary"]["fallbacks"], 0)
+            self.assertEqual(progress, [("started", 1, 1), ("completed", 1, 1)])
             self.assertNotIn(str(source), result.execution["clips"][0]["filtergraph"])
 
             pixel = subprocess.run([

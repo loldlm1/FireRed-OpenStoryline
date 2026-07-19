@@ -6,6 +6,7 @@ import asyncio
 import json
 
 from open_storyline.config import Settings
+from open_storyline.mvp.activity import ActivityService, STAGES, retryable_error
 from open_storyline.mvp.assets import (
     generated_asset_server_cap,
     generated_asset_size,
@@ -38,6 +39,7 @@ from open_storyline.mvp.creative_qa import (
 )
 from open_storyline.mvp.jobs import JobStore
 from open_storyline.mvp.ninerouter import NineRouterClient
+from open_storyline.mvp.observability import emit_event
 from open_storyline.mvp.render import (
     AgenticShortRenderer,
     CPUShortRenderer,
@@ -63,6 +65,7 @@ class MVPJobProcessor:
 
     async def __call__(self, job_id: str, store: JobStore) -> dict[str, Any]:
         state = await store.load(job_id)
+        activity = ActivityService(store)
         request = state.get("request") or {}
         agentic_requested = request.get("edit_mode") == "agentic"
         server_mode = None
@@ -120,11 +123,31 @@ class MVPJobProcessor:
         media = await asyncio.to_thread(probe_media, source)
         if not media.has_audio:
             raise RemoteSTTError("MEDIA_HAS_NO_AUDIO", "source video must contain an audio stream")
-        await store.update(job_id, progress=0.18, stage="extracting_audio")
+        await activity.stage(job_id, "extracting_audio")
         audio = await asyncio.to_thread(extract_audio_for_stt, source, work_dir / "audio.mp3")
+        await activity.emit_safely(
+            job_id,
+            stage="extracting_audio",
+            category="analysis",
+            status="completed",
+            message_key="activity.analysis.audio_ready",
+            progress=STAGES["extracting_audio"].progress,
+            tool="FFmpeg",
+        )
 
-        await store.update(job_id, progress=0.28, stage="remote_transcription")
+        await activity.stage(job_id, "remote_transcription")
         transcript = await self.stt.transcribe(audio, language=self.config.remote_asr.language)
+        await activity.emit_safely(
+            job_id,
+            stage="remote_transcription",
+            category="provider",
+            status="completed",
+            message_key="activity.provider.transcription_ready",
+            progress=STAGES["remote_transcription"].progress,
+            provider="Mistral",
+            tool="Voxtral",
+            attempt_number=max(1, len(transcript.attempts)),
+        )
         transcript_path = output_dir / "transcript.json"
         transcript_path.write_text(json.dumps({
             "model": transcript.model,
@@ -144,7 +167,7 @@ class MVPJobProcessor:
         remote_client = NineRouterClient.from_config(self.config.ninerouter)
         if agentic_requested:
             agentic_config = self.config.agentic_editing
-            await store.update(job_id, progress=0.42, stage="detecting_scenes")
+            await activity.stage(job_id, "detecting_scenes")
             scene_report = await asyncio.to_thread(
                 detect_scene_boundaries,
                 source,
@@ -159,8 +182,17 @@ class MVPJobProcessor:
                 encoding="utf-8",
             )
             await store.register_artifact(job_id, scene_path, kind="scene_boundaries")
+            await activity.emit_safely(
+                job_id,
+                stage="detecting_scenes",
+                category="analysis",
+                status="completed",
+                message_key="activity.analysis.scenes_ready",
+                progress=STAGES["detecting_scenes"].progress,
+                tool="FFmpeg",
+            )
 
-            await store.update(job_id, progress=0.48, stage="sampling_agentic_frames")
+            await activity.stage(job_id, "sampling_agentic_frames")
             frame_manifest = await asyncio.to_thread(
                 sample_frames,
                 source,
@@ -172,7 +204,17 @@ class MVPJobProcessor:
                 max_height=agentic_config.vision_frame_max_height,
                 max_frame_bytes=agentic_config.vision_frame_max_bytes,
             )
-            await store.update(job_id, progress=0.54, stage="remote_visual_understanding")
+            await activity.emit_safely(
+                job_id,
+                stage="sampling_agentic_frames",
+                category="analysis",
+                status="completed",
+                message_key="activity.analysis.frames_ready",
+                progress=STAGES["sampling_agentic_frames"].progress,
+                tool="FFmpeg",
+                sampled_frames=len(frame_manifest.frames),
+            )
+            await activity.stage(job_id, "remote_visual_understanding")
             visual_understanding = await VisualUnderstandingPlanner(remote_client).plan(
                 frame_manifest=frame_manifest,
                 scene_report=scene_report,
@@ -183,6 +225,17 @@ class MVPJobProcessor:
                 attempt.to_dict()
                 for attempt in getattr(remote_client, "last_attempts", ())
             ]
+            await activity.emit_safely(
+                job_id,
+                stage="remote_visual_understanding",
+                category="provider",
+                status="completed",
+                message_key="activity.provider.video_understood",
+                progress=STAGES["remote_visual_understanding"].progress,
+                provider="9Router",
+                tool="Visual understanding",
+                attempt_number=max(1, len(visual_attempts)),
+            )
             visual_path = output_dir / names.visual_understanding
             visual_path.write_text(
                 json.dumps(visual_understanding.to_dict(), ensure_ascii=False, indent=2),
@@ -191,15 +244,33 @@ class MVPJobProcessor:
             await store.register_artifact(job_id, visual_path, kind="visual_understanding")
             frames = frame_manifest.image_data_urls
         else:
-            await store.update(job_id, progress=0.48, stage="sampling_frames")
+            await activity.stage(job_id, "sampling_frames")
             frames = await asyncio.to_thread(
                 extract_frame_data_urls,
                 source,
                 duration_ms=media.duration_ms,
                 count=self.config.mvp.frame_count,
             )
+            await activity.emit_safely(
+                job_id,
+                stage="sampling_frames",
+                category="analysis",
+                status="completed",
+                message_key="activity.analysis.frames_ready",
+                progress=STAGES["sampling_frames"].progress,
+                tool="FFmpeg",
+                sampled_frames=len(frames),
+            )
+            await activity.emit_safely(
+                job_id,
+                stage="sampling_frames",
+                category="provider",
+                status="skipped",
+                message_key="activity.provider.visual_understanding_skipped",
+                progress=STAGES["sampling_frames"].progress,
+            )
 
-        await store.update(job_id, progress=0.58, stage="remote_planning")
+        await activity.stage(job_id, "remote_planning")
         planner = ShortsPlanner(remote_client)
         plan = await planner.plan(
             editing_prompt=state["prompt"],
@@ -213,6 +284,18 @@ class MVPJobProcessor:
             attempt.to_dict()
             for attempt in getattr(remote_client, "last_attempts", ())
         ]
+        await activity.emit_safely(
+            job_id,
+            stage="remote_planning",
+            category="planning",
+            status="completed",
+            message_key="activity.planning.clips_selected",
+            progress=STAGES["remote_planning"].progress,
+            provider="9Router",
+            tool="Clip planner",
+            attempt_number=max(1, len(shorts_attempts)),
+            selected_clips=len(plan.clips),
+        )
 
         agentic_manifest = None
         if agentic_requested:
@@ -229,7 +312,7 @@ class MVPJobProcessor:
             )
             await store.register_artifact(job_id, shorts_plan_path, kind="shorts_plan")
 
-            await store.update(job_id, progress=0.62, stage="planning_agentic_edit")
+            await activity.stage(job_id, "planning_agentic_edit")
             edit_plan = await AgenticEditPlanner(remote_client).plan(
                 editing_prompt=state["prompt"],
                 shorts_plan=plan,
@@ -254,6 +337,18 @@ class MVPJobProcessor:
                 attempt.to_dict()
                 for attempt in getattr(remote_client, "last_attempts", ())
             ]
+            await activity.emit_safely(
+                job_id,
+                stage="planning_agentic_edit",
+                category="planning",
+                status="completed",
+                message_key="activity.planning.edit_ready",
+                progress=STAGES["planning_agentic_edit"].progress,
+                provider="9Router",
+                tool="Edit planner",
+                attempt_number=max(1, len(edit_planner_attempts)),
+                clip_count=len(edit_plan.clips),
+            )
             edit_plan_path = output_dir / names.edit_plan
             edit_plan_path.write_text(
                 json.dumps(edit_plan.to_dict(), ensure_ascii=False, indent=2),
@@ -299,7 +394,11 @@ class MVPJobProcessor:
 
             if server_mode == "render":
                 if planned_asset_ids:
-                    await store.update(job_id, progress=0.66, stage="resolving_assets")
+                    await activity.stage(
+                        job_id,
+                        "resolving_assets",
+                        asset_count=len(planned_asset_ids),
+                    )
                 generated_asset_ids = {
                     asset.id
                     for clip in edit_plan.clips
@@ -325,6 +424,21 @@ class MVPJobProcessor:
                         if generated_asset_ids
                         else "1024x1024"
                     ),
+                )
+                await activity.emit_safely(
+                    job_id,
+                    stage="resolving_assets",
+                    category="asset",
+                    status="completed" if planned_asset_ids else "skipped",
+                    message_key=(
+                        "activity.asset.resolved"
+                        if planned_asset_ids
+                        else "activity.asset.not_requested"
+                    ),
+                    progress=STAGES["resolving_assets"].progress,
+                    tool="Asset resolver",
+                    asset_count=len(asset_result.paths),
+                    attempt_number=int(asset_result.provider_call_count),
                 )
                 resolved_asset_ids = set(asset_result.paths)
                 preflight = build_preflight(
@@ -354,6 +468,15 @@ class MVPJobProcessor:
                     status="shadow_planned" if planned_asset_ids else "no_requests",
                 )
                 preflight = preliminary_preflight
+                await activity.emit_safely(
+                    job_id,
+                    stage="planning_agentic_edit",
+                    category="asset",
+                    status="skipped",
+                    message_key="activity.asset.shadow_mode",
+                    progress=STAGES["resolving_assets"].progress,
+                    asset_count=len(planned_asset_ids),
+                )
 
             asset_kinds = {
                 asset.id: asset.kind
@@ -412,7 +535,25 @@ class MVPJobProcessor:
                 },
             }
 
-        await store.update(job_id, progress=0.68, stage="rendering")
+        if not agentic_requested:
+            await activity.emit_safely(
+                job_id,
+                stage="remote_planning",
+                category="asset",
+                status="skipped",
+                message_key="activity.asset.not_requested",
+                progress=STAGES["resolving_assets"].progress,
+                asset_count=0,
+            )
+        render_stage = await activity.stage(
+            job_id,
+            "rendering",
+            total=len(plan.clips),
+            current=0,
+        )
+        render_floor = float(
+            render_stage.get("progress", STAGES["rendering"].progress)
+        )
         render_settings = RenderSettings(
             width=self.config.mvp.render_width,
             height=self.config.mvp.render_height,
@@ -420,6 +561,41 @@ class MVPJobProcessor:
             preset=self.config.mvp.render_preset,
             crf=self.config.mvp.render_crf,
         )
+        loop = asyncio.get_running_loop()
+
+        def render_activity(phase: str, current: int, total: int) -> None:
+            completed = current if phase == "completed" else current - 1
+            progress = max(
+                render_floor,
+                min(0.87, 0.68 + (0.18 * max(0, completed) / max(1, total))),
+            )
+            future = asyncio.run_coroutine_threadsafe(
+                activity.emit_safely(
+                    job_id,
+                    stage="rendering",
+                    category="render",
+                    status="completed" if phase == "completed" else "progress",
+                    message_key=(
+                        "activity.render.clip_completed"
+                        if phase == "completed"
+                        else "activity.render.rendering_clip"
+                    ),
+                    progress=progress,
+                    current=current,
+                    total=total,
+                    tool="FFmpeg",
+                ),
+                loop,
+            )
+            try:
+                future.result(timeout=10)
+            except Exception:
+                emit_event(
+                    "render_activity_callback_failed",
+                    job_id=job_id,
+                    stage="rendering",
+                    error_code="RENDER_ACTIVITY_CALLBACK_FAILED",
+                )
         if agentic_requested and server_mode == "render":
             agentic_result = await asyncio.to_thread(
                 AgenticShortRenderer(render_settings).render_plan,
@@ -436,6 +612,7 @@ class MVPJobProcessor:
                     self.config.agentic_editing.max_crop_velocity_ratio_per_second
                 ),
                 resolved_assets=asset_result.paths,
+                progress_callback=render_activity,
             )
             rendered = list(agentic_result.rendered)
             render_execution_path = output_dir / names.render_execution
@@ -456,13 +633,14 @@ class MVPJobProcessor:
                 clips=plan.clips,
                 transcript_segments=transcript.segments,
                 destination_dir=output_dir,
+                progress_callback=render_activity,
             )
         effects_plan = None
         final_outputs = []
         qa_inputs: list[QAInput] = []
         ffmpega = None
         if ffmpega_enabled(self.config.ffmpega):
-            await store.update(job_id, progress=0.88, stage="planning_effects")
+            await activity.stage(job_id, "planning_effects")
             effects_plan = await EffectsPlanner(
                 NineRouterClient.from_config(self.config.ninerouter)
             ).plan(
@@ -475,6 +653,25 @@ class MVPJobProcessor:
             )
             if effects_plan.effects:
                 ffmpega = FFMPEGAClient.from_config(self.config.ffmpega)
+            await activity.emit_safely(
+                job_id,
+                stage="planning_effects",
+                category="planning",
+                status="completed",
+                message_key="activity.planning.effects_ready",
+                progress=STAGES["planning_effects"].progress,
+                provider="9Router",
+                tool="Effects planner",
+            )
+        else:
+            await activity.emit_safely(
+                job_id,
+                stage="rendering",
+                category="planning",
+                status="skipped",
+                message_key="activity.planning.effects_skipped",
+                progress=STAGES["planning_effects"].progress,
+            )
         for item in rendered:
             final_video = item.video_path
             if ffmpega is not None and effects_plan is not None:
@@ -504,7 +701,7 @@ class MVPJobProcessor:
             qa_manifest: dict[str, Any] = {"enabled": False, "status": "disabled"}
             try:
                 if creative_qa_enabled(self.config.agentic_editing):
-                    await store.update(job_id, progress=0.94, stage="post_render_qa")
+                    await activity.stage(job_id, "post_render_qa")
                     strict_qa = creative_qa_strict(self.config.agentic_editing)
                     semantic_enabled = semantic_qa_enabled(self.config.agentic_editing)
                     qa_artifacts = await generate_creative_qa_artifacts(
@@ -539,16 +736,56 @@ class MVPJobProcessor:
                         "creative_conformance": names.creative_conformance,
                         "registered": registered,
                     }
+                    await activity.emit_safely(
+                        job_id,
+                        stage="post_render_qa",
+                        category="qa",
+                        status="completed",
+                        message_key="activity.qa.completed",
+                        progress=STAGES["post_render_qa"].progress,
+                        tool="Deterministic QA",
+                        clip_count=len(qa_inputs),
+                    )
+                else:
+                    await activity.emit_safely(
+                        job_id,
+                        stage="planning_effects" if ffmpega_enabled(self.config.ffmpega) else "rendering",
+                        category="qa",
+                        status="skipped",
+                        message_key="activity.qa.skipped",
+                        progress=STAGES["post_render_qa"].progress,
+                    )
             except asyncio.CancelledError:
                 raise
             except Exception as exc:
+                error_code = str(getattr(exc, "code", "CREATIVE_QA_UNAVAILABLE"))[:80]
                 qa_manifest = {
                     "enabled": True,
                     "status": "unavailable",
-                    "error_code": str(getattr(exc, "code", "CREATIVE_QA_UNAVAILABLE"))[:80],
+                    "error_code": error_code,
                 }
+                await activity.emit_safely(
+                    job_id,
+                    stage="post_render_qa",
+                    category="qa",
+                    status="warning",
+                    message_key="activity.qa.unavailable",
+                    progress=STAGES["post_render_qa"].progress,
+                    error_code=error_code,
+                    retryable=retryable_error(error_code),
+                )
             agentic_manifest["qa"] = qa_manifest
+        else:
+            await activity.emit_safely(
+                job_id,
+                stage="planning_effects" if ffmpega_enabled(self.config.ffmpega) else "rendering",
+                category="qa",
+                status="skipped",
+                message_key="activity.qa.skipped",
+                progress=STAGES["post_render_qa"].progress,
+            )
 
+        await activity.stage(job_id, "packaging", clip_count=len(rendered))
         manifest_path = output_dir / "manifest.json"
         manifest_path.write_text(json.dumps({
             "job_id": job_id,
