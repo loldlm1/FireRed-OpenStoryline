@@ -3,17 +3,20 @@ import { apiJson, download, setAuthExpiredHandler } from './api.js';
 import { ResumableUpload } from './upload.js';
 import {
   appendActivity,
+  cleanupMedia,
   closeDialog,
   elements,
   errorMessage,
   formatBytes,
   formatElapsed,
   openDialog,
+  renderComparison,
   renderConnection,
   renderJob,
-  renderRecentVersions,
+  renderLegacyHistory,
   renderSessions,
   renderSource,
+  renderVersionHistory,
   renderWorkspace,
   resetActivity,
   setComposerAvailability,
@@ -32,16 +35,28 @@ const state = {
   currentSession: null,
   source: { state: 'missing' },
   versions: [],
+  legacyJobs: [],
+  nextVersionCursor: null,
+  detailsByVersion: new Map(),
+  expandedRunIds: new Set(),
+  selectedRunIds: new Set(),
+  favoritePending: false,
   currentJob: null,
   upload: null,
   activity: null,
+  sessionEpoch: 0,
+  runEpoch: 0,
+  comparisonReturnFocus: null,
 };
 
 function stopTransientWork() {
+  state.sessionEpoch += 1;
+  state.runEpoch += 1;
   state.activity?.stop();
   state.activity = null;
   state.upload?.pause();
   state.upload = null;
+  cleanupMedia(document);
 }
 
 function setSessionUrl(sessionId) {
@@ -68,18 +83,99 @@ function latestRun(versions) {
 }
 
 function updateSessionDeleteAvailability() {
-  elements.sessionDelete.disabled = !state.currentSession || Boolean(activeRun(state.versions));
+  const legacyActive = state.legacyJobs.find((run) => ['queued', 'running'].includes(run.state));
+  elements.sessionDelete.disabled = !state.currentSession
+    || Boolean(activeRun(state.versions))
+    || Boolean(legacyActive);
+}
+
+function resetHistoryState() {
+  state.versions = [];
+  state.legacyJobs = [];
+  state.nextVersionCursor = null;
+  state.detailsByVersion = new Map();
+  state.expandedRunIds = new Set();
+  state.selectedRunIds = new Set();
+  state.favoritePending = false;
+}
+
+function runEntry(runId) {
+  for (const version of state.versions) {
+    const detail = state.detailsByVersion.get(version.id);
+    const run = (detail?.attempts || version.attempts || []).find((item) => item.id === runId);
+    if (run) return { version: detail || version, run };
+  }
+  return null;
+}
+
+function favoriteRunId() {
+  for (const version of state.versions) {
+    const detail = state.detailsByVersion.get(version.id);
+    const run = (detail?.attempts || version.attempts || []).find((item) => item.is_favorite);
+    if (run) return run.id;
+  }
+  return null;
+}
+
+function favoriteLabel() {
+  const favoriteId = favoriteRunId();
+  const entry = favoriteId ? runEntry(favoriteId) : null;
+  return entry
+    ? `Versión ${entry.version.version_number}, intento ${entry.run.attempt_number}`
+    : '';
+}
+
+function historyCallbacks() {
+  return {
+    onSelect: (run) => selectRun(run.id, { startedAt: run.created_at }),
+    onToggleDetail: toggleRunDetail,
+    onCompare: toggleComparisonSelection,
+    onFavorite: toggleFavorite,
+  };
+}
+
+function renderHistory() {
+  if (state.currentSession?.workflow_version !== 2) return;
+  cleanupMedia(elements.recentJobs);
+  renderVersionHistory({
+    versions: state.versions,
+    detailsByVersion: state.detailsByVersion,
+    expandedRunIds: state.expandedRunIds,
+    selectedRunIds: state.selectedRunIds,
+    activeJobId: state.currentJob?.id || '',
+    nextCursor: state.nextVersionCursor,
+    favoritePending: state.favoritePending,
+  }, historyCallbacks());
+  renderWorkspace(state.currentSession, { favoriteLabel: favoriteLabel() });
+}
+
+function mergeDetailedRun(job) {
+  if (!job?.prompt_version_id) return;
+  const version = state.versions.find((item) => item.id === job.prompt_version_id);
+  if (!version) return;
+  const detail = state.detailsByVersion.get(version.id) || { ...version };
+  const attempts = [...(detail.attempts || [])];
+  const index = attempts.findIndex((run) => run.id === job.id);
+  if (index >= 0) attempts[index] = job;
+  else attempts.unshift(job);
+  state.detailsByVersion.set(version.id, { ...detail, attempts });
+  version.attempts = (version.attempts || []).map((run) => (
+    run.id === job.id
+      ? { ...run, ...job, artifacts: undefined, input: undefined, request: undefined }
+      : run
+  ));
 }
 
 function refreshSessionViews() {
   renderSessions(state.sessions, state.currentSession?.id || '', selectSession);
-  renderWorkspace(state.currentSession);
-  renderSource(state.source, { activeUpload: Boolean(state.upload?.running) });
-  renderRecentVersions(
-    state.versions,
-    state.currentJob?.id || '',
-    (run) => selectRun(run.id, { startedAt: run.created_at }),
-  );
+  renderWorkspace(state.currentSession, { favoriteLabel: favoriteLabel() });
+  if (state.currentSession?.workflow_version === 1) {
+    renderSource({ state: 'missing' });
+    renderLegacyHistory(state.legacyJobs);
+  } else {
+    renderSource(state.source, { activeUpload: Boolean(state.upload?.running) });
+    renderHistory();
+  }
   updateSessionDeleteAvailability();
 }
 
@@ -101,12 +197,12 @@ async function checkAuth() {
 async function loadSessions(preferred = '') {
   elements.sessionError.textContent = '';
   const page = await apiJson('/api/mvp/sessions?limit=50');
-  state.sessions = (page.items || []).filter((session) => session.workflow_version === 2);
+  state.sessions = page.items || [];
   if (!state.sessions.length) {
     stopTransientWork();
     state.currentSession = null;
     state.source = { state: 'missing' };
-    state.versions = [];
+    resetHistoryState();
     state.currentJob = null;
     setSessionUrl('');
     refreshSessionViews();
@@ -121,19 +217,32 @@ async function loadSessions(preferred = '') {
 async function selectSession(sessionId) {
   if (!sessionId) return;
   stopTransientWork();
+  const epoch = state.sessionEpoch;
+  resetHistoryState();
   elements.sessionError.textContent = '';
   elements.jobError.textContent = '';
   try {
-    const [session, source, versions] = await Promise.all([
-      apiJson(`/api/mvp/sessions/${sessionId}`),
+    const session = await apiJson(`/api/mvp/sessions/${sessionId}?job_limit=50`);
+    if (epoch !== state.sessionEpoch) return;
+    state.currentSession = session;
+    state.currentJob = null;
+    setSessionUrl(session.id);
+    if (session.workflow_version === 1) {
+      state.source = { state: 'missing' };
+      state.legacyJobs = session.jobs || [];
+      refreshSessionViews();
+      resetActivity();
+      window.requestAnimationFrame(() => elements.legacyCreateSession.focus());
+      return;
+    }
+    const [source, versions] = await Promise.all([
       apiJson(`/api/mvp/sessions/${sessionId}/input-video`),
       apiJson(`/api/mvp/sessions/${sessionId}/prompt-versions?limit=20`),
     ]);
-    state.currentSession = session;
+    if (epoch !== state.sessionEpoch) return;
     state.source = source;
     state.versions = versions.items || [];
-    state.currentJob = null;
-    setSessionUrl(session.id);
+    state.nextVersionCursor = versions.next_cursor || null;
     refreshSessionViews();
     resetActivity();
     const run = activeRun(state.versions) || latestRun(state.versions);
@@ -141,51 +250,196 @@ async function selectSession(sessionId) {
     else if (source.state === 'ready') window.requestAnimationFrame(() => elements.prompt.focus());
     else if (source.state === 'missing' || source.state === 'failed') window.requestAnimationFrame(() => elements.video.focus());
   } catch (error) {
+    if (epoch !== state.sessionEpoch) return;
     elements.sessionError.textContent = errorMessage(error);
     if (error.code === 'SESSION_NOT_FOUND') await loadSessions();
   }
 }
 
 async function reloadVersions() {
-  if (!state.currentSession) return;
+  if (!state.currentSession || state.currentSession.workflow_version !== 2) return;
+  const sessionId = state.currentSession.id;
+  const epoch = state.sessionEpoch;
   const page = await apiJson(
-    `/api/mvp/sessions/${state.currentSession.id}/prompt-versions?limit=20`,
+    `/api/mvp/sessions/${sessionId}/prompt-versions?limit=20`,
   );
+  if (epoch !== state.sessionEpoch || state.currentSession?.id !== sessionId) return;
   state.versions = page.items || [];
-  renderRecentVersions(
-    state.versions,
-    state.currentJob?.id || '',
-    (run) => selectRun(run.id, { startedAt: run.created_at }),
-  );
+  state.nextVersionCursor = page.next_cursor || null;
+  renderHistory();
   updateSessionDeleteAvailability();
 }
 
+async function loadMoreVersions() {
+  if (!state.currentSession || !state.nextVersionCursor) return;
+  const sessionId = state.currentSession.id;
+  const epoch = state.sessionEpoch;
+  const cursor = state.nextVersionCursor;
+  elements.historyLoadMore.disabled = true;
+  elements.historyLoadMore.textContent = 'Cargando…';
+  try {
+    const page = await apiJson(
+      `/api/mvp/sessions/${sessionId}/prompt-versions?limit=20&cursor=${encodeURIComponent(cursor)}`,
+    );
+    if (epoch !== state.sessionEpoch || state.currentSession?.id !== sessionId) return;
+    const known = new Set(state.versions.map((version) => version.id));
+    state.versions.push(...(page.items || []).filter((version) => !known.has(version.id)));
+    state.nextVersionCursor = page.next_cursor || null;
+    renderHistory();
+  } catch (error) {
+    showToast(errorMessage(error, 'No pudimos cargar las versiones anteriores.'));
+  } finally {
+    elements.historyLoadMore.disabled = false;
+    elements.historyLoadMore.textContent = 'Cargar versiones anteriores';
+  }
+}
+
+async function loadVersionDetail(versionId) {
+  if (state.detailsByVersion.has(versionId)) return state.detailsByVersion.get(versionId);
+  const sessionId = state.currentSession?.id;
+  const epoch = state.sessionEpoch;
+  const detail = await apiJson(`/api/mvp/prompt-versions/${versionId}`);
+  if (
+    epoch !== state.sessionEpoch
+    || state.currentSession?.id !== sessionId
+    || detail.editing_session_id !== sessionId
+  ) return null;
+  state.detailsByVersion.set(versionId, detail);
+  return detail;
+}
+
+async function toggleRunDetail(versionId, runId) {
+  if (state.expandedRunIds.has(runId)) {
+    state.expandedRunIds.delete(runId);
+    renderHistory();
+    return;
+  }
+  state.expandedRunIds.add(runId);
+  renderHistory();
+  try {
+    await loadVersionDetail(versionId);
+  } catch (error) {
+    state.expandedRunIds.delete(runId);
+    showToast(errorMessage(error, 'No pudimos cargar las salidas de esta ejecución.'));
+  }
+  renderHistory();
+}
+
+function toggleComparisonSelection(_versionId, runId, selected) {
+  if (selected) {
+    if (state.selectedRunIds.size >= 2) return;
+    state.selectedRunIds.add(runId);
+  } else {
+    state.selectedRunIds.delete(runId);
+  }
+  renderHistory();
+}
+
+async function openComparison() {
+  if (state.selectedRunIds.size !== 2) return;
+  state.comparisonReturnFocus = document.activeElement;
+  elements.comparisonOpen.disabled = true;
+  try {
+    const selections = [...state.selectedRunIds].map((runId) => runEntry(runId));
+    await Promise.all(
+      selections.filter(Boolean).map((entry) => loadVersionDetail(entry.version.id)),
+    );
+    const entries = [...state.selectedRunIds].map((runId) => runEntry(runId)).filter(Boolean);
+    if (entries.length !== 2) throw new Error('comparison selection is no longer available');
+    cleanupMedia(elements.comparisonContent);
+    renderComparison(entries);
+    openDialog(elements.comparisonDialog, elements.comparisonClose);
+  } catch (error) {
+    showToast(errorMessage(error, 'No pudimos preparar esta comparación.'));
+  } finally {
+    elements.comparisonOpen.disabled = state.selectedRunIds.size !== 2;
+  }
+}
+
+function setFavoriteState(runId) {
+  for (const version of state.versions) {
+    version.attempts = (version.attempts || []).map((run) => ({
+      ...run,
+      is_favorite: run.id === runId,
+    }));
+    const detail = state.detailsByVersion.get(version.id);
+    if (detail) {
+      state.detailsByVersion.set(version.id, {
+        ...detail,
+        attempts: (detail.attempts || []).map((run) => ({
+          ...run,
+          is_favorite: run.id === runId,
+        })),
+      });
+    }
+  }
+}
+
+async function toggleFavorite(run) {
+  if (!state.currentSession || state.favoritePending || run.state !== 'completed') return;
+  const sessionId = state.currentSession.id;
+  const epoch = state.sessionEpoch;
+  const previousFavorite = favoriteRunId();
+  const clearing = run.is_favorite;
+  state.favoritePending = true;
+  setFavoriteState(clearing ? null : run.id);
+  renderHistory();
+  try {
+    await apiJson(`/api/mvp/sessions/${sessionId}/favorite-run`, clearing
+      ? { method: 'DELETE' }
+      : { method: 'PUT', body: { run_id: run.id } });
+    if (epoch !== state.sessionEpoch || state.currentSession?.id !== sessionId) return;
+    showToast(clearing
+      ? 'La sesión ya no tiene una versión favorita.'
+      : 'Marcaste esta ejecución como tu favorita.');
+  } catch (error) {
+    if (epoch !== state.sessionEpoch || state.currentSession?.id !== sessionId) return;
+    setFavoriteState(previousFavorite);
+    showToast(errorMessage(error, 'No pudimos guardar tu favorita; restauramos la selección anterior.'));
+  } finally {
+    if (epoch !== state.sessionEpoch || state.currentSession?.id !== sessionId) return;
+    state.favoritePending = false;
+    renderHistory();
+  }
+}
+
 async function selectRun(jobId, { startedAt, reset = true } = {}) {
+  const runEpoch = ++state.runEpoch;
   state.activity?.stop();
   state.activity = null;
   if (reset) resetActivity();
   try {
     const job = await apiJson(`/api/mvp/jobs/${jobId}`);
+    if (runEpoch !== state.runEpoch) return;
     state.currentJob = job;
+    mergeDetailedRun(job);
     renderJob(job);
-    renderRecentVersions(
-      state.versions,
-      job.id,
-      (run) => selectRun(run.id, { startedAt: run.created_at }),
-    );
+    renderHistory();
     const feed = new ActivityFeed(job.id, {
-      onConnection: (connection) => renderConnection(connection),
-      onEvent: (event) => appendActivity(event),
+      onConnection: (connection) => {
+        if (runEpoch === state.runEpoch) renderConnection(connection);
+      },
+      onEvent: (event) => {
+        if (runEpoch === state.runEpoch) appendActivity(event);
+      },
       onElapsed: (milliseconds) => {
-        elements.elapsedTime.textContent = formatElapsed(milliseconds);
+        if (runEpoch === state.runEpoch) {
+          elements.elapsedTime.textContent = formatElapsed(milliseconds);
+        }
       },
       onJob: (nextJob) => {
+        if (runEpoch !== state.runEpoch) return;
         state.currentJob = nextJob;
+        mergeDetailedRun(nextJob);
         renderJob(nextJob);
       },
       onTerminal: async () => {
+        if (runEpoch !== state.runEpoch) return;
         try {
-          state.currentJob = await apiJson(`/api/mvp/jobs/${job.id}`);
+          const terminalJob = await apiJson(`/api/mvp/jobs/${job.id}`);
+          if (runEpoch !== state.runEpoch) return;
+          state.currentJob = terminalJob;
+          mergeDetailedRun(state.currentJob);
           renderJob(state.currentJob);
           await reloadVersions();
         } catch (error) {
@@ -196,13 +450,15 @@ async function selectRun(jobId, { startedAt, reset = true } = {}) {
     state.activity = feed;
     await feed.start({ startedAt: startedAt || job.started_at || job.created_at });
   } catch (error) {
+    if (runEpoch !== state.runEpoch) return;
     elements.jobError.textContent = errorMessage(error);
   }
 }
 
 function createUploader(file) {
   if (!state.currentSession) return null;
-  const uploader = new ResumableUpload(state.currentSession.id, {
+  const sessionId = state.currentSession.id;
+  const uploader = new ResumableUpload(sessionId, {
     onFile: (selectedFile) => {
       showUpload(selectedFile, state.source);
       setComposerAvailability(false);
@@ -214,24 +470,27 @@ function createUploader(file) {
     onOffsetAdjusted: ({ offset }) => updateUploadStage('adjusted', { offset }),
     onError: showUploadError,
     onCancelled: async () => {
+      if (state.currentSession?.id !== sessionId) return;
       state.upload = null;
       state.source = await apiJson(
-        `/api/mvp/sessions/${state.currentSession.id}/input-video`,
+        `/api/mvp/sessions/${sessionId}/input-video`,
       );
+      if (state.currentSession?.id !== sessionId) return;
       renderSource(state.source);
       showToast('La carga se descartó. Puedes elegir un video de nuevo.');
     },
     onReady: async (source) => {
+      if (state.currentSession?.id !== sessionId) return;
       state.source = source;
       state.upload = null;
       renderSource(source);
       setComposerAvailability(true);
       state.sessions = state.sessions.map((session) =>
-        session.id === state.currentSession.id
+        session.id === sessionId
           ? { ...session, input_video: source }
           : session,
       );
-      renderSessions(state.sessions, state.currentSession.id, selectSession);
+      renderSessions(state.sessions, sessionId, selectSession);
       showToast('Video validado. Ya puedes crear tantas versiones como necesites.');
       window.requestAnimationFrame(() => elements.prompt.focus());
     },
@@ -343,6 +602,7 @@ function openSessionDialog() {
 
 elements.sessionNew.addEventListener('click', openSessionDialog);
 elements.emptyCreateSession.addEventListener('click', openSessionDialog);
+elements.legacyCreateSession.addEventListener('click', openSessionDialog);
 
 for (const closeButton of document.querySelectorAll('[data-close-dialog]')) {
   closeButton.addEventListener('click', () => closeDialog(byDialogId(closeButton.dataset.closeDialog)));
@@ -461,11 +721,10 @@ elements.jobForm.addEventListener('submit', async (event) => {
       ...state.versions.filter((version) => version.id !== result.prompt_version.id),
     ];
     elements.promptVersionLabel.textContent = `Versión ${result.prompt_version.version_number}`;
-    renderRecentVersions(
-      state.versions,
-      result.run.id,
-      (run) => selectRun(run.id, { startedAt: run.created_at }),
-    );
+    if (!result.prompt_version.attempts?.length) {
+      result.prompt_version.attempts = [result.run];
+    }
+    renderHistory();
     await selectRun(result.run.id, { startedAt: result.run.created_at });
     showToast(`Versión ${result.prompt_version.version_number} enviada a edición.`);
   } catch (error) {
@@ -476,6 +735,20 @@ elements.jobForm.addEventListener('submit', async (event) => {
 });
 
 elements.activityRetry.addEventListener('click', () => state.activity?.retryNow());
+elements.historyLoadMore.addEventListener('click', loadMoreVersions);
+elements.comparisonOpen.addEventListener('click', openComparison);
+elements.comparisonClear.addEventListener('click', () => {
+  state.selectedRunIds.clear();
+  renderHistory();
+});
+elements.comparisonClose.addEventListener('click', () => closeDialog(elements.comparisonDialog));
+elements.comparisonDialog.addEventListener('close', () => {
+  cleanupMedia(elements.comparisonContent);
+  elements.comparisonContent.replaceChildren();
+  const target = state.comparisonReturnFocus;
+  state.comparisonReturnFocus = null;
+  window.requestAnimationFrame(() => target?.focus?.());
+});
 
 elements.bundle.addEventListener('click', async () => {
   const jobId = elements.bundle.dataset.jobId;

@@ -93,13 +93,21 @@
               <h1 id="workspace-title">Diseña el siguiente corte.</h1>
               <p id="session-summary" class="workspace-summary">Tu video permanece disponible durante toda la sesión.</p>
             </div>
-            <div class="session-seal" aria-label="Fuente protegida">
+            <div id="session-seal" class="session-seal" aria-label="Fuente protegida">
               <span aria-hidden="true">◆</span>
               <div><strong>Fuente inmutable</strong><small>Una carga por sesión</small></div>
             </div>
           </section>
 
-          <div class="work-grid">
+          <section id="legacy-workspace" class="panel legacy-workspace" hidden aria-labelledby="legacy-title">
+            <p class="step-label">Sesión anterior</p>
+            <h2 id="legacy-title">Este historial pertenece al flujo de carga por ejecución.</h2>
+            <p>Puedes consultar sus instrucciones y resultados en modo lectura. Para reutilizar un video, comparar versiones o crear otro corte sin volver a subirlo, abre una sesión nueva.</p>
+            <button id="legacy-create-session" class="button button-primary" type="button">Crear una sesión reutilizable</button>
+            <div id="legacy-history" class="version-history legacy-history"></div>
+          </section>
+
+          <div id="modern-workspace" class="work-grid">
             <div class="work-primary">
               <section id="source-card" class="panel source-card" aria-labelledby="source-title">
                 <div class="panel-heading">
@@ -279,11 +287,18 @@
                 <div class="panel-heading compact-heading">
                   <div>
                     <p class="step-label">Memoria</p>
-                    <h2 id="recent-title">Versiones recientes</h2>
+                    <h2 id="recent-title">Historial de versiones</h2>
                   </div>
+                  <span id="history-count" class="version-label">0 versiones</span>
                 </div>
-                <div id="recent-jobs" class="recent-jobs"></div>
+                <div id="comparison-toolbar" class="comparison-toolbar" hidden>
+                  <span id="comparison-count">0 de 2 seleccionadas</span>
+                  <button id="comparison-open" class="button button-secondary" type="button" disabled>Comparar</button>
+                  <button id="comparison-clear" class="button button-quiet" type="button">Limpiar</button>
+                </div>
+                <div id="recent-jobs" class="version-history"></div>
                 <p id="recent-empty" class="recent-empty">Aún no hay versiones en esta sesión.</p>
+                <button id="history-load-more" class="button button-secondary button-wide" type="button" hidden>Cargar versiones anteriores</button>
               </section>
             </aside>
           </div>
@@ -319,6 +334,20 @@
         <button id="session-delete-confirm" class="button button-danger-solid" type="button">Eliminar definitivamente</button>
       </div>
     </form>
+  </dialog>
+
+  <dialog id="comparison-dialog" class="dialog comparison-dialog">
+    <div class="comparison-shell">
+      <header class="comparison-header">
+        <div>
+          <p class="step-label">Comparación humana</p>
+          <h2>Dos versiones, lado a lado.</h2>
+          <p>Compara instrucciones, decisiones y evidencia técnica. OpenStoryline no asigna una puntuación de calidad ni elige un ganador por ti.</p>
+        </div>
+        <button id="comparison-close" class="dialog-close" type="button" aria-label="Cerrar comparación">×</button>
+      </header>
+      <div id="comparison-content" class="comparison-content"></div>
+    </div>
   </dialog>
 
   <div id="toast-region" class="toast-region" aria-live="polite" aria-atomic="true"></div>
