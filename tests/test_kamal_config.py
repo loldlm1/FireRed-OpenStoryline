@@ -116,6 +116,10 @@ class KamalConfigTests(unittest.TestCase):
         )
         self.assertIs(config["env"]["clear"]["OPENSTORYLINE_RETENTION_ENABLED"], False)
         self.assertEqual(config["env"]["clear"]["OPENSTORYLINE_MEDIA_RETENTION_DAYS"], 7)
+        self.assertEqual(
+            config["env"]["clear"]["OPENSTORYLINE_INCOMPLETE_UPLOAD_HOURS"],
+            24,
+        )
         self.assertEqual(config["env"]["clear"]["OPENSTORYLINE_AUDIT_RETENTION_DAYS"], 30)
         self.assertEqual(
             config["env"]["clear"]["OPENSTORYLINE_RETENTION_INTERVAL_SECONDS"],
@@ -177,6 +181,8 @@ class KamalConfigTests(unittest.TestCase):
         self.assertIn("MISTRAL_QA_STT_AUDIO=", kamal_env)
         self.assertIn("OPENSTORYLINE_SESSION_WORKSPACE_MODE=legacy", kamal_env)
         self.assertIn("OPENSTORYLINE_SESSION_WORKSPACE_MODE=legacy", local_env)
+        self.assertIn("OPENSTORYLINE_INCOMPLETE_UPLOAD_HOURS=24", kamal_env)
+        self.assertIn("OPENSTORYLINE_INCOMPLETE_UPLOAD_HOURS=24", local_env)
         self.assertIn("OPENSTORYLINE_PEXELS_ENABLED=false", kamal_env)
         self.assertIn("OPENSTORYLINE_PEXELS_LICENSE_REVIEWED_AT=", kamal_env)
 

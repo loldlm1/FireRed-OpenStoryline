@@ -19,9 +19,10 @@ from open_storyline.mvp.jobs import (
     JobStoreError,
     _iso,
 )
-from open_storyline.mvp.models import Artifact, EditingSession, VideoJob
+from open_storyline.mvp.models import Artifact, EditingSession, SessionInputVideo, VideoJob
 from open_storyline.mvp.observability import emit_event
 from open_storyline.mvp.security import sanitize_text
+from open_storyline.mvp.session_media import SessionMediaStore
 
 
 CLEANUP_ADVISORY_LOCK = 7_303_110_792_764
@@ -55,6 +56,7 @@ class RetentionSettings:
     audit_days: int
     interval_seconds: int
     batch_size: int
+    incomplete_upload_hours: int = 24
 
     @classmethod
     def from_env(cls) -> "RetentionSettings":
@@ -69,7 +71,16 @@ class RetentionSettings:
                 604_800,
             ),
             batch_size=_bounded_int("OPENSTORYLINE_RETENTION_BATCH_SIZE", 100, 1, 1000),
+            incomplete_upload_hours=_bounded_int(
+                "OPENSTORYLINE_INCOMPLETE_UPLOAD_HOURS", 24, 1, 168
+            ),
         )
+
+
+@dataclass(frozen=True)
+class SourceRetentionCandidate:
+    source: SessionInputVideo
+    session_deleted: bool
 
 
 class RetentionService:
@@ -78,11 +89,13 @@ class RetentionService:
         store: JobStore,
         settings: RetentionSettings | None = None,
         *,
+        session_media: SessionMediaStore | None = None,
         now: Callable[[], datetime] | None = None,
     ) -> None:
         self.store = store
         self.database = store.database
         self.settings = settings or RetentionSettings.from_env()
+        self.session_media = session_media
         self._now = now or (lambda: datetime.now(UTC))
 
     @asynccontextmanager
@@ -119,6 +132,7 @@ class RetentionService:
         batch_limit = self._limit(limit)
         now = self._now()
         media = await self._media_candidates(now, batch_limit)
+        sources = await self._source_candidates(now, batch_limit)
         audit = await self._audit_candidates(now, batch_limit)
         media_items = await self._media_preview_items(media, now)
         return {
@@ -130,6 +144,15 @@ class RetentionService:
                 "selected": len(media_items),
                 "estimated_bytes": sum(item["estimated_bytes"] for item in media_items),
                 "items": media_items,
+            },
+            "session_sources": {
+                "selected": len(sources),
+                "estimated_bytes": sum(
+                    int(candidate.source.received_bytes) for candidate in sources
+                ),
+                "items": [
+                    self._source_preview_item(candidate, now) for candidate in sources
+                ],
             },
             "audit": {
                 "selected": len(audit),
@@ -160,6 +183,15 @@ class RetentionService:
                     .join(EditingSession, EditingSession.id == VideoJob.editing_session_id)
                     .where(*self._audit_conditions(now))
                 )
+                due_sources = await session.scalar(
+                    select(func.count())
+                    .select_from(SessionInputVideo)
+                    .join(
+                        EditingSession,
+                        EditingSession.id == SessionInputVideo.editing_session_id,
+                    )
+                    .where(*self._source_conditions(now))
+                )
                 held_sessions = await session.scalar(
                     select(func.count())
                     .select_from(EditingSession)
@@ -174,7 +206,9 @@ class RetentionService:
             "audit_days": self.settings.audit_days,
             "interval_seconds": self.settings.interval_seconds,
             "batch_size": self.settings.batch_size,
+            "incomplete_upload_hours": self.settings.incomplete_upload_hours,
             "due_media_jobs": int(due_media or 0),
+            "due_session_sources": int(due_sources or 0),
             "due_audit_jobs": int(due_audit or 0),
             "held_sessions": int(held_sessions or 0),
             "as_of": _iso(now),
@@ -191,6 +225,50 @@ class RetentionService:
                     "code": "RETENTION_BUSY",
                 }
             now = self._now()
+            source_rows = await self._source_candidates(now, batch_limit)
+            source_report = {
+                "selected": len(source_rows),
+                "purged": 0,
+                "failed": 0,
+                "deleted_files": 0,
+                "missing_files": 0,
+                "bytes": 0,
+            }
+            for row in source_rows:
+                if self.session_media is None:
+                    source_report["failed"] += 1
+                    continue
+                reason = self._source_reason(row, now)
+                try:
+                    result = await self.session_media.purge(
+                        row.source.editing_session_id,
+                        reason=reason,
+                        now=now,
+                    )
+                except (JobStoreError, OSError) as exc:
+                    source_report["failed"] += 1
+                    emit_event(
+                        "session_source_purge_failed",
+                        outcome="error",
+                        error_code=sanitize_text(
+                            getattr(exc, "code", "RETENTION_OPERATION_FAILED"),
+                            limit=120,
+                        ),
+                    )
+                    continue
+                source_report["purged"] += int(result.get("selected", 1))
+                for key in ("deleted_files", "missing_files", "bytes"):
+                    source_report[key] += int(result.get(key, 0))
+                if int(result.get("selected", 1)):
+                    emit_event(
+                        "session_source_purged",
+                        editing_session_id=row.source.editing_session_id,
+                        outcome="ok",
+                        reason=reason,
+                        deleted_files=int(result.get("deleted_files", 0)),
+                        missing_files=int(result.get("missing_files", 0)),
+                        bytes=int(result.get("bytes", 0)),
+                    )
             media_rows = await self._media_candidates(now, batch_limit)
             media_report = {
                 "selected": len(media_rows),
@@ -242,6 +320,7 @@ class RetentionService:
                 "lock_acquired": True,
                 "as_of": _iso(now),
                 "limit": batch_limit,
+                "session_sources": source_report,
                 "media": media_report,
                 "audit": audit_report,
             }
@@ -348,13 +427,37 @@ class RetentionService:
                 media_report["purged"] += 1
                 for key in ("deleted_files", "missing_files", "bytes"):
                     media_report[key] += int(result[key])
+            source_report = {
+                "selected": 0,
+                "purged": 0,
+                "failed": 0,
+                "deleted_files": 0,
+                "missing_files": 0,
+                "bytes": 0,
+            }
+            if self.session_media is not None:
+                source_report["selected"] = 1
+                try:
+                    result = await self.session_media.purge(
+                        session_id,
+                        reason="session_deleted",
+                        now=now,
+                    )
+                except (JobStoreError, OSError):
+                    source_report["failed"] = 1
+                else:
+                    source_report["selected"] = int(result.get("selected", 1))
+                    source_report["purged"] = source_report["selected"]
+                    for key in ("deleted_files", "missing_files", "bytes"):
+                        source_report[key] = int(result.get(key, 0))
             return {
-                "ok": media_report["failed"] == 0,
+                "ok": media_report["failed"] == 0 and source_report["failed"] == 0,
                 "id": session_id,
                 "already_deleted": not first_delete,
                 "deleted_at": _iso(owner.deleted_at),
                 "audit_expires_at": _iso(owner.audit_expires_at),
                 "media_purge": media_report,
+                "source_purge": source_report,
             }
 
     async def set_audit_hold(self, session_id: str, reason: str) -> dict[str, Any]:
@@ -435,6 +538,33 @@ class RetentionService:
             ),
         )
 
+    def _source_conditions(self, now: datetime) -> tuple[Any, ...]:
+        incomplete_states = {"pending", "uploading", "validating", "failed"}
+        return (
+            SessionInputVideo.state.in_({*incomplete_states, "ready"}),
+            SessionInputVideo.purged_at.is_(None),
+            or_(
+                EditingSession.deleted_at.is_not(None),
+                and_(
+                    SessionInputVideo.state.in_(incomplete_states),
+                    SessionInputVideo.expires_at.is_not(None),
+                    SessionInputVideo.expires_at <= now,
+                ),
+                and_(
+                    SessionInputVideo.state == "ready",
+                    SessionInputVideo.expires_at.is_not(None),
+                    SessionInputVideo.expires_at <= now,
+                ),
+            ),
+            ~exists(
+                select(VideoJob.id).where(
+                    VideoJob.editing_session_id
+                    == SessionInputVideo.editing_session_id,
+                    VideoJob.state.in_(ACTIVE_STATES),
+                )
+            ),
+        )
+
     def _audit_conditions(self, now: datetime) -> tuple[Any, ...]:
         return (
             VideoJob.state.in_(TERMINAL_STATES),
@@ -465,6 +595,71 @@ class RetentionService:
                 )
         except SQLAlchemyError:
             raise JobStoreError("DATABASE_UNAVAILABLE", "retention preview is unavailable") from None
+
+    async def _source_candidates(
+        self,
+        now: datetime,
+        limit: int,
+    ) -> list[SourceRetentionCandidate]:
+        try:
+            async with self.database.sessions() as session:
+                rows = (
+                    await session.execute(
+                        select(
+                            SessionInputVideo,
+                            EditingSession.deleted_at.is_not(None),
+                        )
+                        .join(
+                            EditingSession,
+                            EditingSession.id == SessionInputVideo.editing_session_id,
+                        )
+                        .where(*self._source_conditions(now))
+                        .order_by(
+                            func.coalesce(
+                                SessionInputVideo.expires_at,
+                                SessionInputVideo.updated_at,
+                            ),
+                            SessionInputVideo.id,
+                        )
+                        .limit(limit)
+                    )
+                ).all()
+        except SQLAlchemyError:
+            raise JobStoreError(
+                "DATABASE_UNAVAILABLE", "source retention preview is unavailable"
+            ) from None
+        return [
+            SourceRetentionCandidate(source=row, session_deleted=bool(deleted))
+            for row, deleted in rows
+        ]
+
+    def _source_preview_item(
+        self,
+        candidate: SourceRetentionCandidate,
+        now: datetime,
+    ) -> dict[str, Any]:
+        row = candidate.source
+        return {
+            "source_id": row.id,
+            "editing_session_id": row.editing_session_id,
+            "state": row.state,
+            "reason": self._source_reason(candidate, now),
+            "expires_at": _iso(row.expires_at),
+            "estimated_bytes": max(0, int(row.received_bytes)),
+            "overdue": bool(row.expires_at and row.expires_at <= now),
+        }
+
+    @staticmethod
+    def _source_reason(
+        candidate: SourceRetentionCandidate,
+        now: datetime,
+    ) -> str:
+        row = candidate.source
+        if candidate.session_deleted:
+            return "session_deleted"
+        if row.state == "ready":
+            return "source_expired"
+        return "incomplete_upload_expired"
 
     async def _audit_candidates(
         self,

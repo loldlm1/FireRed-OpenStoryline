@@ -44,6 +44,7 @@ class RetentionSettingsTests(unittest.TestCase):
         environment = {
             "OPENSTORYLINE_RETENTION_ENABLED": "false",
             "OPENSTORYLINE_MEDIA_RETENTION_DAYS": "7",
+            "OPENSTORYLINE_INCOMPLETE_UPLOAD_HOURS": "24",
             "OPENSTORYLINE_AUDIT_RETENTION_DAYS": "30",
             "OPENSTORYLINE_RETENTION_INTERVAL_SECONDS": "86400",
             "OPENSTORYLINE_RETENTION_BATCH_SIZE": "100",
@@ -53,6 +54,7 @@ class RetentionSettingsTests(unittest.TestCase):
 
         self.assertFalse(settings.enabled)
         self.assertEqual(settings.media_days, 7)
+        self.assertEqual(settings.incomplete_upload_hours, 24)
         self.assertEqual(settings.audit_days, 30)
         self.assertEqual(settings.interval_seconds, 86400)
         self.assertEqual(settings.batch_size, 100)
@@ -61,6 +63,7 @@ class RetentionSettingsTests(unittest.TestCase):
         for name, value in (
             ("OPENSTORYLINE_RETENTION_ENABLED", "yes"),
             ("OPENSTORYLINE_MEDIA_RETENTION_DAYS", "0"),
+            ("OPENSTORYLINE_INCOMPLETE_UPLOAD_HOURS", "169"),
             ("OPENSTORYLINE_AUDIT_RETENTION_DAYS", "forever"),
             ("OPENSTORYLINE_RETENTION_INTERVAL_SECONDS", "60"),
             ("OPENSTORYLINE_RETENTION_BATCH_SIZE", "1001"),
