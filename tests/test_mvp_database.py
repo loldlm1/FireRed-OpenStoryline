@@ -14,7 +14,9 @@ from sqlalchemy.engine import make_url
 from sqlalchemy.exc import SQLAlchemyError
 
 from open_storyline.mvp.database import (
-    EXPECTED_SCHEMA_REVISION,
+    COMPATIBLE_SCHEMA_REVISIONS,
+    LEGACY_SCHEMA_REVISION,
+    WORKSPACE_SCHEMA_REVISION,
     Database,
     DatabaseConfigurationError,
     normalize_database_url,
@@ -109,21 +111,29 @@ def _database_with_engine(engine, *, timeout: float = 1) -> Database:
 
 
 class DatabaseReadinessTests(unittest.IsolatedAsyncioTestCase):
-    async def test_current_schema_is_ready(self):
-        database = _database_with_engine(
-            _FakeEngine(_ConnectionContext(_FakeConnection(EXPECTED_SCHEMA_REVISION)))
+    async def test_compatible_schemas_are_ready(self):
+        self.assertEqual(
+            COMPATIBLE_SCHEMA_REVISIONS,
+            frozenset({LEGACY_SCHEMA_REVISION, WORKSPACE_SCHEMA_REVISION}),
         )
-        readiness = await database.readiness()
-        self.assertTrue(readiness.ready)
-        self.assertEqual(readiness.code, "DATABASE_READY")
+        for revision in COMPATIBLE_SCHEMA_REVISIONS:
+            with self.subTest(revision=revision):
+                database = _database_with_engine(
+                    _FakeEngine(_ConnectionContext(_FakeConnection(revision)))
+                )
+                readiness = await database.readiness()
+                self.assertTrue(readiness.ready)
+                self.assertEqual(readiness.code, "DATABASE_READY")
 
-    async def test_schema_mismatch_is_not_ready(self):
-        database = _database_with_engine(
-            _FakeEngine(_ConnectionContext(_FakeConnection("older_revision")))
-        )
-        readiness = await database.readiness()
-        self.assertFalse(readiness.ready)
-        self.assertEqual(readiness.code, "DATABASE_SCHEMA_OUTDATED")
+    async def test_missing_obsolete_and_unknown_schemas_are_not_ready(self):
+        for revision in (None, "20260716_0000", "20260720_unknown"):
+            with self.subTest(revision=revision):
+                database = _database_with_engine(
+                    _FakeEngine(_ConnectionContext(_FakeConnection(revision)))
+                )
+                readiness = await database.readiness()
+                self.assertFalse(readiness.ready)
+                self.assertEqual(readiness.code, "DATABASE_SCHEMA_OUTDATED")
 
     async def test_database_errors_and_timeouts_are_sanitized(self):
         failing = _database_with_engine(
@@ -132,7 +142,7 @@ class DatabaseReadinessTests(unittest.IsolatedAsyncioTestCase):
             )
         )
         timed_out = _database_with_engine(
-            _FakeEngine(_ConnectionContext(_FakeConnection(EXPECTED_SCHEMA_REVISION, 0.1))),
+            _FakeEngine(_ConnectionContext(_FakeConnection(LEGACY_SCHEMA_REVISION, 0.1))),
             timeout=0.01,
         )
         for database in (failing, timed_out):
