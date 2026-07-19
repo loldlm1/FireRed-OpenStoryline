@@ -32,6 +32,11 @@ export const elements = Object.freeze({
   workspaceMain: byId('workspace-main'),
   workspaceTitle: byId('workspace-title'),
   sessionSummary: byId('session-summary'),
+  sessionSeal: byId('session-seal'),
+  legacyWorkspace: byId('legacy-workspace'),
+  legacyCreateSession: byId('legacy-create-session'),
+  legacyHistory: byId('legacy-history'),
+  modernWorkspace: byId('modern-workspace'),
   video: byId('video'),
   videoResume: byId('video-resume'),
   sourceState: byId('source-state'),
@@ -83,6 +88,15 @@ export const elements = Object.freeze({
   bundle: byId('bundle'),
   recentJobs: byId('recent-jobs'),
   recentEmpty: byId('recent-empty'),
+  historyCount: byId('history-count'),
+  historyLoadMore: byId('history-load-more'),
+  comparisonToolbar: byId('comparison-toolbar'),
+  comparisonCount: byId('comparison-count'),
+  comparisonOpen: byId('comparison-open'),
+  comparisonClear: byId('comparison-clear'),
+  comparisonDialog: byId('comparison-dialog'),
+  comparisonClose: byId('comparison-close'),
+  comparisonContent: byId('comparison-content'),
   toastRegion: byId('toast-region'),
 });
 
@@ -144,7 +158,9 @@ export function renderSessions(sessions, selectedId, onSelect) {
     const title = document.createElement('strong');
     title.textContent = session.title;
     const state = document.createElement('span');
-    state.textContent = session.input_video?.state === 'ready' ? 'Fuente lista' : 'Fuente pendiente';
+    state.textContent = session.workflow_version === 1
+      ? 'Sesión anterior'
+      : (session.input_video?.state === 'ready' ? 'Fuente lista' : 'Fuente pendiente');
     copy.append(title, state);
     button.append(marker, copy);
     button.addEventListener('click', () => onSelect(session.id));
@@ -155,15 +171,25 @@ export function renderSessions(sessions, selectedId, onSelect) {
   elements.sessionSelect.disabled = sessions.length === 0;
 }
 
-export function renderWorkspace(session) {
+export function renderWorkspace(session, { favoriteLabel = '' } = {}) {
   const hasSession = Boolean(session);
+  const legacy = hasSession && session.workflow_version === 1;
   elements.workspaceEmpty.hidden = hasSession;
   elements.workspaceContent.hidden = !hasSession;
+  elements.legacyWorkspace.hidden = !legacy;
+  elements.modernWorkspace.hidden = legacy;
+  elements.sessionSeal.hidden = legacy;
   elements.sessionDelete.disabled = !hasSession;
   elements.headerSessionTitle.textContent = session?.title || 'Sin seleccionar';
   if (!hasSession) return;
   elements.workspaceTitle.textContent = session.title;
-  elements.sessionSummary.textContent = 'La fuente permanece vinculada a esta sesión; cada nueva instrucción crea una versión auditable.';
+  if (legacy) {
+    elements.sessionSummary.textContent = 'Historial de solo lectura del flujo anterior, donde cada ejecución tenía su propia carga.';
+  } else if (favoriteLabel) {
+    elements.sessionSummary.textContent = `${favoriteLabel} es tu elección favorita; la evidencia técnica permanece separada de esa decisión.`;
+  } else {
+    elements.sessionSummary.textContent = 'La fuente permanece vinculada a esta sesión; cada nueva instrucción crea una versión auditable.';
+  }
 }
 
 function sourceStatusClass(state) {
@@ -306,6 +332,9 @@ export function appendActivity(event) {
   time.textContent = Number.isInteger(event.elapsed_ms) ? formatElapsed(event.elapsed_ms).replace(' transcurridos', '') : 'ahora';
   item.append(marker, copy, time);
   elements.activityList.append(item);
+  while (elements.activityList.children.length > 120) {
+    elements.activityList.firstElementChild?.remove();
+  }
   item.scrollIntoView({ block: 'nearest' });
   elements.status.textContent = activityMessage(event);
   if (event.progress !== undefined) renderProgress(event.progress);
@@ -326,6 +355,7 @@ export function renderJob(job) {
 
 export function renderArtifacts(jobId, artifacts) {
   const available = artifacts.filter((artifact) => artifact.availability === 'available');
+  cleanupMedia(elements.artifacts);
   elements.artifacts.replaceChildren();
   elements.resultEmpty.hidden = available.length > 0;
   elements.bundle.hidden = available.length === 0;
@@ -340,39 +370,403 @@ export function renderArtifacts(jobId, artifacts) {
     const detail = document.createElement('span');
     detail.textContent = `${artifact.kind} · ${formatBytes(artifact.size)}`;
     copy.append(title, detail);
+    const actions = document.createElement('div');
+    actions.className = 'attempt-actions';
+    if (isPreviewableVideo(artifact)) {
+      const preview = document.createElement('button');
+      preview.type = 'button';
+      preview.className = 'button button-quiet';
+      preview.textContent = 'Vista previa';
+      preview.addEventListener('click', () => insertPreview(row, jobId, artifact, preview));
+      actions.append(preview);
+    }
     const link = document.createElement('a');
     link.className = 'button button-secondary';
     link.href = `/api/mvp/jobs/${jobId}/artifacts/${encodeURIComponent(artifact.name)}`;
     link.textContent = 'Descargar';
-    row.append(copy, link);
+    actions.append(link);
+    row.append(copy, actions);
     elements.artifacts.append(row);
   }
 }
 
-export function renderRecentVersions(versions, activeJobId, onSelect) {
+function dateLabel(value) {
+  if (!value) return 'Fecha no disponible';
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return 'Fecha no disponible';
+  return new Intl.DateTimeFormat('es', {
+    dateStyle: 'medium',
+    timeStyle: 'short',
+  }).format(date);
+}
+
+function durationLabel(run) {
+  const started = Date.parse(run.started_at || run.created_at || '');
+  const ended = Date.parse(run.completed_at || run.updated_at || '');
+  if (!Number.isFinite(started) || !Number.isFinite(ended) || ended < started) {
+    return ['queued', 'running'].includes(run.state) ? 'En proceso' : 'Duración no disponible';
+  }
+  return formatElapsed(ended - started).replace(' transcurridos', '');
+}
+
+function settingsLabels(settings = {}) {
+  const labels = [];
+  labels.push(settings.edit_mode === 'agentic' ? 'Edición agéntica' : 'Edición esencial');
+  if (Number.isInteger(settings.max_clips)) labels.push(`Hasta ${settings.max_clips} clips`);
+  labels.push(settings.asset_policy === 'auto' ? 'Imágenes según necesidad' : 'Sin imágenes generadas');
+  if (settings.stock_policy === 'auto') labels.push('Archivo opcional');
+  return labels;
+}
+
+function isPreviewableVideo(artifact) {
+  return artifact?.availability === 'available'
+    && /\.(mp4|mov|m4v|webm)$/i.test(artifact.name || '');
+}
+
+function qaArtifacts(run) {
+  const qaKinds = new Set(['render_qa', 'retention_rhythm_qa', 'creative_conformance']);
+  return (run?.artifacts || []).filter((artifact) => qaKinds.has(artifact.kind));
+}
+
+function outputArtifacts(run) {
+  return (run?.artifacts || []).filter((artifact) => isPreviewableVideo(artifact));
+}
+
+function createPreviewCard(jobId, artifact, { autoplay = false } = {}) {
+  const card = document.createElement('div');
+  card.className = 'preview-card';
+  const video = document.createElement('video');
+  video.controls = true;
+  video.preload = 'metadata';
+  video.playsInline = true;
+  video.dataset.managedPreview = 'true';
+  video.src = `/api/mvp/jobs/${jobId}/artifacts/${encodeURIComponent(artifact.name)}/preview`;
+  if (autoplay) video.autoplay = true;
+  const unavailable = document.createElement('p');
+  unavailable.className = 'media-unavailable';
+  unavailable.hidden = true;
+  unavailable.textContent = 'La vista previa ya no está disponible. Conserva la evidencia visible o intenta la descarga mientras siga registrada.';
+  video.addEventListener('error', () => {
+    video.hidden = true;
+    unavailable.hidden = false;
+  }, { once: true });
+  const title = document.createElement('strong');
+  title.textContent = artifact.name;
+  const meta = document.createElement('span');
+  meta.textContent = `${artifact.kind} · ${formatBytes(artifact.size)}`;
+  const download = document.createElement('a');
+  download.className = 'button button-quiet';
+  download.href = `/api/mvp/jobs/${jobId}/artifacts/${encodeURIComponent(artifact.name)}`;
+  download.textContent = 'Descargar';
+  card.append(video, unavailable, title, meta, download);
+  return card;
+}
+
+function insertPreview(container, jobId, artifact, trigger) {
+  const existing = container.querySelector('.preview-card');
+  if (existing) {
+    cleanupMedia(existing);
+    existing.remove();
+    trigger.textContent = 'Vista previa';
+    return;
+  }
+  const preview = createPreviewCard(jobId, artifact);
+  preview.style.gridColumn = '1 / -1';
+  container.append(preview);
+  trigger.textContent = 'Ocultar vista';
+}
+
+function createRunDetail(run) {
+  const detail = document.createElement('div');
+  detail.className = 'run-detail';
+  const evidence = document.createElement('div');
+  evidence.className = 'run-evidence';
+  const outputs = outputArtifacts(run);
+  const qa = qaArtifacts(run);
+  for (const text of [
+    `${outputs.length} salida${outputs.length === 1 ? '' : 's'}`,
+    qa.length ? `${qa.length} evidencia${qa.length === 1 ? '' : 's'} de QA` : 'QA estructural no disponible',
+    run.input?.sha256 ? `Fuente ${String(run.input.sha256).slice(0, 10)}…` : 'Identidad de fuente no disponible',
+  ]) {
+    const badge = document.createElement('span');
+    badge.className = text.includes('QA') && qa.length ? 'qa-badge' : 'settings-chip';
+    badge.textContent = text;
+    evidence.append(badge);
+  }
+  detail.append(evidence);
+  if (outputs.length) {
+    const previews = document.createElement('div');
+    previews.className = 'preview-grid';
+    for (const artifact of outputs) {
+      const shell = document.createElement('div');
+      shell.className = 'preview-card';
+      const title = document.createElement('strong');
+      title.textContent = artifact.name;
+      const meta = document.createElement('span');
+      meta.textContent = `${formatBytes(artifact.size)} · carga bajo demanda`;
+      const trigger = document.createElement('button');
+      trigger.type = 'button';
+      trigger.className = 'button button-quiet';
+      trigger.textContent = 'Cargar vista previa';
+      trigger.addEventListener('click', () => {
+        const video = shell.querySelector('video');
+        if (video) {
+          video.pause();
+          video.removeAttribute('src');
+          video.load();
+          video.remove();
+          trigger.textContent = 'Cargar vista previa';
+          return;
+        }
+        shell.prepend(createPreviewCard(run.id, artifact).querySelector('video'));
+        trigger.textContent = 'Ocultar vista previa';
+      });
+      shell.append(title, meta, trigger);
+      previews.append(shell);
+    }
+    detail.append(previews);
+  } else {
+    const unavailable = document.createElement('p');
+    unavailable.className = 'media-unavailable';
+    unavailable.textContent = run.state === 'completed'
+      ? 'Los medios ya no están disponibles. La instrucción, configuración y evidencia de auditoría permanecen consultables.'
+      : 'Las salidas aparecerán cuando esta ejecución termine.';
+    detail.append(unavailable);
+  }
+  return detail;
+}
+
+export function renderVersionHistory({
+  versions,
+  detailsByVersion,
+  expandedRunIds,
+  selectedRunIds,
+  activeJobId,
+  nextCursor,
+  favoritePending,
+}, callbacks) {
   elements.recentJobs.replaceChildren();
-  const runs = versions.flatMap((version) =>
-    (version.attempts || []).map((attempt) => ({ ...attempt, version })),
-  );
-  elements.recentEmpty.hidden = runs.length > 0;
-  for (const run of runs.slice(0, 8)) {
-    const button = document.createElement('button');
-    button.type = 'button';
-    button.className = 'recent-job';
-    if (run.id === activeJobId) button.setAttribute('aria-current', 'true');
+  elements.recentEmpty.hidden = versions.length > 0;
+  elements.historyCount.textContent = `${versions.length} versión${versions.length === 1 ? '' : 'es'}`;
+  elements.historyLoadMore.hidden = !nextCursor;
+  const selectedCount = selectedRunIds.size;
+  elements.comparisonToolbar.hidden = selectedCount === 0;
+  elements.comparisonCount.textContent = `${selectedCount} de 2 seleccionadas`;
+  elements.comparisonOpen.disabled = selectedCount !== 2;
+
+  for (const version of versions) {
+    const detail = detailsByVersion.get(version.id);
+    const detailedRuns = new Map((detail?.attempts || []).map((run) => [run.id, run]));
+    const card = document.createElement('article');
+    card.className = 'version-card';
+    const header = document.createElement('header');
+    header.className = 'version-card-header';
+    const heading = document.createElement('div');
+    heading.className = 'version-card-title';
+    const title = document.createElement('strong');
+    title.textContent = `Versión ${version.version_number}`;
+    const time = document.createElement('time');
+    time.dateTime = version.created_at || '';
+    time.textContent = dateLabel(version.created_at);
+    heading.append(title, time);
+    const favorite = (version.attempts || []).find((run) => run.is_favorite);
+    const stateBadge = document.createElement('span');
+    stateBadge.className = favorite ? 'favorite-badge' : 'run-state';
+    stateBadge.textContent = favorite ? '★ Tu favorita' : `${version.attempts?.length || 0} intento(s)`;
+    header.append(heading, stateBadge);
+
+    const prompt = document.createElement('p');
+    prompt.className = 'version-prompt';
+    prompt.textContent = version.prompt;
+    prompt.setAttribute('aria-expanded', 'false');
+    const chips = document.createElement('div');
+    chips.className = 'settings-chips';
+    for (const label of settingsLabels(version.settings)) {
+      const chip = document.createElement('span');
+      chip.className = 'settings-chip';
+      chip.textContent = label;
+      chips.append(chip);
+    }
+    const versionActions = document.createElement('div');
+    versionActions.className = 'version-actions';
+    if (version.prompt.length > 210) {
+      const expandPrompt = document.createElement('button');
+      expandPrompt.type = 'button';
+      expandPrompt.className = 'button button-quiet';
+      expandPrompt.textContent = 'Leer instrucción completa';
+      expandPrompt.addEventListener('click', () => {
+        const expanded = prompt.getAttribute('aria-expanded') === 'true';
+        prompt.setAttribute('aria-expanded', String(!expanded));
+        expandPrompt.textContent = expanded ? 'Leer instrucción completa' : 'Contraer instrucción';
+      });
+      versionActions.append(expandPrompt);
+    }
+
+    const attempts = document.createElement('ol');
+    attempts.className = 'attempt-list';
+    for (const summary of version.attempts || []) {
+      const run = detailedRuns.get(summary.id) || summary;
+      const row = document.createElement('li');
+      row.className = 'attempt-row';
+      if (run.id === activeJobId) row.setAttribute('aria-current', 'true');
+      const summaryCopy = document.createElement('div');
+      summaryCopy.className = 'attempt-summary';
+      const runTitle = document.createElement('strong');
+      runTitle.textContent = `Intento ${run.attempt_number} · ${stateLabel(run.state)}`;
+      const meta = document.createElement('span');
+      const outputs = run.artifacts ? outputArtifacts(run).length : null;
+      meta.textContent = [
+        durationLabel(run),
+        outputs === null ? 'Detalles bajo demanda' : `${outputs} salida${outputs === 1 ? '' : 's'}`,
+        run.error_code ? errorMessage(run.error_code) : null,
+      ].filter(Boolean).join(' · ');
+      summaryCopy.append(runTitle, meta);
+      const actions = document.createElement('div');
+      actions.className = 'attempt-actions';
+      const open = document.createElement('button');
+      open.type = 'button';
+      open.className = 'button button-quiet';
+      open.textContent = run.id === activeJobId ? 'Seleccionada' : 'Ver ejecución';
+      open.addEventListener('click', () => callbacks.onSelect(run));
+      actions.append(open);
+      const evidence = document.createElement('button');
+      evidence.type = 'button';
+      evidence.className = 'button button-quiet';
+      evidence.textContent = expandedRunIds.has(run.id) ? 'Ocultar detalles' : 'Ver salidas y QA';
+      evidence.addEventListener('click', () => callbacks.onToggleDetail(version.id, run.id));
+      actions.append(evidence);
+      if (run.state === 'completed') {
+        const compareLabel = document.createElement('label');
+        compareLabel.className = 'compare-check';
+        const compare = document.createElement('input');
+        compare.type = 'checkbox';
+        compare.checked = selectedRunIds.has(run.id);
+        compare.disabled = !compare.checked && selectedRunIds.size >= 2;
+        compare.addEventListener('change', () => callbacks.onCompare(version.id, run.id, compare.checked));
+        compareLabel.append(compare, document.createTextNode('Comparar'));
+        actions.append(compareLabel);
+        const favoriteButton = document.createElement('button');
+        favoriteButton.type = 'button';
+        favoriteButton.className = run.is_favorite ? 'button button-secondary' : 'button button-quiet';
+        favoriteButton.textContent = run.is_favorite ? '★ Quitar favorita' : '☆ Elegir favorita';
+        favoriteButton.disabled = favoritePending;
+        favoriteButton.addEventListener('click', () => callbacks.onFavorite(run));
+        actions.append(favoriteButton);
+      }
+      row.append(summaryCopy, actions);
+      if (expandedRunIds.has(run.id)) {
+        row.append(run.artifacts ? createRunDetail(run) : loadingDetail());
+      }
+      attempts.append(row);
+    }
+    card.append(header, prompt, chips, versionActions, attempts);
+    elements.recentJobs.append(card);
+  }
+}
+
+function loadingDetail() {
+  const detail = document.createElement('p');
+  detail.className = 'media-unavailable';
+  detail.textContent = 'Cargando salidas y evidencia técnica…';
+  return detail;
+}
+
+export function renderLegacyHistory(jobs) {
+  elements.legacyHistory.replaceChildren();
+  if (!jobs.length) {
+    const empty = document.createElement('p');
+    empty.className = 'media-unavailable';
+    empty.textContent = 'Esta sesión anterior no conserva ejecuciones visibles.';
+    elements.legacyHistory.append(empty);
+    return;
+  }
+  for (const job of jobs) {
+    const card = document.createElement('article');
+    card.className = 'version-card legacy-job';
     const copy = document.createElement('span');
     copy.className = 'recent-job-copy';
     const title = document.createElement('strong');
-    title.textContent = `Versión ${run.version.version_number} · intento ${run.attempt_number}`;
-    const prompt = document.createElement('span');
-    prompt.textContent = run.version.prompt;
-    copy.append(title, prompt);
-    const status = document.createElement('span');
-    status.className = 'run-state';
-    status.textContent = stateLabel(run.state);
-    button.append(copy, status);
-    button.addEventListener('click', () => onSelect(run));
-    elements.recentJobs.append(button);
+    title.textContent = job.prompt || `Ejecución ${job.id.slice(0, 8)}`;
+    const meta = document.createElement('span');
+    meta.textContent = `${stateLabel(job.state)} · ${dateLabel(job.created_at)}`;
+    copy.append(title, meta);
+    const state = document.createElement('span');
+    state.className = 'run-state';
+    state.textContent = stateLabel(job.state);
+    const header = document.createElement('header');
+    header.className = 'version-card-header';
+    header.append(copy, state);
+    card.append(header);
+    const available = (job.artifacts || []).filter((artifact) => artifact.availability === 'available');
+    if (available.length) {
+      const actions = document.createElement('div');
+      actions.className = 'attempt-actions';
+      for (const artifact of available) {
+        const link = document.createElement('a');
+        link.className = 'button button-quiet';
+        link.href = `/api/mvp/jobs/${job.id}/artifacts/${encodeURIComponent(artifact.name)}`;
+        link.textContent = `Descargar ${artifact.name}`;
+        actions.append(link);
+      }
+      card.append(actions);
+    } else {
+      const unavailable = document.createElement('p');
+      unavailable.className = 'media-unavailable';
+      unavailable.textContent = 'Los medios de esta ejecución ya no están disponibles; la instrucción y el estado permanecen visibles.';
+      card.append(unavailable);
+    }
+    elements.legacyHistory.append(card);
+  }
+}
+
+export function renderComparison(entries) {
+  elements.comparisonContent.replaceChildren();
+  for (const { version, run } of entries) {
+    const column = document.createElement('article');
+    column.className = 'comparison-column';
+    const title = document.createElement('h3');
+    title.textContent = `Versión ${version.version_number} · intento ${run.attempt_number}`;
+    column.append(title);
+    column.append(comparisonSection('Instrucción', version.prompt));
+    column.append(comparisonSection('Configuración', settingsLabels(version.settings).join(' · ')));
+    column.append(comparisonSection('Estado y tiempo', `${stateLabel(run.state)} · ${durationLabel(run)}`));
+    const outputs = outputArtifacts(run);
+    const qa = qaArtifacts(run);
+    column.append(comparisonSection(
+      'Evidencia técnica',
+      `${outputs.length} salida${outputs.length === 1 ? '' : 's'} · ${qa.length ? `${qa.length} documento(s) de QA` : 'QA estructural no disponible'}`,
+    ));
+    if (outputs.length) {
+      const previews = document.createElement('div');
+      previews.className = 'preview-grid';
+      for (const artifact of outputs) previews.append(createPreviewCard(run.id, artifact));
+      column.append(previews);
+    } else {
+      column.append(comparisonSection(
+        'Medios',
+        'Los medios no están disponibles; los metadatos y la evidencia de auditoría se conservan según su plazo.',
+      ));
+    }
+    elements.comparisonContent.append(column);
+  }
+}
+
+function comparisonSection(label, value) {
+  const section = document.createElement('section');
+  section.className = 'comparison-section';
+  const title = document.createElement('span');
+  title.textContent = label;
+  const copy = document.createElement('p');
+  copy.textContent = value;
+  section.append(title, copy);
+  return section;
+}
+
+export function cleanupMedia(root = document) {
+  for (const video of root.querySelectorAll('video[data-managed-preview]')) {
+    video.pause();
+    video.removeAttribute('src');
+    video.load();
   }
 }
 

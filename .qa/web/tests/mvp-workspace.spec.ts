@@ -4,6 +4,8 @@ const sessionId = 'a'.repeat(32);
 const uploadId = 'b'.repeat(32);
 const promptVersionId = 'c'.repeat(32);
 const jobId = 'd'.repeat(32);
+const secondPromptVersionId = 'e'.repeat(32);
+const secondJobId = 'f'.repeat(32);
 const now = '2026-07-19T12:00:00+00:00';
 
 type SourceState = {
@@ -273,6 +275,202 @@ async function installWorkspaceApi(page: Page, options: {
   };
 }
 
+type HistoryRun = ReturnType<typeof fullJob>;
+type HistoryVersion = ReturnType<typeof promptVersion>;
+
+function historyRun(id: string, versionId: string, attempt: number, options: {
+  favorite?: boolean;
+  available?: boolean;
+  state?: string;
+} = {}): HistoryRun {
+  const state = options.state || 'completed';
+  return {
+    ...fullJob(state),
+    id,
+    prompt_version_id: versionId,
+    attempt_number: attempt,
+    is_favorite: Boolean(options.favorite),
+    artifacts: [{
+      name: `${id.slice(0, 4)}-clip.mp4`,
+      kind: 'clip',
+      size: 8192,
+      availability: options.available === false ? 'missing' : 'available',
+      retention_expires_at: null,
+      purged_at: options.available === false ? now : null,
+      purge_reason: options.available === false ? 'retention_expired' : null,
+    }, {
+      name: `${id.slice(0, 4)}-qa.json`,
+      kind: 'render_qa',
+      size: 512,
+      availability: 'available',
+      retention_expires_at: null,
+      purged_at: null,
+      purge_reason: null,
+    }],
+    input: { source_kind: 'session_input_video', sha256: `${id}abc123` },
+    started_at: now,
+    updated_at: '2026-07-19T12:01:15+00:00',
+    completed_at: state === 'completed' ? '2026-07-19T12:01:15+00:00' : null,
+  };
+}
+
+function historyVersion(index: number, options: {
+  id?: string;
+  runId?: string;
+  favorite?: boolean;
+  available?: boolean;
+  prompt?: string;
+} = {}): HistoryVersion {
+  const id = options.id || index.toString(16).padStart(32, '0');
+  const runId = options.runId || (index + 100).toString(16).padStart(32, '0');
+  const run = historyRun(runId, id, 1, options);
+  return {
+    ...promptVersion('completed'),
+    id,
+    editing_session_id: sessionId,
+    version_number: index,
+    prompt: options.prompt || `Dirección editorial para la versión ${index}.`,
+    created_at: `2026-07-${String(Math.max(1, 20 - index)).padStart(2, '0')}T12:00:00+00:00`,
+    attempts: [run],
+  };
+}
+
+async function installHistoryApi(page: Page, options: {
+  legacy?: boolean;
+  versions?: HistoryVersion[];
+} = {}) {
+  const ready: SourceState = {
+    id: uploadId,
+    upload_id: uploadId,
+    editing_session_id: sessionId,
+    state: 'ready',
+    original_filename: 'fuente-reutilizable.mp4',
+    expected_size: 42_000_000,
+    received_bytes: 42_000_000,
+    upload_offset: 42_000_000,
+    media_type: 'video/mp4',
+    completed_at: now,
+  };
+  const versions = options.versions || [
+    historyVersion(2, { id: secondPromptVersionId, runId: secondJobId }),
+    historyVersion(1, {
+      id: promptVersionId,
+      runId: jobId,
+      prompt: 'Una instrucción deliberadamente larga. '.repeat(18),
+    }),
+  ];
+  let favoriteId = versions.flatMap((version) => version.attempts).find((run) => run.is_favorite)?.id || null;
+  let failNextFavorite = false;
+
+  const syncFavorites = () => {
+    for (const version of versions) {
+      for (const run of version.attempts) run.is_favorite = run.id === favoriteId;
+    }
+  };
+  const detailFor = (versionId: string) => versions.find((version) => version.id === versionId);
+  const jobFor = (runId: string) => versions.flatMap((version) => version.attempts).find((run) => run.id === runId);
+
+  await page.route('**/api/mvp/**', async (route) => {
+    const request = route.request();
+    const url = new URL(request.url());
+    const path = url.pathname;
+    const method = request.method();
+
+    if (path === '/api/mvp/auth/session') return json(route, { authenticated: true });
+    if (path === '/api/mvp/sessions' && method === 'GET') {
+      const item = {
+        ...session(ready),
+        workflow_version: options.legacy ? 1 : 2,
+        input_video: options.legacy ? null : ready,
+      };
+      return json(route, { items: [item], next_cursor: null });
+    }
+    if (path === `/api/mvp/sessions/${sessionId}` && method === 'GET') {
+      if (options.legacy) {
+        const legacyJob = historyRun(jobId, '', 1);
+        legacyJob.prompt_version_id = null;
+        legacyJob.attempt_number = null as unknown as number;
+        legacyJob.prompt = 'Corte histórico de una carga anterior.';
+        return json(route, {
+          ...session(missingSource()),
+          workflow_version: 1,
+          jobs: [legacyJob],
+          next_job_cursor: null,
+        });
+      }
+      return json(route, { ...session(ready), jobs: [], next_job_cursor: null });
+    }
+    if (path === `/api/mvp/sessions/${sessionId}/input-video`) return json(route, ready);
+    if (path === `/api/mvp/sessions/${sessionId}/input-video/content`) {
+      return route.fulfill({ status: 200, contentType: 'video/mp4', body: Buffer.from('source-video') });
+    }
+    if (path === `/api/mvp/sessions/${sessionId}/prompt-versions` && method === 'GET') {
+      syncFavorites();
+      const cursor = url.searchParams.get('cursor');
+      const items = cursor === 'older' ? versions.slice(20) : versions.slice(0, 20);
+      return json(route, {
+        items,
+        next_cursor: !cursor && versions.length > 20 ? 'older' : null,
+      });
+    }
+    const versionMatch = path.match(/^\/api\/mvp\/prompt-versions\/([a-f0-9]{32})$/);
+    if (versionMatch) {
+      syncFavorites();
+      const version = detailFor(versionMatch[1]);
+      return version ? json(route, version) : json(route, { detail: { code: 'PROMPT_VERSION_NOT_FOUND' } }, 404);
+    }
+    const jobMatch = path.match(/^\/api\/mvp\/jobs\/([a-f0-9]{32})$/);
+    if (jobMatch) {
+      syncFavorites();
+      const job = jobFor(jobMatch[1]);
+      return job ? json(route, job) : json(route, { detail: { code: 'JOB_NOT_FOUND' } }, 404);
+    }
+    if (path.match(/^\/api\/mvp\/jobs\/[a-f0-9]{32}\/events$/)) {
+      return json(route, { items: [], next_cursor: null });
+    }
+    if (path === `/api/mvp/sessions/${sessionId}/favorite-run` && method === 'PUT') {
+      if (failNextFavorite) {
+        failNextFavorite = false;
+        return json(route, { detail: { code: 'DATABASE_UNAVAILABLE' } }, 503);
+      }
+      favoriteId = request.postDataJSON().run_id;
+      syncFavorites();
+      return json(route, { editing_session_id: sessionId, favorite_run_id: favoriteId, selection_source: 'human' });
+    }
+    if (path === `/api/mvp/sessions/${sessionId}/favorite-run` && method === 'DELETE') {
+      if (failNextFavorite) {
+        failNextFavorite = false;
+        return json(route, { detail: { code: 'DATABASE_UNAVAILABLE' } }, 503);
+      }
+      favoriteId = null;
+      syncFavorites();
+      return json(route, { editing_session_id: sessionId, favorite_run_id: null, selection_source: 'human' });
+    }
+    const previewMatch = path.match(/^\/api\/mvp\/jobs\/([a-f0-9]{32})\/artifacts\/([^/]+)\/preview$/);
+    if (previewMatch) {
+      const artifact = jobFor(previewMatch[1])?.artifacts.find((item) => item.name === decodeURIComponent(previewMatch[2]));
+      if (!artifact || artifact.availability !== 'available') {
+        return json(route, { detail: { code: 'ARTIFACT_NOT_AVAILABLE' } }, 404);
+      }
+      return route.fulfill({
+        status: request.headers().range ? 206 : 200,
+        contentType: 'video/mp4',
+        headers: request.headers().range ? { 'Content-Range': 'bytes 0-9/10', 'Accept-Ranges': 'bytes' } : {},
+        body: Buffer.from('mock-video'),
+      });
+    }
+    if (path.match(/^\/api\/mvp\/jobs\/[a-f0-9]{32}\/artifacts\/[^/]+$/)) {
+      return route.fulfill({ status: 200, contentType: 'application/octet-stream', body: Buffer.from('artifact') });
+    }
+    return json(route, { detail: { code: 'MOCK_ROUTE_MISSING', message: `${method} ${path}` } }, 404);
+  });
+
+  return {
+    failNextFavorite() { failNextFavorite = true; },
+    get favoriteId() { return favoriteId; },
+  };
+}
+
 test.describe('reusable video workspace', () => {
   test('uploads once with monotonic percentage, creates a version, and streams activity', async ({ page }) => {
     const mock = await installWorkspaceApi(page);
@@ -323,7 +521,7 @@ test.describe('reusable video workspace', () => {
     await expect(page.locator('#activity-list')).toContainText('Transcribiendo el contenido hablado');
     await expect(page.locator('#activity-list')).toContainText('Renderizando un clip');
     await expect(page.locator('#artifacts')).toContainText('short-01.mp4');
-    await expect(page.locator('#recent-jobs .recent-job')).toHaveCount(1);
+    await expect(page.locator('#recent-jobs .version-card')).toHaveCount(1);
 
     expect(await page.evaluate(() => ({
       local: Object.keys(localStorage),
@@ -337,7 +535,7 @@ test.describe('reusable video workspace', () => {
     await page.reload();
     await expect(page.locator('#workspace-title')).toHaveText('Entrevista editorial de julio');
     await expect(page.locator('#source-state')).toHaveText('Fuente lista');
-    await expect(page.locator('#recent-jobs .recent-job')).toHaveCount(1);
+    await expect(page.locator('#recent-jobs .version-card')).toHaveCount(1);
   });
 
   test('requires matching metadata to resume from the server offset and can discard a partial upload', async ({ page }) => {
@@ -431,6 +629,91 @@ test.describe('reusable video workspace', () => {
     expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(720);
   });
 
+  test('paginates long history, lazily previews outputs, and compares exactly two runs with focus return', async ({ page }) => {
+    const versions = Array.from({ length: 22 }, (_, offset) => historyVersion(22 - offset, {
+      prompt: offset === 0 ? 'Una instrucción muy extensa. '.repeat(30) : undefined,
+      available: offset !== 1,
+    }));
+    await installHistoryApi(page, { versions });
+    await page.setViewportSize({ width: 1440, height: 1000 });
+    await page.goto(`/?session=${sessionId}`);
+
+    await expect(page.locator('#recent-jobs .version-card')).toHaveCount(20);
+    await expect(page.locator('#history-load-more')).toBeVisible();
+    await expect(page.locator('#recent-jobs video[data-managed-preview]')).toHaveCount(0);
+    await page.locator('#history-load-more').click();
+    await expect(page.locator('#recent-jobs .version-card')).toHaveCount(22);
+    await expect(page.locator('#history-load-more')).toBeHidden();
+
+    const firstCard = page.locator('#recent-jobs .version-card').first();
+    await firstCard.getByRole('button', { name: 'Leer instrucción completa' }).click();
+    await expect(firstCard.locator('.version-prompt')).toHaveAttribute('aria-expanded', 'true');
+    await firstCard.getByRole('button', { name: 'Ver salidas y QA' }).click();
+    await expect(firstCard.locator('.run-detail')).toBeVisible();
+    await expect(firstCard.locator('video[data-managed-preview]')).toHaveCount(0);
+    await firstCard.getByRole('button', { name: 'Cargar vista previa' }).click();
+    await expect(firstCard.locator('video[preload="metadata"]')).toHaveCount(1);
+
+    const compareChecks = page.locator('#recent-jobs .compare-check input');
+    await compareChecks.nth(0).check();
+    await compareChecks.nth(1).check();
+    await expect(compareChecks.nth(2)).toBeDisabled();
+    await expect(page.locator('#comparison-count')).toHaveText('2 de 2 seleccionadas');
+    await page.locator('#comparison-open').focus();
+    await page.locator('#comparison-open').click();
+    await expect(page.locator('#comparison-dialog')).toBeVisible();
+    await expect(page.locator('#comparison-content .comparison-column')).toHaveCount(2);
+    await expect(page.locator('#comparison-dialog')).toContainText('OpenStoryline no asigna una puntuación');
+    await page.locator('#comparison-close').click();
+    await expect(page.locator('#comparison-dialog')).toBeHidden();
+    await expect(page.locator('#comparison-open')).toBeFocused();
+  });
+
+  test('persists a human favorite, clears it, and rolls optimistic state back after failure', async ({ page }) => {
+    const mock = await installHistoryApi(page);
+    await page.goto(`/?session=${sessionId}`);
+    const cards = page.locator('#recent-jobs .version-card');
+    const firstFavorite = cards.nth(0).getByRole('button', { name: 'Elegir favorita' });
+
+    await firstFavorite.click();
+    await expect(cards.nth(0)).toContainText('Tu favorita');
+    await expect(page.locator('#session-summary')).toContainText('es tu elección favorita');
+    expect(mock.favoriteId).toBe(secondJobId);
+
+    await page.reload();
+    await expect(page.locator('#recent-jobs .version-card').nth(0)).toContainText('Tu favorita');
+    await page.locator('#recent-jobs .version-card').nth(0).getByRole('button', { name: 'Quitar favorita' }).click();
+    await expect(page.locator('#recent-jobs')).not.toContainText('Tu favorita');
+    expect(mock.favoriteId).toBeNull();
+
+    mock.failNextFavorite();
+    await page.locator('#recent-jobs .version-card').nth(1).getByRole('button', { name: 'Elegir favorita' }).click();
+    await expect(page.locator('#recent-jobs')).not.toContainText('Tu favorita');
+    await expect(page.locator('#toast-region')).toContainText('temporalmente fuera de servicio');
+    expect(mock.favoriteId).toBeNull();
+  });
+
+  test('shows missing media guidance and keeps legacy sessions read-only', async ({ page }) => {
+    await installHistoryApi(page, {
+      versions: [historyVersion(1, { id: promptVersionId, runId: jobId, available: false })],
+    });
+    await page.goto(`/?session=${sessionId}`);
+    const card = page.locator('#recent-jobs .version-card').first();
+    await card.getByRole('button', { name: 'Ver salidas y QA' }).click();
+    await expect(card).toContainText('Los medios ya no están disponibles');
+
+    await page.unroute('**/api/mvp/**');
+    await installHistoryApi(page, { legacy: true });
+    await page.reload();
+    await expect(page.locator('#legacy-workspace')).toBeVisible();
+    await expect(page.locator('#modern-workspace')).toBeHidden();
+    await expect(page.locator('#legacy-history')).toContainText('Corte histórico de una carga anterior');
+    await expect(page.locator('#legacy-history')).toContainText('Descargar');
+    await page.locator('#legacy-create-session').click();
+    await expect(page.locator('#session-dialog')).toBeVisible();
+    await expect(page.locator('#session-title')).toBeFocused();
+  });
+
   test('390px mobile keeps the source, composer, and activity in a usable reading order', async ({ page }) => {
     const ready: SourceState = {
       id: uploadId,
@@ -470,5 +753,22 @@ test.describe('reusable video workspace', () => {
       local: Object.keys(localStorage),
       session: Object.keys(sessionStorage),
     }))).toEqual({ local: [], session: [] });
+  });
+
+  test('390px mobile stacks comparison columns without horizontal overflow', async ({ page }) => {
+    await installHistoryApi(page);
+    await page.setViewportSize({ width: 390, height: 844 });
+    await page.goto(`/?session=${sessionId}`);
+    const compareChecks = page.locator('#recent-jobs .compare-check input');
+    await compareChecks.nth(0).check();
+    await compareChecks.nth(1).check();
+    await page.locator('#comparison-open').click();
+    const columns = page.locator('#comparison-content .comparison-column');
+    await expect(columns).toHaveCount(2);
+    const boxes = await columns.evaluateAll((nodes) => nodes.map((node) => node.getBoundingClientRect()));
+    expect(boxes[1].top).toBeGreaterThan(boxes[0].bottom - 1);
+    expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(390);
+    await page.keyboard.press('Escape');
+    await expect(page.locator('#comparison-dialog')).toBeHidden();
   });
 });

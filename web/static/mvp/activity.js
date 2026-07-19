@@ -144,6 +144,9 @@ export class ActivityFeed {
     if (!Number.isInteger(sequence) || sequence <= this.lastSequence || this.events.has(sequence)) return;
     this.lastSequence = sequence;
     this.events.set(sequence, event);
+    while (this.events.size > 256) {
+      this.events.delete(this.events.keys().next().value);
+    }
     this.callbacks.onEvent?.(event);
   }
 

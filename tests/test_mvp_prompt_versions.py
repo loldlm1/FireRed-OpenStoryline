@@ -378,6 +378,45 @@ class PromptVersionPostgresTests(unittest.IsolatedAsyncioTestCase):
         cleared = await self.service.clear_favorite(editing_session["id"])
         self.assertIsNone(cleared["favorite_run_id"])
 
+    async def test_concurrent_favorite_switches_leave_exactly_one_human_choice(self):
+        editing_session, _source, _path = await self.ready_session("Concurrent favorite")
+        first = await self.service.create_version(
+            editing_session["id"],
+            prompt="first completed choice",
+            settings=self.settings,
+        )
+        second = await self.service.create_version(
+            editing_session["id"],
+            prompt="second completed choice",
+            settings=self.settings,
+        )
+        run_ids = {first["run"]["id"], second["run"]["id"]}
+        for run_id in run_ids:
+            await self.store.update(run_id, state="completed", progress=1)
+
+        selected = await asyncio.gather(
+            self.service.select_favorite(editing_session["id"], first["run"]["id"]),
+            self.service.select_favorite(editing_session["id"], second["run"]["id"]),
+        )
+
+        self.assertEqual(
+            {item["favorite_run_id"] for item in selected},
+            run_ids,
+        )
+        async with self.database.sessions() as session:
+            favorites = list(
+                (
+                    await session.execute(
+                        select(VideoJob).where(
+                            VideoJob.editing_session_id == editing_session["id"],
+                            VideoJob.is_favorite.is_(True),
+                        )
+                    )
+                ).scalars()
+            )
+        self.assertEqual(len(favorites), 1)
+        self.assertIn(favorites[0].id, run_ids)
+
     async def test_api_history_runs_favorite_and_registered_preview(self):
         editing_session, _source, _path = await self.ready_session("API")
         manager = JobManager(self.store)
