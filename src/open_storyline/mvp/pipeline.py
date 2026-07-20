@@ -29,6 +29,11 @@ from open_storyline.mvp.ffmpega import (
 )
 from open_storyline.mvp.frame_sampling import sample_frames
 from open_storyline.mvp.compositor import REFRAME_RENDER_CAPABILITIES
+from open_storyline.mvp.creative_intent import (
+    build_creative_intent,
+    validate_creative_intent_conformance,
+    validate_intent_capabilities,
+)
 from open_storyline.mvp.creative_qa import (
     QAInput,
     creative_qa_enabled,
@@ -92,12 +97,20 @@ class MVPJobProcessor:
                 server_asset_cap,
                 self.config.agentic_editing.max_assets_per_clip,
             )
+            requested_asset_policy = str(
+                request.get("asset_policy") or "auto"
+            ).strip().lower()
             if (
-                str(request.get("asset_policy") or "auto") == "auto"
+                requested_asset_policy in {"auto", "required"}
                 and generated_assets_enabled(self.config.agentic_editing)
                 and effective_generated_asset_cap > 0
             ):
-                effective_asset_policy = "auto"
+                effective_asset_policy = requested_asset_policy
+            elif requested_asset_policy == "required":
+                raise EditPlanError(
+                    "CREATIVE_INTENT_CAPABILITY_UNAVAILABLE",
+                    "required generated-image capability is unavailable",
+                )
             stock_server_cap = pexels_server_cap(self.config.agentic_editing)
             job_stock_cap = int(
                 request.get("max_stock_assets_per_clip")
@@ -109,13 +122,37 @@ class MVPJobProcessor:
                 stock_server_cap,
                 self.config.agentic_editing.max_assets_per_clip,
             )
+            requested_stock_policy = str(
+                request.get("stock_policy") or "off"
+            ).strip().lower()
             if (
-                str(request.get("stock_policy") or "off") == "auto"
+                requested_stock_policy in {"auto", "required"}
                 and pexels_enabled(self.config.agentic_editing)
                 and effective_stock_asset_cap > 0
             ):
                 pexels_client = PexelsClient.from_config(self.config.agentic_editing)
-                effective_stock_policy = "auto"
+                effective_stock_policy = requested_stock_policy
+            elif requested_stock_policy == "required":
+                raise EditPlanError(
+                    "CREATIVE_INTENT_CAPABILITY_UNAVAILABLE",
+                    "required Pexels capability is unavailable",
+                )
+            preliminary_intent = build_creative_intent(
+                state["prompt"],
+                request,
+                selected_clip_count=1,
+            )
+            try:
+                validate_intent_capabilities(
+                    preliminary_intent,
+                    generated_available=effective_asset_policy != "off",
+                    stock_available=effective_stock_policy != "off",
+                )
+            except ValueError as exc:
+                raise EditPlanError(
+                    "CREATIVE_INTENT_CAPABILITY_UNAVAILABLE",
+                    str(exc),
+                ) from exc
         source = await store.source_path(job_id)
         work_dir = store.work_dir(job_id)
         output_dir = store.output_dir(job_id)
@@ -158,6 +195,8 @@ class MVPJobProcessor:
         await store.register_artifact(job_id, transcript_path, kind="transcript")
 
         names = AgenticArtifactNames()
+        creative_intent = None
+        creative_conformance = None
         scene_report = None
         frame_manifest = None
         visual_understanding = None
@@ -312,6 +351,22 @@ class MVPJobProcessor:
             )
             await store.register_artifact(job_id, shorts_plan_path, kind="shorts_plan")
 
+            creative_intent = build_creative_intent(
+                state["prompt"],
+                request,
+                selected_clip_count=len(plan.clips),
+            )
+            creative_intent_path = output_dir / names.creative_intent
+            creative_intent_path.write_text(
+                json.dumps(creative_intent.to_dict(), ensure_ascii=False, indent=2),
+                encoding="utf-8",
+            )
+            await store.register_artifact(
+                job_id,
+                creative_intent_path,
+                kind="creative_intent",
+            )
+
             await activity.stage(job_id, "planning_agentic_edit")
             edit_plan = await AgenticEditPlanner(remote_client).plan(
                 editing_prompt=state["prompt"],
@@ -331,8 +386,27 @@ class MVPJobProcessor:
                 max_generated_assets_per_clip=effective_generated_asset_cap,
                 max_stock_assets_per_clip=effective_stock_asset_cap,
                 stock_policy=effective_stock_policy,
+                creative_intent=creative_intent,
+                allow_degraded_fallback=(server_mode == "shadow"),
                 renderer_capabilities=REFRAME_RENDER_CAPABILITIES,
             )
+            if edit_plan.degraded:
+                creative_conformance = {
+                    "version": creative_intent.version,
+                    "status": "degraded",
+                    "error_code": "EDIT_PLAN_REPAIR_EXHAUSTED",
+                }
+            else:
+                try:
+                    creative_conformance = validate_creative_intent_conformance(
+                        edit_plan,
+                        creative_intent,
+                    ).to_dict()
+                except ValueError as exc:
+                    raise EditPlanError(
+                        "EDIT_PLAN_INTENT_MISMATCH",
+                        str(exc),
+                    ) from exc
             edit_planner_attempts = [
                 attempt.to_dict()
                 for attempt in getattr(remote_client, "last_attempts", ())
@@ -364,8 +438,8 @@ class MVPJobProcessor:
             pending_asset_ids = (
                 planned_asset_ids
                 if (
-                    effective_asset_policy == "auto"
-                    or effective_stock_policy == "auto"
+                    effective_asset_policy in {"auto", "required"}
+                    or effective_stock_policy in {"auto", "required"}
                 )
                 else set()
             )
@@ -520,6 +594,8 @@ class MVPJobProcessor:
                 "preflight_status": preflight.status,
                 "shadow_blocked": bool(preflight.blocking and shadow_allows_blocked),
                 "asset_manifest": names.asset_manifest,
+                "creative_intent": names.creative_intent,
+                "creative_intent_conformance": creative_conformance,
                 "asset_policy": {
                     "requested": str(request.get("asset_policy") or "auto"),
                     "effective": effective_asset_policy,

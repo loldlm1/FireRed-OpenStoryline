@@ -413,8 +413,16 @@ function settingsLabels(settings = {}) {
   const labels = [];
   labels.push(settings.edit_mode === 'agentic' ? 'Edición agéntica' : 'Edición esencial');
   if (Number.isInteger(settings.max_clips)) labels.push(`Hasta ${settings.max_clips} clips`);
-  labels.push(settings.asset_policy === 'auto' ? 'Imágenes según necesidad' : 'Sin imágenes generadas');
-  if (settings.stock_policy === 'auto') labels.push('Archivo opcional');
+  if (settings.asset_policy === 'required') {
+    labels.push(`${settings.max_generated_assets_per_clip || 0} imagen(es) obligatoria(s) por clip`);
+  } else {
+    labels.push(settings.asset_policy === 'auto' ? 'Imágenes opcionales hasta el máximo' : 'Sin imágenes generadas');
+  }
+  if (settings.stock_policy === 'required') {
+    labels.push(`${settings.max_stock_assets_per_clip || 0} video(s) Pexels obligatorio(s) por clip`);
+  } else if (settings.stock_policy === 'auto') {
+    labels.push('Pexels opcional hasta el máximo');
+  }
   return labels;
 }
 

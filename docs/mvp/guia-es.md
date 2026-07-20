@@ -220,12 +220,16 @@ cada artefacto o un ZIP. Cerrar sesión revoca la sesión de autenticación en
 PostgreSQL y borra las cookies del navegador; no elimina la sesión de edición.
 
 En edición agentiva hay dos controles separados. “Imágenes generadas” autoriza
-únicamente `cx/gpt-5.5-image` y sólo cuando el plan detecta un vacío visual.
-“Stock externo · Pexels” comienza en `No usar Pexels`; al activarlo permite
-fotos o videos de stock dentro del límite indicado. Desactivar ambos conserva
-encuadres, cortes, capas de fuente, texto, transiciones y subtítulos inteligentes
-sin llamadas a proveedores de assets. No existe fallback entre Pexels, 9Router
-y el video fuente.
+únicamente `cx/gpt-5.5-image`; “Video de archivo” usa sólo Pexels. En ambos,
+“cuando ayuden” define un máximo opcional y “cantidad exacta obligatoria” exige
+ese número por clip. Las instrucciones explícitas como “exactamente una imagen
+generada y un video Pexels” también se conservan como intención obligatoria al
+repetir una versión antigua. El sistema falla antes de llamar al proveedor si
+la capacidad requerida está apagada, y falla la planificación si el recurso no
+queda unido a una operación visible. Desactivar capacidades sin requisitos
+explícitos conserva encuadres, cortes, capas de fuente, texto, transiciones y
+subtítulos sin llamadas de assets. No existe fallback entre Pexels, 9Router y
+el video fuente.
 
 En dominio/HTTPS, la sesión usa una cookie opaca `HttpOnly`, `Secure` y
 `SameSite`, junto con un token CSRF separado para operaciones que modifican

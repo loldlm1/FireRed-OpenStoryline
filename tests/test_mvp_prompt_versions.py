@@ -41,6 +41,42 @@ async def _body(value: bytes):
     yield value
 
 
+class RunSettingsTests(unittest.TestCase):
+    def test_required_asset_mix_is_explicit_and_versioned(self):
+        settings = validate_run_settings(
+            max_clips=1,
+            edit_mode="agentic",
+            asset_policy="required",
+            max_generated_assets_per_clip=1,
+            stock_policy="required",
+            max_stock_assets_per_clip=1,
+            stock_asset_kind="video",
+        )
+
+        self.assertEqual(settings["settings_version"], 2)
+        self.assertEqual(settings["asset_policy"], "required")
+        self.assertEqual(settings["stock_policy"], "required")
+        self.assertEqual(settings["stock_asset_kind"], "video")
+
+    def test_required_asset_mix_rejects_zero_counts(self):
+        with self.assertRaises(JobStoreError) as generated:
+            validate_run_settings(
+                asset_policy="required",
+                max_generated_assets_per_clip=0,
+            )
+        self.assertEqual(
+            generated.exception.code,
+            "REQUIRED_GENERATED_ASSET_COUNT_INVALID",
+        )
+
+        with self.assertRaises(JobStoreError) as stock:
+            validate_run_settings(
+                stock_policy="required",
+                max_stock_assets_per_clip=0,
+            )
+        self.assertEqual(stock.exception.code, "REQUIRED_STOCK_ASSET_COUNT_INVALID")
+
+
 @unittest.skipUnless(os.getenv("TEST_DATABASE_URL"), "TEST_DATABASE_URL is not configured")
 class PromptVersionPostgresTests(unittest.IsolatedAsyncioTestCase):
     @classmethod
@@ -160,7 +196,7 @@ class PromptVersionPostgresTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(rerun["attempt_number"], 2)
         self.assertEqual(rerun["prompt"], first["run"]["prompt"])
         self.assertEqual(rerun["request"], first["run"]["request"])
-        self.assertEqual(rerun["request"]["settings_version"], 1)
+        self.assertEqual(rerun["request"]["settings_version"], 2)
 
         runs = (first["run"], second["run"], rerun)
         self.assertEqual({run["input"]["input_video_id"] for run in runs}, {source["id"]})
@@ -326,6 +362,29 @@ class PromptVersionPostgresTests(unittest.IsolatedAsyncioTestCase):
         with self.assertRaises(JobStoreError) as expired:
             await self.service.rerun(first["prompt_version"]["id"])
         self.assertEqual(expired.exception.code, "SESSION_SOURCE_EXPIRED")
+
+    async def test_required_asset_settings_survive_rerun_unchanged(self):
+        editing_session, _source, _source_path = await self.ready_session()
+        settings = validate_run_settings(
+            max_clips=1,
+            edit_mode="agentic",
+            asset_policy="required",
+            max_generated_assets_per_clip=1,
+            stock_policy="required",
+            max_stock_assets_per_clip=1,
+            stock_asset_kind="video",
+        )
+        created = await self.service.create_version(
+            editing_session["id"],
+            prompt="immutable required asset contract",
+            settings=settings,
+        )
+
+        rerun = await self.service.rerun(created["prompt_version"]["id"])
+
+        self.assertEqual(rerun["request"], created["run"]["request"])
+        self.assertEqual(rerun["request"]["asset_policy"], "required")
+        self.assertEqual(rerun["request"]["stock_policy"], "required")
 
     async def test_history_favorite_and_cross_session_rules(self):
         editing_session, _source, _path = await self.ready_session("History")

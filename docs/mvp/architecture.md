@@ -112,8 +112,15 @@ isolated so upstream behavior can continue to be merged into this fork.
 ## External asset controls
 
 - `asset_policy` controls 9Router-generated images; `stock_policy` independently
-  controls Pexels photos/videos. Either can be `off` while agentic source-only
-  reframing, cuts, overlays, transitions, subtitles, and QA continue to work.
+  controls Pexels photos/videos. `auto` is an optional maximum budget,
+  `required` is an exact per-clip count, and `off` disables the capability.
+  Existing settings without `required` retain their prior optional behavior.
+- Explicit required asset language in an immutable prompt is converted into a
+  versioned `creative_intent.json` ledger even for older settings snapshots. The
+  ledger stores a prompt hash and sanitized contract metadata, never prompt text.
+- Every required intent must map to an exact-count typed request, an executed
+  timeline overlay, and an explicit planner decision. Missing, unused, dangling,
+  or narratively claimed-only assets fail planning before provider resolution.
 - The planner receives only effective server/job capabilities and per-clip
   budgets. A provider disabled by configuration is excluded before planning;
   runtime failures fail the complete asset batch and never select another source.

@@ -10,6 +10,11 @@ import re
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator, model_validator
 
+from open_storyline.mvp.creative_intent import (
+    CreativeIntent,
+    CreativeIntentDecision,
+    validate_creative_intent_conformance,
+)
 from open_storyline.mvp.ninerouter import NineRouterClient
 from open_storyline.mvp.prompts import EDIT_PLAN_PROMPT_VERSION, EDIT_PLAN_SYSTEM_PROMPT
 from open_storyline.mvp.scene_boundaries import SceneBoundaryReport
@@ -37,13 +42,14 @@ SUPPORTED_CAPABILITIES = frozenset({
 })
 
 EditMode = Literal["legacy", "agentic"]
-AssetPolicy = Literal["off", "auto"]
+AssetPolicy = Literal["off", "auto", "required"]
 AgenticServerMode = Literal["off", "shadow", "render"]
 LayoutMode = Literal["crop", "fit", "letterbox", "source"]
 TransitionKind = Literal["cut", "fade", "xfade"]
 OverlayKind = Literal["text", "image", "source", "pip"]
 AssetKind = Literal["generated_image", "stock_image", "stock_video"]
 AssetProvider = Literal["9router", "pexels"]
+StockAssetKind = Literal["image", "video"]
 
 
 class EditPlanError(RuntimeError):
@@ -256,6 +262,7 @@ class ClipEditPlan(PlanModel):
     output_name: str = Field(min_length=1, max_length=120)
     segments: tuple[EditSegment, ...] = Field(min_length=1, max_length=48)
     asset_requests: tuple[AssetRequest, ...] = Field(default=(), max_length=8)
+    intent_decisions: tuple[CreativeIntentDecision, ...] = Field(default=(), max_length=32)
 
     @field_validator("title", "output_name")
     @classmethod
@@ -271,10 +278,13 @@ class ClipEditPlan(PlanModel):
     def validate_clip(self) -> "ClipEditPlan":
         segment_ids = [segment.id for segment in self.segments]
         asset_ids = [asset.id for asset in self.asset_requests]
+        intent_ids = [decision.intent_id for decision in self.intent_decisions]
         if len(set(segment_ids)) != len(segment_ids):
             raise ValueError("segment IDs must be unique")
         if len(set(asset_ids)) != len(asset_ids):
             raise ValueError("asset request IDs must be unique")
+        if len(set(intent_ids)) != len(intent_ids):
+            raise ValueError("intent decision IDs must be unique")
 
         last_timeline_end = 0
         for index, segment in enumerate(self.segments):
@@ -333,6 +343,8 @@ class EditPlan(PlanModel):
     source_duration_ms: int = Field(gt=0)
     requested_capabilities: tuple[str, ...] = Field(default=(), max_length=32)
     clips: tuple[ClipEditPlan, ...] = Field(min_length=1, max_length=50)
+    degraded: bool = False
+    degradation_reason: str = Field(default="", max_length=240)
 
     @field_validator("planner_version", "prompt_version")
     @classmethod
@@ -361,6 +373,8 @@ class EditPlan(PlanModel):
         for clip in self.clips:
             if clip.source_window.end_ms > self.source_duration_ms:
                 raise ValueError("clip timing exceeds source duration")
+        if self.degraded != bool(self.degradation_reason):
+            raise ValueError("degraded plans require exactly one degradation reason")
         return self
 
     def to_dict(self) -> dict[str, Any]:
@@ -375,6 +389,7 @@ def _edit_plan_field_contract() -> dict[str, list[str]]:
         TransitionSpec,
         OverlaySpec,
         AssetRequest,
+        CreativeIntentDecision,
         EditSegment,
         ClipEditPlan,
         EditPlan,
@@ -436,6 +451,7 @@ def _valid_clip_plan_template(clip_context: dict[str, Any]) -> dict[str, Any]:
                 "evidence_ids": evidence_ids,
             }],
             "asset_requests": [],
+            "intent_decisions": [],
         }],
     }
 
@@ -682,6 +698,8 @@ class AgenticEditPlanner:
         max_generated_assets_per_clip: int | None = None,
         max_stock_assets_per_clip: int = 0,
         stock_policy: AssetPolicy = "off",
+        creative_intent: CreativeIntent | None = None,
+        allow_degraded_fallback: bool = False,
         renderer_capabilities: Iterable[str] = SUPPORTED_CAPABILITIES,
     ) -> EditPlan:
         available_capabilities = frozenset(str(value) for value in renderer_capabilities)
@@ -701,10 +719,15 @@ class AgenticEditPlanner:
                 "EDIT_PLAN_ASSET_BUDGET_INVALID",
                 "generated and stock asset budgets must be between 0 and 8",
             )
-        if stock_policy not in {"off", "auto"}:
+        if asset_policy not in {"off", "auto", "required"}:
             raise EditPlanError(
                 "EDIT_PLAN_ASSET_POLICY_INVALID",
-                "stock_policy must be off or auto",
+                "asset_policy must be off, auto, or required",
+            )
+        if stock_policy not in {"off", "auto", "required"}:
+            raise EditPlanError(
+                "EDIT_PLAN_ASSET_POLICY_INVALID",
+                "stock_policy must be off, auto, or required",
             )
         clip_contexts = [
             _clip_context(
@@ -732,18 +755,31 @@ class AgenticEditPlanner:
             "stock_policy": stock_policy,
             "asset_providers": {
                 "generated_image": (
-                    ["9router"] if asset_policy == "auto" and generated_limit else []
+                    ["9router"]
+                    if asset_policy in {"auto", "required"} and generated_limit
+                    else []
                 ),
-                "stock_image": ["pexels"] if stock_policy == "auto" and stock_limit else [],
-                "stock_video": ["pexels"] if stock_policy == "auto" and stock_limit else [],
+                "stock_image": (
+                    ["pexels"]
+                    if stock_policy in {"auto", "required"} and stock_limit
+                    else []
+                ),
+                "stock_video": (
+                    ["pexels"]
+                    if stock_policy in {"auto", "required"} and stock_limit
+                    else []
+                ),
             },
             "rules": [
                 "Preserve every selected clip source window exactly.",
                 "Cover each clip timeline contiguously from zero to its full selected duration.",
                 "Use evidence IDs and semantic targets only from the supplied clip context.",
                 "Use source evidence when it satisfies the visual intent.",
-                "Request an asset only for a specific unresolved visual gap and only when policy is auto.",
+                "Request an asset only for a specific unresolved visual gap and an enabled policy.",
                 "Use only the asset kinds and providers explicitly available in asset_providers.",
+                "Every creative_intent requirement needs an explicit intent_decision.",
+                "Required asset intent must map exact-count asset_requests to executed image overlays.",
+                "Required intent cannot be omitted; optional omission reasons are allowlisted by the schema.",
                 "Never return FFmpeg expressions, commands, paths, or unsupported operations.",
             ],
             "exact_field_contract": _edit_plan_field_contract(),
@@ -769,6 +805,7 @@ class AgenticEditPlanner:
 
         planned_clips: list[ClipEditPlan] = []
         requested_capabilities: set[str] = set()
+        degradation_reasons: set[str] = set()
         for clip_index, (selected_clip, clip_context) in enumerate(
             zip(shorts_plan.clips, clip_contexts),
             start=1,
@@ -781,9 +818,19 @@ class AgenticEditPlanner:
                 },
                 "valid_output_template": _valid_clip_plan_template(clip_context),
                 "clips": [clip_context],
+                "creative_intent": (
+                    creative_intent.planner_payload(clip_index=clip_index)
+                    if creative_intent is not None
+                    else {"asset_intents": [], "operation_intents": []}
+                ),
             }
+            clip_intent = (
+                creative_intent.for_clip(clip_index)
+                if creative_intent is not None
+                else None
+            )
 
-            def validate_response(value: Any) -> EditPlan:
+            def validate_response(value: Any, *, enforce_intent: bool = True) -> EditPlan:
                 payload = dict(_normalize_edit_plan_response(value))
                 payload.update({
                     "version": EDIT_PLAN_VERSION,
@@ -851,12 +898,20 @@ class AgenticEditPlanner:
                         "planner requested unavailable capabilities: "
                         + ", ".join(unavailable),
                     )
+                if clip_intent is not None and enforce_intent:
+                    try:
+                        validate_creative_intent_conformance(clip_plan, clip_intent)
+                    except ValueError as exc:
+                        raise EditPlanError(
+                            "EDIT_PLAN_INTENT_MISMATCH",
+                            _safe_text(str(exc), limit=1000),
+                        ) from exc
                 return clip_plan
 
             response = await complete(
                 system_prompt=EDIT_PLAN_SYSTEM_PROMPT,
                 user_prompt=json.dumps(user_payload, ensure_ascii=False),
-                reasoning_effort="low",
+                reasoning_effort=getattr(self.client, "reasoning_effort", "medium"),
             )
             try:
                 clip_plan = validate_response(response)
@@ -876,19 +931,30 @@ class AgenticEditPlanner:
                 repaired = await complete(
                     system_prompt=EDIT_PLAN_SYSTEM_PROMPT,
                     user_prompt=json.dumps(repair_payload, ensure_ascii=False),
-                    reasoning_effort="low",
+                    reasoning_effort=getattr(self.client, "reasoning_effort", "medium"),
                 )
                 try:
                     clip_plan = validate_response(repaired)
-                except EditPlanError:
+                except EditPlanError as repair_error:
+                    if not allow_degraded_fallback:
+                        raise EditPlanError(
+                            "EDIT_PLAN_REPAIR_EXHAUSTED",
+                            "remote edit planning remained invalid after one repair attempt",
+                        ) from repair_error
                     fallback = deepcopy(user_payload["valid_output_template"])
                     fallback["clips"][0]["segments"][0]["reason"] = (
                         "Use the strongest validated source evidence after remote "
                         "edit-plan validation failed."
                     )
-                    clip_plan = validate_response(fallback)
+                    clip_plan = validate_response(fallback, enforce_intent=False)
+                    clip_plan = clip_plan.model_copy(update={
+                        "degraded": True,
+                        "degradation_reason": "schema_repair_exhausted_shadow_fallback",
+                    })
             planned_clips.extend(clip_plan.clips)
             requested_capabilities.update(clip_plan.requested_capabilities)
+            if clip_plan.degraded:
+                degradation_reasons.add(clip_plan.degradation_reason)
 
         plan = EditPlan(
             planner_version=AGENTIC_PLANNER_VERSION,
@@ -896,6 +962,8 @@ class AgenticEditPlanner:
             source_duration_ms=source_duration_ms,
             requested_capabilities=tuple(sorted(requested_capabilities)),
             clips=tuple(planned_clips),
+            degraded=bool(degradation_reasons),
+            degradation_reason=";".join(sorted(degradation_reasons)),
         )
         generated_assets = [
             asset
@@ -1002,8 +1070,11 @@ def validate_job_controls(edit_mode: str, asset_policy: str) -> tuple[EditMode, 
     normalized_assets = str(asset_policy or "auto").strip().lower()
     if normalized_edit not in {"legacy", "agentic"}:
         raise EditPlanError("EDIT_MODE_INVALID", "edit_mode must be legacy or agentic")
-    if normalized_assets not in {"off", "auto"}:
-        raise EditPlanError("ASSET_POLICY_INVALID", "asset_policy must be off or auto")
+    if normalized_assets not in {"off", "auto", "required"}:
+        raise EditPlanError(
+            "ASSET_POLICY_INVALID",
+            "asset_policy must be off, auto, or required",
+        )
     return normalized_edit, normalized_assets  # type: ignore[return-value]
 
 
@@ -1019,8 +1090,11 @@ def validate_generated_asset_limit(value: int) -> int:
 
 def validate_stock_policy(value: str) -> AssetPolicy:
     normalized = str(value or "off").strip().lower()
-    if normalized not in {"off", "auto"}:
-        raise EditPlanError("STOCK_POLICY_INVALID", "stock_policy must be off or auto")
+    if normalized not in {"off", "auto", "required"}:
+        raise EditPlanError(
+            "STOCK_POLICY_INVALID",
+            "stock_policy must be off, auto, or required",
+        )
     return normalized  # type: ignore[return-value]
 
 
@@ -1034,8 +1108,19 @@ def validate_stock_asset_limit(value: int) -> int:
     return limit
 
 
+def validate_stock_asset_kind(value: str) -> StockAssetKind:
+    normalized = str(value or "video").strip().lower()
+    if normalized not in {"image", "video"}:
+        raise EditPlanError(
+            "STOCK_ASSET_KIND_INVALID",
+            "stock_asset_kind must be image or video",
+        )
+    return normalized  # type: ignore[return-value]
+
+
 @dataclass(frozen=True)
 class AgenticArtifactNames:
+    creative_intent: str = "creative_intent.json"
     scene_boundaries: str = "scene_boundaries.json"
     visual_understanding: str = "visual_understanding.json"
     shorts_plan: str = "shorts_plan.json"

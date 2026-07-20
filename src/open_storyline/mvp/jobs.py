@@ -26,6 +26,7 @@ from open_storyline.mvp.edit_plan import (
     validate_generated_asset_limit,
     validate_job_controls,
     validate_stock_asset_limit,
+    validate_stock_asset_kind,
     validate_stock_policy,
 )
 from open_storyline.mvp.models import (
@@ -436,6 +437,7 @@ class JobStore:
         max_generated_assets_per_clip: int = 2,
         stock_policy: str = "off",
         max_stock_assets_per_clip: int = 0,
+        stock_asset_kind: str = "video",
         job_id: str | None = None,
     ) -> dict[str, Any]:
         clean_prompt = str(prompt or "").strip()
@@ -453,8 +455,19 @@ class JobStore:
             )
             normalized_stock_policy = validate_stock_policy(stock_policy)
             stock_asset_limit = validate_stock_asset_limit(max_stock_assets_per_clip)
+            normalized_stock_kind = validate_stock_asset_kind(stock_asset_kind)
         except EditPlanError as exc:
             raise JobStoreError(exc.code, str(exc)) from exc
+        if normalized_asset_policy == "required" and generated_asset_limit == 0:
+            raise JobStoreError(
+                "REQUIRED_GENERATED_ASSET_COUNT_INVALID",
+                "required generated images need a positive per-clip count",
+            )
+        if normalized_stock_policy == "required" and stock_asset_limit == 0:
+            raise JobStoreError(
+                "REQUIRED_STOCK_ASSET_COUNT_INVALID",
+                "required stock media needs a positive per-clip count",
+            )
         editing_session = await self.get_session(editing_session_id)
         if editing_session["workflow_version"] != 1:
             raise JobStoreError(
@@ -479,6 +492,7 @@ class JobStore:
                 "max_generated_assets_per_clip": generated_asset_limit,
                 "stock_policy": normalized_stock_policy,
                 "max_stock_assets_per_clip": stock_asset_limit,
+                "stock_asset_kind": normalized_stock_kind,
             },
             input_data={
                 "original_filename": _safe_filename(filename),

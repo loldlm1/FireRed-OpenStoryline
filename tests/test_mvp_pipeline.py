@@ -321,14 +321,15 @@ async def fake_creative_qa_artifacts(*, output_dir, **_kwargs):
 
 
 class FakeStore:
-    def __init__(self, root: Path, *, server_request: dict):
+    def __init__(self, root: Path, *, server_request: dict, prompt: str = "make a strong short"):
         self.root = root
         self.request = server_request
+        self.prompt = prompt
         self.registered: list[tuple[str, str]] = []
 
     async def load(self, _job_id):
         return {
-            "prompt": "make a strong short",
+            "prompt": self.prompt,
             "prompt_version_id": "b" * 32,
             "attempt_number": 2,
             "is_favorite": True,
@@ -460,6 +461,7 @@ class MVPAgenticPipelineTests(unittest.IsolatedAsyncioTestCase):
             self.assertIn("scene_boundaries.json", names)
             self.assertIn("visual_understanding.json", names)
             self.assertIn("edit_plan.json", names)
+            self.assertIn("creative_intent.json", names)
             self.assertIn("edit_preflight.json", names)
             self.assertIn("short-01.mp4", names)
             self.assertEqual((Path(directory) / "output" / "short-01.mp4").read_bytes(), b"legacy-render")
@@ -479,13 +481,42 @@ class MVPAgenticPipelineTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(manifest["agentic"]["edit_planner"]["schema_version"], "edit_plan.v1")
             self.assertEqual(
                 manifest["agentic"]["edit_planner"]["prompt_version"],
-                "mvp-agentic-edit-plan.v4",
+                "mvp-agentic-edit-plan.v5",
             )
             registered_names = [name for name, _kind in store.registered]
             self.assertLess(
                 registered_names.index("shorts_plan.json"),
+                registered_names.index("creative_intent.json"),
+            )
+            self.assertLess(
+                registered_names.index("creative_intent.json"),
                 registered_names.index("edit_plan.json"),
             )
+
+    async def test_prompt_required_asset_fails_before_provider_calls_when_disabled(self):
+        with TemporaryDirectory() as directory:
+            store = FakeStore(
+                Path(directory),
+                server_request={
+                    "max_clips": 1,
+                    "edit_mode": "agentic",
+                    "asset_policy": "off",
+                    "stock_policy": "off",
+                },
+                prompt="Use exactly one generated editorial image.",
+            )
+            processor = object.__new__(MVPJobProcessor)
+            processor.config = config("render")
+            processor.stt = FakeSTT()
+
+            with self.assertRaises(EditPlanError) as caught:
+                await processor("9" * 32, store)
+
+            self.assertEqual(
+                caught.exception.code,
+                "CREATIVE_INTENT_CAPABILITY_UNAVAILABLE",
+            )
+            self.assertEqual(store.registered, [])
 
     async def test_agentic_request_fails_explicitly_when_server_is_off(self):
         with TemporaryDirectory() as directory:

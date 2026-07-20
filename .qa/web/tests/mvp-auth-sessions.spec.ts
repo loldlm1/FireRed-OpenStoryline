@@ -50,6 +50,12 @@ test.describe('remote MVP password sessions', () => {
     await expect(page.locator('#max-stock-assets')).toBeDisabled();
     await page.locator('#stock-policy').selectOption('auto');
     await expect(page.locator('#max-stock-assets')).toBeEnabled();
+    await page.locator('#stock-policy').selectOption('required');
+    await expect(page.locator('#max-stock-assets')).toHaveValue('1');
+    await expect(page.locator('#stock-policy-help')).toContainText('obligatorio');
+    await page.locator('#asset-policy').selectOption('required');
+    await expect(page.locator('#max-generated-assets')).toBeEnabled();
+    await expect(page.locator('#asset-policy-help')).toContainText('obligatoria');
     await page.locator('#edit-mode').selectOption('legacy');
     await expect(page.locator('#asset-policy')).toBeDisabled();
     await expect(page.locator('#stock-policy')).toBeDisabled();

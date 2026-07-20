@@ -235,12 +235,12 @@ async def resolve_assets(
     stock_requests = [
         item for item in requests if item[1].kind in {"stock_image", "stock_video"}
     ]
-    if generated_requests and asset_policy != "auto":
+    if generated_requests and asset_policy not in {"auto", "required"}:
         raise AssetResolutionError(
             "ASSET_POLICY_BLOCKED",
             "the job does not permit generated images",
         )
-    if stock_requests and stock_policy != "auto":
+    if stock_requests and stock_policy not in {"auto", "required"}:
         raise AssetResolutionError(
             "STOCK_POLICY_BLOCKED",
             "the job does not permit Pexels stock assets",
