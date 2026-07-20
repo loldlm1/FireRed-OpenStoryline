@@ -574,7 +574,58 @@ def _derive_missing_asset_overlays(clip: dict[str, Any]) -> None:
         used_asset_ids.add(asset_id)
 
 
-def _normalize_edit_plan_response(value: Any) -> Any:
+def _derive_operation_intent_mappings(
+    clip: dict[str, Any],
+    *,
+    creative_intent: CreativeIntent | None,
+) -> None:
+    if creative_intent is None:
+        return
+    segments = clip.get("segments")
+    decisions = clip.get("intent_decisions")
+    if not isinstance(segments, list) or not isinstance(decisions, list):
+        return
+    segment_ids = {
+        str(segment.get("id"))
+        for segment in segments
+        if isinstance(segment, dict) and segment.get("id")
+    }
+    operation_intents = {
+        item.id: item for item in creative_intent.operation_intents
+    }
+    for decision in decisions:
+        if not isinstance(decision, dict) or decision.get("decision") != "execute":
+            continue
+        intent = operation_intents.get(decision.get("intent_id"))
+        if intent is None:
+            continue
+        current_ids = decision.get("operation_ids")
+        current_ids = current_ids if isinstance(current_ids, (list, tuple)) else []
+        if intent.kind == "footer_captions":
+            executable_ids = segment_ids
+        else:
+            executable_ids = {
+                str(segment.get("id"))
+                for segment in segments
+                if isinstance(segment, dict)
+                and isinstance(segment.get("layout"), dict)
+                and segment["layout"].get("mode") == "crop"
+                and segment.get("id")
+            }
+        current_mapping_valid = (
+            bool(current_ids)
+            and all(isinstance(item, str) for item in current_ids)
+            and set(current_ids) <= executable_ids
+        )
+        if executable_ids and not current_mapping_valid:
+            decision["operation_ids"] = sorted(executable_ids)
+
+
+def _normalize_edit_plan_response(
+    value: Any,
+    *,
+    creative_intent: CreativeIntent | None = None,
+) -> Any:
     if not isinstance(value, dict):
         return value
     normalized = deepcopy(value)
@@ -669,6 +720,10 @@ def _normalize_edit_plan_response(value: Any) -> Any:
                 normalized_overlays.append(overlay)
             segment["overlays"] = normalized_overlays
         _derive_missing_asset_overlays(clip)
+        _derive_operation_intent_mappings(
+            clip,
+            creative_intent=creative_intent,
+        )
     return normalized
 
 
@@ -1124,7 +1179,10 @@ class AgenticEditPlanner:
             )
 
             def validate_response(value: Any, *, enforce_intent: bool = True) -> EditPlan:
-                payload = dict(_normalize_edit_plan_response(value))
+                payload = dict(_normalize_edit_plan_response(
+                    value,
+                    creative_intent=clip_intent,
+                ))
                 payload.update({
                     "version": EDIT_PLAN_VERSION,
                     "planner_version": AGENTIC_PLANNER_VERSION,

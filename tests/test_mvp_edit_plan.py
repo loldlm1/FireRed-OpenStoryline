@@ -491,6 +491,68 @@ class AgenticEditPlannerTests(unittest.IsolatedAsyncioTestCase):
                     "region-1",
                 )
 
+    async def test_maps_footer_caption_intent_to_executable_segments(self):
+        prompt = "Use readable footer-safe subtitles."
+        planner, client, kwargs = planner_fixture("speaker", prompt)
+        client.response["clips"][0]["intent_decisions"] = [{
+            "intent_id": "prompt-footer-captions",
+            "decision": "execute",
+            "operation_ids": [{"id": "subtitle-overlay"}],
+        }]
+        kwargs["creative_intent"] = build_creative_intent(
+            prompt,
+            {
+                "asset_policy": "off",
+                "stock_policy": "off",
+            },
+            selected_clip_count=1,
+        )
+
+        plan = await planner.plan(**kwargs)
+
+        self.assertEqual(len(client.calls), 1)
+        self.assertEqual(
+            plan.clips[0].intent_decisions[0].operation_ids,
+            ("segment-1",),
+        )
+
+    async def test_does_not_invent_portrait_operation_without_a_crop(self):
+        prompt = "Use a portrait reframe."
+        planner, client, kwargs = planner_fixture("speaker", prompt)
+        response = client.response
+        response["requested_capabilities"] = ["fit", "hard_cut", "subtitles"]
+        response["clips"][0]["segments"][0]["layout"] = {
+            "mode": "fit",
+            "fallback": "fit",
+            "allow_full_frame_fallback": True,
+        }
+        response["clips"][0]["intent_decisions"] = [{
+            "intent_id": "prompt-portrait-reframe",
+            "decision": "execute",
+            "operation_ids": ["fit-operation"],
+        }]
+        client.response = [deepcopy(response), deepcopy(response)]
+        kwargs["creative_intent"] = build_creative_intent(
+            prompt,
+            {
+                "asset_policy": "off",
+                "stock_policy": "off",
+            },
+            selected_clip_count=1,
+        )
+
+        with self.assertRaises(EditPlanError) as caught:
+            await planner.plan(**kwargs)
+
+        self.assertEqual(caught.exception.code, "EDIT_PLAN_REPAIR_EXHAUSTED")
+        self.assertEqual(
+            caught.exception.evidence["attempts"][0]["intent_conformance"],
+            {
+                "constraint_code": "required_operation_mapping_invalid",
+                "intent_id": "prompt-portrait-reframe",
+            },
+        )
+
     async def test_prior_attempt_quality_feedback_is_explicit_planner_input(self):
         planner, client, kwargs = planner_fixture(
             "speaker", "Keep the speaker primary and repair objective blockers."
