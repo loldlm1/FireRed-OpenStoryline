@@ -88,6 +88,9 @@ class MVPJobProcessor:
         state = await store.load(job_id)
         activity = ActivityService(store)
         request = state.get("request") or {}
+        prior_quality_feedback = request.get("prior_attempt_quality_feedback")
+        if not isinstance(prior_quality_feedback, dict):
+            prior_quality_feedback = {}
         agentic_requested = request.get("edit_mode") == "agentic"
         server_mode = None
         effective_asset_policy = "off"
@@ -485,6 +488,7 @@ class MVPJobProcessor:
                     creative_intent=creative_intent,
                     allow_degraded_fallback=(server_mode == "shadow"),
                     visual_coverage_feedback=visual_coverage_feedback,
+                    prior_attempt_quality_feedback=prior_quality_feedback,
                     renderer_capabilities=REFRAME_RENDER_CAPABILITIES,
                 )
 
@@ -767,6 +771,14 @@ class MVPJobProcessor:
                     "planner_version": edit_plan.planner_version,
                     "prompt_version": edit_plan.prompt_version,
                     "attempts": edit_planner_attempts,
+                    "prior_attempt_quality_feedback": {
+                        "version": prior_quality_feedback.get("version"),
+                        "prior_attempt_id": prior_quality_feedback.get("prior_attempt_id"),
+                        "prior_attempt_number": prior_quality_feedback.get(
+                            "prior_attempt_number"
+                        ),
+                        "blocker_codes": prior_quality_feedback.get("blocker_codes", []),
+                    },
                 },
                 "preflight": names.preflight,
                 "preflight_status": preflight.status,
@@ -1173,6 +1185,13 @@ class MVPJobProcessor:
                 "attempt_number": state.get("attempt_number"),
                 "settings_version": request.get("settings_version"),
                 "is_favorite": bool(state.get("is_favorite")),
+                "prior_attempt_quality_feedback": {
+                    "version": prior_quality_feedback.get("version"),
+                    "prior_attempt_id": prior_quality_feedback.get("prior_attempt_id"),
+                    "prior_attempt_number": prior_quality_feedback.get(
+                        "prior_attempt_number"
+                    ),
+                },
             },
             "source": {
                 "input_video_id": state["input"].get("input_video_id"),

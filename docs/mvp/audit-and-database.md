@@ -155,6 +155,12 @@ private paths. `OPENSTORYLINE_RENDER_PROMOTION_MODE=report` preserves completion
 while exposing blocker codes; `enforce` removes the candidate video before it
 can be registered when deterministic geometry, media structure, caption, or
 asset-conformance evidence blocks promotion. `off` is a rollback-only mode.
+Optional offline VMAF/XPSNR analysis remains a read-only operator action in the
+separate [quality sidecar](quality-sidecar.md). Its metrics do not change job
+state or promotion decisions. A later run can explicitly reuse only the
+allowlisted deterministic findings from one prior attempt; the new request and
+manifest record that attribution without exposing raw private audit documents
+to the planner.
 
 Reusable runs also retain the session source hash, prompt version and attempt
 number, settings snapshot, and whether the user selected the completed run as

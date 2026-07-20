@@ -1,0 +1,68 @@
+FROM python:3.11-slim@sha256:db3ff2e1800a8581e2c48a27c3995339d47bdf046da21c7627accd3d51053a93 AS build
+
+ARG FFMPEG_VERSION=7.1.1
+ARG FFMPEG_SHA256=733984395e0dbbe5c046abda2dc49a5544e7e0e1e2366bba849222ae9e3a03b1
+ARG VMAF_VERSION=3.0.0
+ARG VMAF_SHA256=7178c4833639e6b989ecae73131d02f70735fdb3fc2c7d84bc36c9c3461d93b1
+
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends \
+        build-essential \
+        ca-certificates \
+        curl \
+        meson \
+        nasm \
+        ninja-build \
+        pkg-config \
+        xz-utils \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /build
+
+RUN curl -fsSLo vmaf.tar.gz "https://github.com/Netflix/vmaf/archive/refs/tags/v${VMAF_VERSION}.tar.gz" \
+    && echo "${VMAF_SHA256}  vmaf.tar.gz" | sha256sum -c - \
+    && tar -xzf vmaf.tar.gz \
+    && meson setup vmaf-build "vmaf-${VMAF_VERSION}/libvmaf" \
+        --buildtype=release \
+        --default-library=shared \
+        -Denable_tests=false \
+        -Denable_docs=false \
+        -Denable_avx512=false \
+    && ninja -C vmaf-build install \
+    && install -Dm0644 "vmaf-${VMAF_VERSION}/model/vmaf_v0.6.1.json" \
+        /usr/local/share/model/vmaf_v0.6.1.json
+
+RUN curl -fsSLo ffmpeg.tar.xz "https://ffmpeg.org/releases/ffmpeg-${FFMPEG_VERSION}.tar.xz" \
+    && echo "${FFMPEG_SHA256}  ffmpeg.tar.xz" | sha256sum -c - \
+    && tar -xJf ffmpeg.tar.xz \
+    && cd "ffmpeg-${FFMPEG_VERSION}" \
+    && PKG_CONFIG_PATH=/usr/local/lib/x86_64-linux-gnu/pkgconfig:/usr/local/lib/pkgconfig \
+        ./configure \
+        --prefix=/usr/local \
+        --disable-debug \
+        --disable-doc \
+        --disable-static \
+        --enable-shared \
+        --enable-libvmaf \
+        --extra-ldflags=-Wl,-rpath,/usr/local/lib/x86_64-linux-gnu \
+    && make -j"$(nproc)" \
+    && make install
+
+COPY requirements-quality.txt ./
+RUN pip install --no-cache-dir --require-hashes -r requirements-quality.txt
+
+FROM python:3.11-slim@sha256:db3ff2e1800a8581e2c48a27c3995339d47bdf046da21c7627accd3d51053a93
+
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1 \
+    LD_LIBRARY_PATH=/usr/local/lib/x86_64-linux-gnu:/usr/local/lib
+
+COPY --from=build /usr/local/ /usr/local/
+COPY scripts/quality_metrics.py /usr/local/bin/openstoryline-quality
+
+RUN groupadd --gid 65532 quality \
+    && useradd --uid 65532 --gid 65532 --no-create-home --shell /usr/sbin/nologin quality \
+    && chmod 0555 /usr/local/bin/openstoryline-quality
+
+USER 65532:65532
+ENTRYPOINT ["python", "/usr/local/bin/openstoryline-quality"]

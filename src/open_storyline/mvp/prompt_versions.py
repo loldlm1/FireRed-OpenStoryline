@@ -34,11 +34,13 @@ from open_storyline.mvp.jobs import (
 )
 from open_storyline.mvp.models import (
     Artifact,
+    AuditDocument,
     EditingSession,
     PromptVersion,
     SessionInputVideo,
     VideoJob,
 )
+from open_storyline.mvp.observability import compact_prior_attempt_quality_feedback
 from open_storyline.mvp.session_media import SessionMediaStore
 
 
@@ -222,8 +224,22 @@ class PromptVersionService:
         prompt_version_id: str,
         *,
         job_id: str | None = None,
+        prior_attempt_id: str | None = None,
+        use_quality_feedback: bool = False,
     ) -> dict[str, Any]:
         self._validate_identifier(prompt_version_id, "PROMPT_VERSION_NOT_FOUND")
+        if use_quality_feedback and not prior_attempt_id:
+            raise JobStoreError(
+                "PRIOR_ATTEMPT_REQUIRED",
+                "an explicit prior attempt is required when quality feedback is enabled",
+            )
+        if prior_attempt_id:
+            self._validate_identifier(prior_attempt_id, "PRIOR_ATTEMPT_NOT_FOUND")
+        if prior_attempt_id and not use_quality_feedback:
+            raise JobStoreError(
+                "PRIOR_QUALITY_FEEDBACK_FLAG_REQUIRED",
+                "use_quality_feedback must be true when a prior attempt is supplied",
+            )
         job_identifier = job_id or uuid.uuid4().hex
         self._validate_identifier(job_identifier, "JOB_ID_INVALID")
         try:
@@ -274,6 +290,15 @@ class PromptVersionService:
                             or 0
                         ) + 1
                         now = _utcnow()
+                        quality_feedback = (
+                            await self._quality_feedback(
+                                session,
+                                version=version,
+                                prior_attempt_id=str(prior_attempt_id),
+                            )
+                            if use_quality_feedback
+                            else None
+                        )
                         job = self._new_job(
                             job_id=job_identifier,
                             owner=owner,
@@ -281,6 +306,7 @@ class PromptVersionService:
                             version=version,
                             attempt_number=attempt_number,
                             now=now,
+                            quality_feedback=quality_feedback,
                         )
                         session.add(job)
                         await session.flush()
@@ -292,6 +318,16 @@ class PromptVersionService:
                                 "prompt_version_id": version.id,
                                 "prompt_version_number": version.version_number,
                                 "attempt_number": attempt_number,
+                                "prior_attempt_id": (
+                                    quality_feedback.get("prior_attempt_id")
+                                    if quality_feedback
+                                    else None
+                                ),
+                                "quality_feedback_version": (
+                                    quality_feedback.get("version")
+                                    if quality_feedback
+                                    else None
+                                ),
                             },
                         )
         except JobStoreError:
@@ -629,7 +665,11 @@ class PromptVersionService:
         version: PromptVersion,
         attempt_number: int,
         now: datetime,
+        quality_feedback: dict[str, Any] | None = None,
     ) -> VideoJob:
+        request_data = dict(version.settings_data or {})
+        if quality_feedback:
+            request_data["prior_attempt_quality_feedback"] = quality_feedback
         return VideoJob(
             id=job_id,
             editing_session_id=owner.id,
@@ -638,7 +678,7 @@ class PromptVersionService:
             state="queued",
             progress=Decimal("0.05"),
             prompt=version.prompt,
-            request_data=dict(version.settings_data or {}),
+            request_data=request_data,
             input_data={
                 "source_kind": "session_input_video",
                 "input_video_id": source.id,
@@ -653,6 +693,58 @@ class PromptVersionService:
             updated_at=now,
             media_expires_at=now + self.store.media_retention,
             audit_expires_at=now + self.store.audit_retention,
+        )
+
+    async def _quality_feedback(
+        self,
+        session: AsyncSession,
+        *,
+        version: PromptVersion,
+        prior_attempt_id: str,
+    ) -> dict[str, Any]:
+        prior = await session.scalar(
+            select(VideoJob).where(
+                VideoJob.id == prior_attempt_id,
+                VideoJob.prompt_version_id == version.id,
+                VideoJob.deleted_at.is_(None),
+                VideoJob.audit_expires_at > _utcnow(),
+            )
+        )
+        if prior is None:
+            raise JobStoreError("PRIOR_ATTEMPT_NOT_FOUND", "prior attempt not found")
+        if prior.state in ACTIVE_STATES:
+            raise JobStoreError(
+                "PRIOR_ATTEMPT_NOT_READY",
+                "prior attempt quality evidence is not ready",
+            )
+        rows = list((await session.execute(
+            select(AuditDocument)
+            .where(
+                AuditDocument.job_id == prior.id,
+                AuditDocument.parse_status == "parsed",
+            )
+            .order_by(AuditDocument.created_at.desc(), AuditDocument.id.desc())
+        )).scalars())
+        documents: dict[str, Any] = {}
+        for row in rows:
+            if row.source_name in documents or not isinstance(row.parsed_data, dict):
+                continue
+            if row.source_name in {
+                "render_promotion.json",
+                "frame_quality_qa.json",
+                "clip_visual_coverage.json",
+                "creative_conformance.json",
+            } or row.source_name.endswith(".caption-footprint.json"):
+                documents[row.source_name] = dict(row.parsed_data)
+        if not documents:
+            raise JobStoreError(
+                "PRIOR_QUALITY_EVIDENCE_UNAVAILABLE",
+                "prior attempt has no eligible deterministic quality evidence",
+            )
+        return compact_prior_attempt_quality_feedback(
+            prior_attempt_id=prior.id,
+            prior_attempt_number=int(prior.attempt_number or 1),
+            documents=documents,
         )
 
     async def _recent_attempts(

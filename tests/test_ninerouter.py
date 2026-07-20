@@ -17,6 +17,13 @@ class NineRouterClientTests(unittest.IsolatedAsyncioTestCase):
             captured.update(json.loads(request.content))
             return httpx.Response(200, json={
                 "choices": [{"message": {"content": "{\"clips\": [{\"start\": 1}]}"}}],
+                "usage": {
+                    "prompt_tokens": 120,
+                    "completion_tokens": 30,
+                    "total_tokens": 150,
+                    "completion_tokens_details": {"reasoning_tokens": 20},
+                    "cost": 0.0042,
+                },
             })
 
         client = NineRouterClient(
@@ -39,6 +46,10 @@ class NineRouterClientTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(captured["messages"][1]["content"][1]["type"], "image_url")
         self.assertEqual(client.last_attempts[0].status_code, 200)
         self.assertEqual(client.last_attempts[0].reason, "ok")
+        self.assertGreaterEqual(client.last_attempts[0].duration_ms, 0)
+        self.assertEqual(client.last_attempts[0].input_tokens, 120)
+        self.assertEqual(client.last_attempts[0].reasoning_tokens, 20)
+        self.assertEqual(client.last_attempts[0].cost_usd, 0.0042)
 
     async def test_accepts_fenced_json_and_content_parts(self):
         def handler(request: httpx.Request) -> httpx.Response:
@@ -58,6 +69,35 @@ class NineRouterClientTests(unittest.IsolatedAsyncioTestCase):
             await client.complete_json(system_prompt="system", user_prompt="user"),
             {"ok": True},
         )
+
+    async def test_malformed_usage_is_ignored_without_failing_the_response(self):
+        def handler(request: httpx.Request) -> httpx.Response:
+            return httpx.Response(
+                200,
+                headers={"content-type": "application/json"},
+                content=(
+                    b'{"choices":[{"message":{"content":"{\\"ok\\":true}"}}],'
+                    b'"usage":{"prompt_tokens":Infinity,"completion_tokens":-1,'
+                    b'"total_tokens":"private-provider-value","cost":NaN}}'
+                ),
+            )
+
+        client = NineRouterClient(
+            base_url="https://router.test",
+            api_key="secret",
+            max_retries=0,
+            transport=httpx.MockTransport(handler),
+        )
+
+        self.assertEqual(
+            await client.complete_json(system_prompt="system", user_prompt="user"),
+            {"ok": True},
+        )
+        attempt = client.last_attempts[0]
+        self.assertIsNone(attempt.input_tokens)
+        self.assertIsNone(attempt.output_tokens)
+        self.assertIsNone(attempt.total_tokens)
+        self.assertIsNone(attempt.cost_usd)
 
     async def test_sends_per_call_reasoning_override(self):
         captured = {}

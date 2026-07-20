@@ -1,0 +1,90 @@
+#!/usr/bin/env bash
+set -Eeuo pipefail
+
+ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+QUALITY_IMAGE="${OPENSTORYLINE_QUALITY_IMAGE:-openstoryline-quality:local}"
+QUALITY_TIMEOUT="${OPENSTORYLINE_QUALITY_TIMEOUT:-900}"
+
+fail() {
+  printf 'Error: %s\n' "$*" >&2
+  exit 1
+}
+
+usage() {
+  printf '%s\n' \
+    'Usage:' \
+    '  bin/quality-mvp build' \
+    '  bin/quality-mvp analyze REFERENCE CANDIDATE [--execution FILE] [quality options]'
+}
+
+[[ "$QUALITY_TIMEOUT" =~ ^[1-9][0-9]*$ ]] || fail "OPENSTORYLINE_QUALITY_TIMEOUT must be a positive integer"
+(( QUALITY_TIMEOUT <= 3600 )) || fail "OPENSTORYLINE_QUALITY_TIMEOUT must not exceed 3600 seconds"
+
+case "${1:-}" in
+  build)
+    [[ $# -eq 1 ]] || fail "build does not accept additional arguments"
+    exec docker build --file "$ROOT_DIR/Dockerfile.quality" --tag "$QUALITY_IMAGE" "$ROOT_DIR"
+    ;;
+  analyze)
+    shift
+    ;;
+  -h|--help|"")
+    usage
+    exit 0
+    ;;
+  *)
+    usage >&2
+    exit 1
+    ;;
+esac
+
+[[ $# -ge 2 ]] || fail "analyze requires a reference and candidate video"
+reference="$(realpath "$1")"
+candidate="$(realpath "$2")"
+shift 2
+[[ -f "$reference" ]] || fail "reference video does not exist"
+[[ -f "$candidate" ]] || fail "candidate video does not exist"
+
+execution=""
+declare -a quality_args=(--reference /inputs/reference --candidate /inputs/candidate)
+while (($#)); do
+  case "$1" in
+    --execution)
+      [[ $# -ge 2 ]] || fail "--execution requires a file"
+      execution="$(realpath "$2")"
+      [[ -f "$execution" ]] || fail "execution document does not exist"
+      quality_args+=(--execution /inputs/execution)
+      shift 2
+      ;;
+    --format|--max-frames|--threads|--worst-frames)
+      [[ $# -ge 2 ]] || fail "$1 requires a value"
+      quality_args+=("$1" "$2")
+      shift 2
+      ;;
+    *)
+      fail "unsupported quality option: $1"
+      ;;
+  esac
+done
+
+declare -a mounts=(
+  --mount "type=bind,source=$reference,target=/inputs/reference,readonly"
+  --mount "type=bind,source=$candidate,target=/inputs/candidate,readonly"
+)
+if [[ -n "$execution" ]]; then
+  mounts+=(--mount "type=bind,source=$execution,target=/inputs/execution,readonly")
+fi
+
+exec timeout --signal=TERM --kill-after=10s "${QUALITY_TIMEOUT}s" \
+  docker run --rm \
+    --network none \
+    --read-only \
+    --cap-drop ALL \
+    --security-opt no-new-privileges \
+    --pids-limit 128 \
+    --cpus 2 \
+    --memory 2g \
+    --tmpfs /tmp:rw,noexec,nosuid,size=1g \
+    "${mounts[@]}" \
+    "$QUALITY_IMAGE" \
+    "${quality_args[@]}"
