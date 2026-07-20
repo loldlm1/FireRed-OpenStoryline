@@ -53,12 +53,22 @@ StockAssetKind = Literal["image", "video"]
 
 
 class EditPlanError(RuntimeError):
-    def __init__(self, code: str, message: str) -> None:
+    def __init__(
+        self,
+        code: str,
+        message: str,
+        *,
+        evidence: dict[str, Any] | None = None,
+    ) -> None:
         self.code = code
+        self.evidence = evidence or {}
         super().__init__(f"{code}: {message}")
 
-    def to_dict(self) -> dict[str, str]:
-        return {"code": self.code, "message": str(self)}
+    def to_dict(self) -> dict[str, Any]:
+        result: dict[str, Any] = {"code": self.code, "message": str(self)}
+        if self.evidence:
+            result["evidence"] = self.evidence
+        return result
 
 
 def _safe_text(value: str, *, limit: int) -> str:
@@ -462,13 +472,37 @@ def _normalize_edit_plan_response(value: Any) -> Any:
     if not isinstance(value, dict):
         return value
     normalized = deepcopy(value)
+    if normalized.get("degradation_reason") is None:
+        normalized["degradation_reason"] = ""
     clips = normalized.get("clips")
     if not isinstance(clips, list):
         return normalized
     for clip in clips:
-        if not isinstance(clip, dict) or not isinstance(clip.get("segments"), list):
+        if not isinstance(clip, dict):
             continue
-        for segment in clip["segments"]:
+        asset_requests = clip.get("asset_requests")
+        if isinstance(asset_requests, list):
+            for asset in asset_requests:
+                if not isinstance(asset, dict):
+                    continue
+                if "orientation" in asset:
+                    asset["orientation"] = {
+                        "vertical": "portrait",
+                        "horizontal": "landscape",
+                    }.get(asset.get("orientation"), asset.get("orientation"))
+                if "fallback" in asset:
+                    asset["fallback"] = {
+                        "none": "omit",
+                    }.get(asset.get("fallback"), asset.get("fallback"))
+        intent_decisions = clip.get("intent_decisions")
+        if isinstance(intent_decisions, list):
+            for decision in intent_decisions:
+                if isinstance(decision, dict) and decision.get("omission_reason") is None:
+                    decision["omission_reason"] = ""
+        segments = clip.get("segments")
+        if not isinstance(segments, list):
+            continue
+        for segment in segments:
             if not isinstance(segment, dict) or not isinstance(segment.get("overlays"), list):
                 continue
             for overlay in segment["overlays"]:
@@ -484,14 +518,97 @@ def _normalize_edit_plan_response(value: Any) -> Any:
                     }.get(overlay.get("position"))
                     if safe_position:
                         overlay["position"] = safe_position
+                if (
+                    overlay.get("kind") in {"source", "pip"}
+                    and overlay.get("source_window") is None
+                ):
+                    inferred = _infer_overlay_source_window(segment, overlay)
+                    if inferred is not None:
+                        overlay["source_window"] = inferred
     return normalized
+
+
+def _infer_overlay_source_window(
+    segment: dict[str, Any],
+    overlay: dict[str, Any],
+) -> dict[str, int] | None:
+    source_window = segment.get("source_window")
+    timeline_window = segment.get("timeline_window")
+    overlay_window = overlay.get("timeline_window")
+    if not all(
+        isinstance(item, dict)
+        for item in (source_window, timeline_window, overlay_window)
+    ):
+        return None
+    try:
+        source_start = int(source_window["start_ms"])
+        source_end = int(source_window["end_ms"])
+        timeline_start = int(timeline_window["start_ms"])
+        timeline_end = int(timeline_window["end_ms"])
+        overlay_start = int(overlay_window["start_ms"])
+        overlay_end = int(overlay_window["end_ms"])
+    except (KeyError, TypeError, ValueError):
+        return None
+    if (
+        source_end - source_start != timeline_end - timeline_start
+        or overlay_start < timeline_start
+        or overlay_end > timeline_end
+        or overlay_end <= overlay_start
+    ):
+        return None
+    offset_ms = source_start - timeline_start
+    return {
+        "start_ms": overlay_start + offset_ms,
+        "end_ms": overlay_end + offset_ms,
+    }
+
+
+def _validation_error_evidence(exc: ValidationError) -> dict[str, Any]:
+    errors = exc.errors(include_input=False, include_url=False)
+    issues = []
+    for error in errors[:12]:
+        location = []
+        for item in error.get("loc", ())[:12]:
+            if isinstance(item, int):
+                location.append(item)
+            else:
+                location.append(re.sub(r"[^A-Za-z0-9_.-]+", "_", str(item))[:80])
+        cause_code = re.sub(
+            r"[^a-z0-9_.-]+",
+            "_",
+            str(error.get("type") or "validation_error").lower(),
+        )[:80]
+        issues.append({"location": location, "cause_code": cause_code})
+    return {
+        "issue_count": len(errors),
+        "issues": issues,
+        "truncated": len(errors) > len(issues),
+    }
+
+
+def _repair_failure_evidence(*errors: EditPlanError) -> dict[str, Any]:
+    attempts = []
+    for phase, error in zip(("initial", "repair"), errors):
+        item: dict[str, Any] = {
+            "phase": phase,
+            "cause_code": error.code,
+        }
+        validation = error.evidence.get("validation")
+        if isinstance(validation, dict):
+            item["validation"] = validation
+        attempts.append(item)
+    return {"attempts": attempts}
 
 
 def validate_edit_plan(value: Any, *, source_duration_ms: int | None = None) -> EditPlan:
     try:
         plan = EditPlan.model_validate(value)
     except ValidationError as exc:
-        raise EditPlanError("EDIT_PLAN_INVALID", str(exc)[:2000]) from exc
+        raise EditPlanError(
+            "EDIT_PLAN_INVALID",
+            "edit plan failed schema validation",
+            evidence={"validation": _validation_error_evidence(exc)},
+        ) from exc
     if source_duration_ms is not None and plan.source_duration_ms != int(source_duration_ms):
         raise EditPlanError("EDIT_PLAN_SOURCE_MISMATCH", "plan source duration does not match media")
     return plan
@@ -932,7 +1049,10 @@ class AgenticEditPlanner:
                         "template unless no valid decision can be retained. Return only "
                         "the corrected JSON object."
                     ),
-                    "validation_error": _safe_text(str(initial_error), limit=2000),
+                    "validation_error": {
+                        "code": initial_error.code,
+                        "evidence": initial_error.evidence,
+                    },
                     "authoritative_request": user_payload,
                     "invalid_response": response,
                 }
@@ -948,6 +1068,7 @@ class AgenticEditPlanner:
                         raise EditPlanError(
                             "EDIT_PLAN_REPAIR_EXHAUSTED",
                             "remote edit planning remained invalid after one repair attempt",
+                            evidence=_repair_failure_evidence(initial_error, repair_error),
                         ) from repair_error
                     fallback = deepcopy(user_payload["valid_output_template"])
                     fallback["clips"][0]["segments"][0]["reason"] = (

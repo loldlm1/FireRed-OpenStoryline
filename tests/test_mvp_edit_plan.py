@@ -450,6 +450,51 @@ class AgenticEditPlannerTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(caught.exception.code, "EDIT_PLAN_REPAIR_EXHAUSTED")
         self.assertEqual(len(client.calls), 2)
 
+    async def test_repair_failure_persists_only_bounded_schema_evidence(self):
+        planner, client, kwargs = planner_fixture(
+            "speaker", "Use a relevant stock image."
+        )
+        response = client.response
+        response["requested_capabilities"].append("image_overlay")
+        response["clips"][0]["segments"][0]["overlays"] = [{
+            "id": "stock-overlay",
+            "kind": "image",
+            "timeline_window": {"start_ms": 1000, "end_ms": 3000},
+            "asset_id": "stock-1",
+            "position": "top_right",
+        }]
+        response["clips"][0]["asset_requests"] = [{
+            "id": "stock-1",
+            "kind": "stock_image",
+            "provider": "pexels",
+            "timeline_window": {"start_ms": 1000, "end_ms": 3000},
+            "visual_gap": "the source lacks a supporting visual",
+            "purpose": "support the explanation",
+            "rationale": "a stock image closes the visual gap",
+            "prompt": "a neutral supporting visual",
+            "orientation": "vertical-private-provider-response",
+            "fallback": "skip",
+        }]
+        client.response = [deepcopy(response), deepcopy(response)]
+        kwargs.update({
+            "max_stock_assets_per_clip": 1,
+            "stock_policy": "auto",
+        })
+
+        with self.assertRaises(EditPlanError) as caught:
+            await planner.plan(**kwargs)
+
+        evidence = caught.exception.to_dict()["evidence"]
+        serialized = json.dumps(evidence)
+        self.assertEqual(
+            [item["cause_code"] for item in evidence["attempts"]],
+            ["EDIT_PLAN_INVALID", "EDIT_PLAN_INVALID"],
+        )
+        self.assertIn("orientation", serialized)
+        self.assertIn("fallback", serialized)
+        self.assertNotIn("private-provider-response", serialized)
+        self.assertNotIn("neutral supporting visual", serialized)
+
     async def test_shadow_mode_marks_schema_fallback_as_degraded(self):
         planner, client, kwargs = planner_fixture(
             "screen", "Keep the validated screen evidence visible."
@@ -647,7 +692,8 @@ class AgenticEditPlannerTests(unittest.IsolatedAsyncioTestCase):
         )
         planner, client, kwargs = planner_fixture("speaker", prompt)
         response = client.response
-        response["requested_capabilities"].append("image_overlay")
+        response["requested_capabilities"].extend(["image_overlay", "source_cutaway"])
+        response["degradation_reason"] = None
         response["clips"][0]["segments"][0]["overlays"] = [
             {
                 "id": "generated-overlay",
@@ -663,6 +709,12 @@ class AgenticEditPlannerTests(unittest.IsolatedAsyncioTestCase):
                 "asset_id": "pexels-1",
                 "position": "top_left",
             },
+            {
+                "id": "source-overlay",
+                "kind": "source",
+                "timeline_window": {"start_ms": 10_000, "end_ms": 12_000},
+                "position": "top",
+            },
         ]
         response["clips"][0]["asset_requests"] = [
             {
@@ -674,6 +726,8 @@ class AgenticEditPlannerTests(unittest.IsolatedAsyncioTestCase):
                 "purpose": "show the abstract process",
                 "rationale": "an editorial still closes the conceptual gap",
                 "prompt": "a restrained editorial process diagram",
+                "orientation": "horizontal",
+                "fallback": "none",
             },
             {
                 "id": "pexels-1",
@@ -684,6 +738,8 @@ class AgenticEditPlannerTests(unittest.IsolatedAsyncioTestCase):
                 "purpose": "show the real-world action",
                 "rationale": "a short vertical cutaway closes the visible gap",
                 "prompt": "vertical real-world action",
+                "orientation": "vertical",
+                "fallback": "none",
             },
         ]
         response["clips"][0]["intent_decisions"] = [
@@ -692,12 +748,14 @@ class AgenticEditPlannerTests(unittest.IsolatedAsyncioTestCase):
                 "decision": "execute",
                 "asset_ids": ["generated-1"],
                 "operation_ids": ["generated-overlay"],
+                "omission_reason": None,
             },
             {
                 "intent_id": "prompt-pexels-video",
                 "decision": "execute",
                 "asset_ids": ["pexels-1"],
                 "operation_ids": ["pexels-overlay"],
+                "omission_reason": None,
             },
         ]
         intent = build_creative_intent(
@@ -723,6 +781,22 @@ class AgenticEditPlannerTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(
             [item.kind for item in plan.clips[0].asset_requests],
             ["generated_image", "stock_video"],
+        )
+        self.assertEqual(
+            [item.orientation for item in plan.clips[0].asset_requests],
+            ["landscape", "portrait"],
+        )
+        self.assertEqual(
+            [item.fallback for item in plan.clips[0].asset_requests],
+            ["omit", "omit"],
+        )
+        self.assertEqual(
+            plan.clips[0].segments[0].overlays[2].source_window,
+            TimeWindow(start_ms=10_000, end_ms=12_000),
+        )
+        self.assertEqual(plan.degradation_reason, "")
+        self.assertTrue(
+            all(not item.omission_reason for item in plan.clips[0].intent_decisions)
         )
         self.assertEqual(len(plan.clips[0].intent_decisions), 2)
 
