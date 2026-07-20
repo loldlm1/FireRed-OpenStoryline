@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from dataclasses import replace
 from typing import Any, Literal
 import json
 import re
@@ -618,9 +619,44 @@ class VisualUnderstandingPlanner:
             user_prompt=json.dumps(user_payload, ensure_ascii=False),
             image_data_urls=frame_manifest.image_data_urls,
         )
-        return validate_visual_understanding(
-            response,
-            frame_manifest=frame_manifest,
-            scene_report=scene_report,
-            model=self.client.model,
-        )
+        first_attempts = tuple(getattr(self.client, "last_attempts", ()))
+        try:
+            return validate_visual_understanding(
+                response,
+                frame_manifest=frame_manifest,
+                scene_report=scene_report,
+                model=self.client.model,
+            )
+        except VisualUnderstandingError as exc:
+            repair_payload = {
+                **user_payload,
+                "repair_feedback": {
+                    "error_code": exc.code,
+                    "instruction": (
+                        "Return a complete replacement object that satisfies every "
+                        "listed constraint. Each track may reference only regions that "
+                        "all share exactly the track role; split mixed-role tracks or "
+                        "omit them without relabeling valid region observations."
+                    ),
+                },
+            }
+            repaired = await self.client.complete_json(
+                system_prompt=VISUAL_UNDERSTANDING_SYSTEM_PROMPT,
+                user_prompt=json.dumps(repair_payload, ensure_ascii=False),
+                image_data_urls=frame_manifest.image_data_urls,
+            )
+            second_attempts = tuple(getattr(self.client, "last_attempts", ()))
+            if first_attempts or second_attempts:
+                self.client.last_attempts = tuple(
+                    replace(item, number=index)
+                    for index, item in enumerate(
+                        (*first_attempts, *second_attempts),
+                        start=1,
+                    )
+                )
+            return validate_visual_understanding(
+                repaired,
+                frame_manifest=frame_manifest,
+                scene_report=scene_report,
+                model=self.client.model,
+            )
