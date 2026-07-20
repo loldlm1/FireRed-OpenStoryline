@@ -197,7 +197,8 @@ Additional checks when relevant:
 PYTHONPATH=src .venv/bin/python -c "from open_storyline.config import load_settings; load_settings('config.toml'); print('config_ok')"
 bash -n run.sh build_env.sh download.sh bin/kamal-mvp \
   scripts/mvp-postgres-init.sh scripts/mvp-postgres-backup.sh \
-  scripts/mvp-postgres-restore-check.sh .kamal/hooks/pre-deploy
+  scripts/mvp-postgres-restore-check.sh .kamal/hooks/pre-deploy \
+  .kamal/hooks/post-deploy
 docker build -f Dockerfile.remote .
 ```
 

@@ -169,7 +169,8 @@ server:
 ```bash
 bash -n run.sh build_env.sh download.sh bin/kamal-mvp \
   scripts/mvp-postgres-init.sh scripts/mvp-postgres-backup.sh \
-  scripts/mvp-postgres-restore-check.sh .kamal/hooks/pre-deploy
+  scripts/mvp-postgres-restore-check.sh .kamal/hooks/pre-deploy \
+  .kamal/hooks/post-deploy
 ```
 
 For browser-visible work, run the relevant Python/API checks first, then select
@@ -202,14 +203,18 @@ part of a feature.
   generated artifacts, and rollback snapshots. The private PostgreSQL
   accessory separately persists database data and the one-file backup
   directory. PostgreSQL remains authoritative for application and audit state.
+- The web image runs as fixed non-root UID/GID `65532`. The pre-deploy hook
+  prepares only the dedicated outputs directory, preserving root-image
+  rollback access and leaving PostgreSQL ownership untouched.
 - `src/open_storyline/mvp/audit.py` owns bounded JSON/SRT ingestion, structural
   QC, reviews, filters, and backfill. `kamal app logs` is recent diagnostic
   context only; agents should query the PostgreSQL audit CLI for durable history.
 - A release is not verified by a successful build alone. It also needs working
   `/up` and `/health` checks, container/log review, persistent volume checks,
   and a known rollback command.
-- Code rollback can still be unsafe when persistent state formats change. Keep
-  job and manifest formats backward compatible or document migration/rollback.
+- Code rollback can still be unsafe when persistent state formats change. Use
+  an explicit rollback image version and run its database readiness contract
+  before selection; keep job and manifest formats backward compatible.
 
 Agents may validate configuration and build artifacts, but they must not deploy
 or modify live servers without explicit authorization.
