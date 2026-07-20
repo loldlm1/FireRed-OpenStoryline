@@ -28,11 +28,11 @@ def region(region_id: str, frame_id: str, *, x: float, width: float, role: str =
     )
 
 
-def visual(frames, regions):
+def visual(frames, regions, tracks=()):
     return SimpleNamespace(
         frame_manifest={"frames": frames},
         regions=tuple(regions),
-        tracks=(),
+        tracks=tuple(tracks),
     )
 
 
@@ -290,6 +290,61 @@ class CompositorTests(unittest.TestCase):
             resolved.crop.x + resolved.crop.width,
             (observation.bbox.x + observation.bbox.width) * source.width,
         )
+
+    def test_safe_margin_is_clamped_when_the_target_barely_fits_portrait(self):
+        source = MediaInfo(4000, 1920, 1080, True)
+        segment = EditSegment(
+            id="wide-speaker",
+            source_window=TimeWindow(start_ms=0, end_ms=4000),
+            timeline_window=TimeWindow(start_ms=0, end_ms=4000),
+            layout=LayoutSpec(
+                mode="crop",
+                focal_target=FocalTarget(track_id="speaker-track"),
+                fallback="crop",
+                max_zoom=2.6,
+                safe_margin_ratio=0.08,
+            ),
+            reason="preserve the visible speaker",
+        )
+        observations = [
+            region("speaker-left", "frame-001", x=0.05, width=0.305),
+            region("speaker-right", "frame-002", x=0.062, width=0.305),
+        ]
+
+        composition = resolve_clip_composition(
+            clip_plan([segment]),
+            visual=visual(
+                [
+                    {"id": "frame-001", "timestamp_ms": 1000},
+                    {"id": "frame-002", "timestamp_ms": 3000},
+                ],
+                observations,
+                tracks=[SimpleNamespace(
+                    id="speaker-track",
+                    region_ids=("speaker-left", "speaker-right"),
+                    role="speaker",
+                )],
+            ),
+            source_media=source,
+            output_width=1080,
+            output_height=1920,
+        )
+
+        resolved = composition.segments[0]
+        self.assertEqual(resolved.strategy, "crop")
+        self.assertEqual(resolved.requested_safe_margin_ratio, 0.08)
+        self.assertEqual(resolved.resolved_safe_margin_ratio, 0.0)
+        self.assertEqual(resolved.resolved_zoom, 1.0)
+        self.assertFalse(resolved.fallback_used)
+        for observation in observations:
+            self.assertLessEqual(
+                resolved.crop.x,
+                observation.bbox.x * source.width + 1,
+            )
+            self.assertGreaterEqual(
+                resolved.crop.x + resolved.crop.width + 1,
+                (observation.bbox.x + observation.bbox.width) * source.width,
+            )
 
     def test_filtergraph_is_server_generated_bounded_and_requires_audio(self):
         segment = SimpleNamespace(

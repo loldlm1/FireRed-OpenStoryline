@@ -75,6 +75,8 @@ class ResolvedSegment:
     crop: CropRect | None
     requested_max_zoom: float
     resolved_zoom: float
+    requested_safe_margin_ratio: float
+    resolved_safe_margin_ratio: float
     target_region_ids: tuple[str, ...]
     transition_kind: str
     transition_duration_ms: int
@@ -263,6 +265,8 @@ def _resolve_segment(
             crop=None,
             requested_max_zoom=segment.layout.max_zoom,
             resolved_zoom=1.0,
+            requested_safe_margin_ratio=segment.layout.safe_margin_ratio,
+            resolved_safe_margin_ratio=0.0,
             target_region_ids=(),
             transition_kind=segment.transition_in.kind,
             transition_duration_ms=segment.transition_in.duration_ms,
@@ -289,6 +293,8 @@ def _resolve_segment(
             crop=None,
             requested_max_zoom=segment.layout.max_zoom,
             resolved_zoom=1.0,
+            requested_safe_margin_ratio=segment.layout.safe_margin_ratio,
+            resolved_safe_margin_ratio=0.0,
             target_region_ids=(),
             transition_kind=segment.transition_in.kind,
             transition_duration_ms=segment.transition_in.duration_ms,
@@ -345,6 +351,8 @@ def _resolve_segment(
             crop=crop,
             requested_max_zoom=segment.layout.max_zoom,
             resolved_zoom=resolved_zoom,
+            requested_safe_margin_ratio=segment.layout.safe_margin_ratio,
+            resolved_safe_margin_ratio=0.0,
             target_region_ids=(),
             transition_kind=segment.transition_in.kind,
             transition_duration_ms=segment.transition_in.duration_ms,
@@ -370,13 +378,23 @@ def _resolve_segment(
             smoothed=False,
         )
 
-    x1, y1, x2, y2 = _union_box(regions, segment.layout.safe_margin_ratio)
+    raw_x1, raw_y1, raw_x2, raw_y2 = _union_box(regions, 0.0)
+    raw_width = (raw_x2 - raw_x1) * source_width
+    raw_height = (raw_y2 - raw_y1) * source_height
+    horizontal_margin = max(0.0, (base_crop_width / raw_width - 1) / 2)
+    vertical_margin = max(0.0, (base_crop_height / raw_height - 1) / 2)
+    resolved_margin = min(
+        segment.layout.safe_margin_ratio,
+        horizontal_margin,
+        vertical_margin,
+    )
+    x1, y1, x2, y2 = _union_box(regions, resolved_margin)
     target_width = (x2 - x1) * source_width
     target_height = (y2 - y1) * source_height
     safe_zoom = min(
         segment.layout.max_zoom,
-        base_crop_width * 1.04 / target_width,
-        base_crop_height * 1.04 / target_height,
+        base_crop_width / target_width,
+        base_crop_height / target_height,
     )
     resolved_zoom = max(1.0, safe_zoom)
     crop_width, crop_height = _zoomed_crop_dimensions(
@@ -400,6 +418,8 @@ def _resolve_segment(
             crop=None,
             requested_max_zoom=segment.layout.max_zoom,
             resolved_zoom=resolved_zoom,
+            requested_safe_margin_ratio=segment.layout.safe_margin_ratio,
+            resolved_safe_margin_ratio=resolved_margin,
             target_region_ids=tuple(region.id for region in regions),
             transition_kind=segment.transition_in.kind,
             transition_duration_ms=segment.transition_in.duration_ms,
@@ -434,6 +454,8 @@ def _resolve_segment(
         ),
         requested_max_zoom=segment.layout.max_zoom,
         resolved_zoom=resolved_zoom,
+        requested_safe_margin_ratio=segment.layout.safe_margin_ratio,
+        resolved_safe_margin_ratio=resolved_margin,
         target_region_ids=tuple(region.id for region in regions),
         transition_kind=segment.transition_in.kind,
         transition_duration_ms=segment.transition_in.duration_ms,
