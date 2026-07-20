@@ -24,6 +24,7 @@ from open_storyline.mvp.edit_plan import (
     validate_job_controls,
     validate_stock_asset_limit,
     validate_stock_policy,
+    _normalize_edit_plan_response,
 )
 from open_storyline.mvp.creative_intent import build_creative_intent
 from open_storyline.mvp.shorts import ShortCandidate, ShortsPlan, build_shorts_plan_artifact
@@ -129,6 +130,18 @@ def planner_fixture(role: str, editing_prompt: str):
 
 
 class EditPlanContractTests(unittest.TestCase):
+    def test_normalizes_observed_source_fallback_aliases(self):
+        for alias in ("keep_source_video", "source_only"):
+            with self.subTest(alias=alias):
+                normalized = _normalize_edit_plan_response({
+                    "clips": [{"asset_requests": [{"fallback": alias}]}],
+                })
+
+                self.assertEqual(
+                    normalized["clips"][0]["asset_requests"][0]["fallback"],
+                    "source",
+                )
+
     def test_accepts_explicit_empty_optional_identifiers(self):
         target = FocalTarget(region_id="", track_id="", semantic_role="speaker")
         overlay = OverlaySpec(
