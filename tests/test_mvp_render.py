@@ -19,13 +19,52 @@ from open_storyline.mvp.edit_plan import (
     TimeWindow,
     TransitionSpec,
 )
-from open_storyline.mvp.render import AgenticShortRenderer, CPUShortRenderer, RenderSettings, probe_media
+from open_storyline.mvp.render import (
+    AgenticShortRenderer,
+    CPUShortRenderer,
+    RenderError,
+    RenderSettings,
+    probe_media,
+    render_settings_from_config,
+)
 from open_storyline.mvp.shorts import ShortCandidate
 from open_storyline.mvp.visual_understanding import NormalizedBox, RegionObservation
 
 
 @unittest.skipUnless(shutil.which("ffmpeg") and shutil.which("ffprobe"), "FFmpeg is required")
 class CPUShortRendererTests(unittest.TestCase):
+    def test_named_quality_profiles_preserve_or_cap_source_fps(self):
+        legacy = RenderSettings(quality_profile="legacy").resolve(60.0)
+        balanced = RenderSettings(quality_profile="balanced").resolve(60.0)
+        high = RenderSettings(quality_profile="high").resolve(60.0)
+
+        self.assertEqual((legacy["preset"], legacy["crf"], legacy["output_fps"]), ("veryfast", 23, 30.0))
+        self.assertEqual((balanced["preset"], balanced["crf"], balanced["output_fps"]), ("fast", 20, 30.0))
+        self.assertEqual((high["preset"], high["crf"], high["output_fps"]), ("medium", 18, 60.0))
+        self.assertEqual(RenderSettings(quality_profile="high").resolve(24.0)["fps_conversion"], "preserved")
+
+    @patch.dict(
+        "os.environ",
+        {
+            "OPENSTORYLINE_RENDER_QUALITY_PROFILE": "legacy",
+            "OPENSTORYLINE_RENDER_FPS_CAP": "30",
+        },
+    )
+    def test_environment_can_select_the_rollback_profile(self):
+        settings = render_settings_from_config(SimpleNamespace(
+            render_width=1080,
+            render_height=1920,
+            render_quality_profile="high",
+            render_fps_cap=60,
+        ))
+        self.assertEqual(settings.quality_profile, "legacy")
+        self.assertEqual(settings.fps_cap, 30)
+
+        with patch.dict("os.environ", {"OPENSTORYLINE_RENDER_FPS_CAP": "invalid"}):
+            with self.assertRaises(RenderError) as caught:
+                render_settings_from_config(SimpleNamespace())
+        self.assertEqual(caught.exception.code, "RENDER_FPS_CAP_INVALID")
+
     def test_render_plan_callbacks_are_ordered_and_non_fatal(self):
         clips = [
             ShortCandidate(0, 1000, "One", "Hook", "Reason", 1.0),
@@ -109,8 +148,14 @@ class CPUShortRendererTests(unittest.TestCase):
             self.assertGreaterEqual(info.duration_ms, 17_800)
             self.assertLessEqual(info.duration_ms, 18_300)
             self.assertTrue(info.has_audio)
+            self.assertAlmostEqual(info.frame_rate, 24.0, delta=0.1)
             self.assertIsNotNone(rendered.subtitle_path)
             self.assertIn("Hola mundo", rendered.subtitle_path.read_text(encoding="utf-8"))
+            self.assertEqual(rendered.render_quality["configured_profile"], "high")
+            self.assertEqual(rendered.render_quality["fps_conversion"], "preserved")
+            self.assertEqual(rendered.render_quality["output"]["fps"], 24.0)
+            self.assertTrue(rendered.subtitle_layout_path.is_file())
+            self.assertTrue(rendered.caption_footprint_path.is_file())
 
     def test_agentic_renderer_keeps_a_right_side_subject_visible_in_one_encode(self):
         with TemporaryDirectory() as tmpdir:

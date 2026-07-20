@@ -5,8 +5,10 @@ from pathlib import Path
 from typing import Any, Callable, Sequence
 import base64
 import json
+import os
 import re
 import subprocess
+import time
 
 from open_storyline.mvp.shorts import ShortCandidate
 from open_storyline.mvp.compositor import (
@@ -17,6 +19,13 @@ from open_storyline.mvp.compositor import (
 from open_storyline.mvp.edit_plan import EditPlan
 from open_storyline.mvp.ffmpeg_filters import build_reframe_filtergraph
 from open_storyline.mvp.observability import emit_event
+from open_storyline.mvp.subtitles import (
+    CaptionFootprintReport,
+    SubtitleArtifacts,
+    SubtitleError,
+    measure_caption_footprint,
+    write_subtitle_artifacts,
+)
 from open_storyline.mvp.visual_understanding import VisualUnderstanding
 
 
@@ -56,16 +65,105 @@ class MediaInfo:
     width: int
     height: int
     has_audio: bool
+    frame_rate: float = 0.0
+    bit_rate: int = 0
+
+
+@dataclass(frozen=True)
+class RenderQualityProfile:
+    name: str
+    preset: str
+    crf: int
+    fps_cap: int
+
+
+RENDER_QUALITY_PROFILE_VERSION = "render_quality_profile.v1"
+RENDER_QUALITY_PROFILES = {
+    "legacy": RenderQualityProfile("legacy", "veryfast", 23, 30),
+    "balanced": RenderQualityProfile("balanced", "fast", 20, 30),
+    "high": RenderQualityProfile("high", "medium", 18, 60),
+}
 
 
 @dataclass(frozen=True)
 class RenderSettings:
     width: int = 1080
     height: int = 1920
-    fps: int = 30
-    preset: str = "veryfast"
-    crf: int = 23
+    quality_profile: str = "high"
+    fps_cap: int | None = None
+    fps: float | None = None
+    preset: str | None = None
+    crf: int | None = None
     timeout: float = 1800.0
+
+    def resolve(self, source_frame_rate: float) -> dict[str, Any]:
+        try:
+            profile = RENDER_QUALITY_PROFILES[self.quality_profile]
+        except KeyError as exc:
+            raise RenderError(
+                "RENDER_QUALITY_PROFILE_INVALID",
+                "render quality profile must be legacy, balanced, or high",
+            ) from exc
+        fps_cap = int(self.fps_cap or profile.fps_cap)
+        if not 12 <= fps_cap <= 60:
+            raise RenderError("RENDER_FPS_CAP_INVALID", "render FPS cap must be 12 to 60")
+        output_fps = float(self.fps) if self.fps is not None else min(
+            source_frame_rate if source_frame_rate > 0 else 30.0,
+            float(fps_cap),
+        )
+        if not 1 <= output_fps <= 60:
+            raise RenderError("RENDER_FPS_INVALID", "render FPS must be 1 to 60")
+        preset = self.preset or profile.preset
+        if preset not in {
+            "ultrafast", "superfast", "veryfast", "faster", "fast",
+            "medium", "slow", "slower", "veryslow",
+        }:
+            raise RenderError("RENDER_PRESET_INVALID", "render preset is unsupported")
+        crf = profile.crf if self.crf is None else int(self.crf)
+        if not 0 <= crf <= 51:
+            raise RenderError("RENDER_CRF_INVALID", "render CRF must be 0 to 51")
+        explicit_override = self.fps is not None or self.preset is not None or self.crf is not None
+        return {
+            "version": RENDER_QUALITY_PROFILE_VERSION,
+            "name": "custom" if explicit_override else profile.name,
+            "configured_profile": profile.name,
+            "preset": preset,
+            "crf": crf,
+            "fps_cap": fps_cap,
+            "source_fps": round(source_frame_rate, 3),
+            "output_fps": round(output_fps, 3),
+            "fps_conversion": (
+                "unknown" if source_frame_rate <= 0 else
+                "preserved" if abs(source_frame_rate - output_fps) < 0.01 else
+                "capped"
+            ),
+        }
+
+
+def render_settings_from_config(config: Any) -> RenderSettings:
+    quality_profile = os.getenv(
+        "OPENSTORYLINE_RENDER_QUALITY_PROFILE",
+        str(getattr(config, "render_quality_profile", "high")),
+    ).strip().lower()
+    raw_fps_cap = os.getenv(
+        "OPENSTORYLINE_RENDER_FPS_CAP",
+        str(getattr(config, "render_fps_cap", 60)),
+    ).strip()
+    try:
+        fps_cap = int(raw_fps_cap)
+    except ValueError as exc:
+        raise RenderError(
+            "RENDER_FPS_CAP_INVALID",
+            "OPENSTORYLINE_RENDER_FPS_CAP must be an integer",
+        ) from exc
+    settings = RenderSettings(
+        width=int(getattr(config, "render_width", 1080)),
+        height=int(getattr(config, "render_height", 1920)),
+        quality_profile=quality_profile,
+        fps_cap=fps_cap,
+    )
+    settings.resolve(30.0)
+    return settings
 
 
 @dataclass(frozen=True)
@@ -73,12 +171,22 @@ class RenderedShort:
     video_path: Path
     subtitle_path: Path | None
     clip: ShortCandidate
+    subtitle_layout_path: Path | None = None
+    caption_footprint_path: Path | None = None
+    render_quality: dict[str, Any] | None = None
 
     def to_dict(self) -> dict[str, Any]:
         return {
             "video": self.video_path.name,
             "subtitles": self.subtitle_path.name if self.subtitle_path else None,
             "clip": self.clip.to_dict(),
+            "subtitle_layout": (
+                self.subtitle_layout_path.name if self.subtitle_layout_path else None
+            ),
+            "caption_footprint": (
+                self.caption_footprint_path.name if self.caption_footprint_path else None
+            ),
+            "render_quality": self.render_quality,
         }
 
 
@@ -90,6 +198,16 @@ class AgenticRenderResult:
 
 def _reason(value: str, limit: int = 1200) -> str:
     return re.sub(r"\s+", " ", str(value or "")).strip()[-limit:]
+
+
+def _parse_frame_rate(value: Any) -> float:
+    text = str(value or "0/0")
+    try:
+        numerator, denominator = text.split("/", 1)
+        result = float(numerator) / float(denominator)
+    except (ValueError, ZeroDivisionError):
+        return 0.0
+    return result if 0 < result <= 240 else 0.0
 
 
 def probe_media(path: str | Path) -> MediaInfo:
@@ -113,6 +231,10 @@ def probe_media(path: str | Path) -> MediaInfo:
             width=int(video["width"]),
             height=int(video["height"]),
             has_audio=any(item.get("codec_type") == "audio" for item in streams),
+            frame_rate=_parse_frame_rate(
+                video.get("avg_frame_rate") or video.get("r_frame_rate")
+            ),
+            bit_rate=int(video.get("bit_rate") or (payload.get("format") or {}).get("bit_rate") or 0),
         )
     except (KeyError, StopIteration, TypeError, ValueError) as exc:
         raise RenderError("MEDIA_PROBE_INVALID", "FFprobe returned incomplete media metadata") from exc
@@ -147,36 +269,72 @@ def extract_frame_data_urls(
     return frames
 
 
-def _srt_clock(milliseconds: int) -> str:
-    total_seconds, millis = divmod(max(0, int(milliseconds)), 1000)
-    minutes, seconds = divmod(total_seconds, 60)
-    hours, minutes = divmod(minutes, 60)
-    return f"{hours:02d}:{minutes:02d}:{seconds:02d},{millis:03d}"
-
-
-def write_clip_subtitles(
-    destination: str | Path,
+def _write_caption_evidence(
+    destination: Path,
     *,
     clip: ShortCandidate,
     transcript_segments: Sequence[dict[str, Any]],
-) -> Path | None:
-    blocks: list[str] = []
-    for segment in transcript_segments:
-        start = max(clip.start_ms, int(segment.get("start") or 0))
-        end = min(clip.end_ms, int(segment.get("end") or 0))
-        text = re.sub(r"\s+", " ", str(segment.get("text") or "")).strip()
-        if not text or end - start < 200:
-            continue
-        local_start = start - clip.start_ms
-        local_end = end - clip.start_ms
-        blocks.append(
-            f"{len(blocks) + 1}\n{_srt_clock(local_start)} --> {_srt_clock(local_end)}\n{text}\n"
+    width: int,
+    height: int,
+) -> tuple[SubtitleArtifacts, Path, Path, CaptionFootprintReport]:
+    try:
+        artifacts = write_subtitle_artifacts(
+            destination,
+            clip=clip,
+            transcript_segments=transcript_segments,
+            width=width,
+            height=height,
         )
-    if not blocks:
-        return None
-    path = Path(destination)
-    path.write_text("\n".join(blocks), encoding="utf-8")
-    return path
+        footprint = measure_caption_footprint(
+            artifacts,
+            width=width,
+            height=height,
+        )
+    except SubtitleError as exc:
+        raise RenderError(exc.code, str(exc).partition(": ")[2] or str(exc)) from exc
+    layout_path = destination.with_name(f"{destination.stem}.subtitle-layout.json")
+    footprint_path = destination.with_name(f"{destination.stem}.caption-footprint.json")
+    layout_path.write_text(
+        json.dumps(artifacts.evidence(), ensure_ascii=False, indent=2),
+        encoding="utf-8",
+    )
+    footprint_path.write_text(
+        json.dumps(footprint.to_dict(), ensure_ascii=False, indent=2),
+        encoding="utf-8",
+    )
+    if footprint.status == "blocked":
+        raise RenderError(
+            footprint.blocker_codes[0] if footprint.blocker_codes else "CAPTION_FOOTPRINT_BLOCKED",
+            "caption footprint violates the configured footer safe zone",
+        )
+    return artifacts, layout_path, footprint_path, footprint
+
+
+def _encode_quality_evidence(
+    *,
+    profile: dict[str, Any],
+    source: MediaInfo,
+    output: Path,
+    elapsed_seconds: float,
+) -> dict[str, Any]:
+    rendered = probe_media(output)
+    return {
+        **profile,
+        "source": {
+            "width": source.width,
+            "height": source.height,
+            "fps": round(source.frame_rate, 3),
+            "bit_rate": source.bit_rate,
+        },
+        "output": {
+            "width": rendered.width,
+            "height": rendered.height,
+            "fps": round(rendered.frame_rate, 3),
+            "bit_rate": rendered.bit_rate,
+            "bytes": output.stat().st_size,
+        },
+        "encode_time_ms": int(round(elapsed_seconds * 1000)),
+    }
 
 
 class CPUShortRenderer:
@@ -196,20 +354,23 @@ class CPUShortRenderer:
         output_dir.mkdir(parents=True, exist_ok=True)
         stem = f"short-{index:02d}"
         video_path = output_dir / f"{stem}.mp4"
-        subtitle_path = write_clip_subtitles(
+        settings = self.settings
+        media = probe_media(source)
+        profile = settings.resolve(media.frame_rate)
+        subtitles, layout_path, footprint_path, _footprint = _write_caption_evidence(
             output_dir / f"{stem}.srt",
             clip=clip,
             transcript_segments=transcript_segments,
+            width=settings.width,
+            height=settings.height,
         )
-        settings = self.settings
         filters = [
             f"scale={settings.width}:{settings.height}:force_original_aspect_ratio=increase",
             f"crop={settings.width}:{settings.height}",
             "setsar=1",
         ]
-        if subtitle_path is not None:
-            style = "FontName=DejaVu Sans,FontSize=20,Outline=2,Shadow=1,Alignment=2,MarginV=100"
-            filters.append(f"subtitles=filename='{subtitle_path.name}':force_style='{style}'")
+        if subtitles.ass_path is not None:
+            filters.append(f"ass=filename='{subtitles.ass_path.name}'")
         command = [
             "ffmpeg", "-y", "-v", "error",
             "-ss", f"{clip.start_ms / 1000:.3f}",
@@ -217,11 +378,12 @@ class CPUShortRenderer:
             "-i", str(Path(source).resolve()),
             "-map", "0:v:0", "-map", "0:a?",
             "-vf", ",".join(filters),
-            "-r", str(settings.fps),
-            "-c:v", "libx264", "-preset", settings.preset, "-crf", str(settings.crf),
+            "-r", str(profile["output_fps"]),
+            "-c:v", "libx264", "-preset", profile["preset"], "-crf", str(profile["crf"]),
             "-pix_fmt", "yuv420p", "-c:a", "aac", "-b:a", "128k",
             "-movflags", "+faststart", str(video_path.name),
         ]
+        started = time.monotonic()
         try:
             result = subprocess.run(
                 command,
@@ -235,7 +397,20 @@ class CPUShortRenderer:
             raise RenderError("VIDEO_RENDER_FAILED", str(exc)) from exc
         if result.returncode != 0 or not video_path.is_file():
             raise RenderError("VIDEO_RENDER_FAILED", _reason(result.stderr))
-        return RenderedShort(video_path=video_path, subtitle_path=subtitle_path, clip=clip)
+        quality = _encode_quality_evidence(
+            profile=profile,
+            source=media,
+            output=video_path,
+            elapsed_seconds=time.monotonic() - started,
+        )
+        return RenderedShort(
+            video_path=video_path,
+            subtitle_path=subtitles.srt_path,
+            clip=clip,
+            subtitle_layout_path=layout_path,
+            caption_footprint_path=footprint_path,
+            render_quality=quality,
+        )
 
     def render_plan(
         self,
@@ -300,6 +475,7 @@ class AgenticShortRenderer:
                     f"resolved image asset is missing: {asset_id}",
                 )
         settings = self.settings
+        profile = settings.resolve(media.frame_rate)
         rendered: list[RenderedShort] = []
         executions: list[dict[str, Any]] = []
 
@@ -318,10 +494,12 @@ class AgenticShortRenderer:
                     f"clip {clip_plan.clip_index} source bounds changed after planning",
                 )
             video_path = output_dir / clip_plan.output_name
-            subtitle_path = write_clip_subtitles(
+            subtitles, layout_path, footprint_path, footprint = _write_caption_evidence(
                 output_dir / f"{video_path.stem}.srt",
                 clip=selected_clip,
                 transcript_segments=transcript_segments,
+                width=settings.width,
+                height=settings.height,
             )
             composition: ClipComposition = resolve_clip_composition(
                 clip_plan,
@@ -358,7 +536,9 @@ class AgenticShortRenderer:
                 composition.segments,
                 output_width=settings.width,
                 output_height=settings.height,
-                subtitle_filename=subtitle_path.name if subtitle_path else None,
+                subtitle_filename=(
+                    subtitles.ass_path.name if subtitles.ass_path is not None else None
+                ),
                 has_audio=media.has_audio,
                 asset_input_indexes=asset_input_indexes,
                 asset_input_kinds=asset_kinds,
@@ -375,11 +555,12 @@ class AgenticShortRenderer:
             command.extend([
                 "-filter_complex", filtergraph,
                 "-map", f"[{video_label}]", "-map", f"[{audio_label}]",
-                "-r", str(settings.fps),
-                "-c:v", "libx264", "-preset", settings.preset, "-crf", str(settings.crf),
+                "-r", str(profile["output_fps"]),
+                "-c:v", "libx264", "-preset", profile["preset"], "-crf", str(profile["crf"]),
                 "-pix_fmt", "yuv420p", "-c:a", "aac", "-b:a", "128k",
                 "-movflags", "+faststart", "-shortest", video_path.name,
             ])
+            started = time.monotonic()
             try:
                 result = subprocess.run(
                     command,
@@ -393,15 +574,27 @@ class AgenticShortRenderer:
                 raise RenderError("AGENTIC_VIDEO_RENDER_FAILED", str(exc)) from exc
             if result.returncode != 0 or not video_path.is_file():
                 raise RenderError("AGENTIC_VIDEO_RENDER_FAILED", _reason(result.stderr))
+            quality = _encode_quality_evidence(
+                profile=profile,
+                source=media,
+                output=video_path,
+                elapsed_seconds=time.monotonic() - started,
+            )
             rendered.append(RenderedShort(
                 video_path=video_path,
-                subtitle_path=subtitle_path,
+                subtitle_path=subtitles.srt_path,
                 clip=selected_clip,
+                subtitle_layout_path=layout_path,
+                caption_footprint_path=footprint_path,
+                render_quality=quality,
             ))
             executions.append({
                 **composition.to_dict(),
                 "video": video_path.name,
-                "subtitles": subtitle_path.name if subtitle_path else None,
+                "subtitles": subtitles.srt_path.name if subtitles.srt_path else None,
+                "subtitle_layout": layout_path.name,
+                "caption_footprint": footprint.to_dict(),
+                "render_quality": quality,
                 "encode_count": 1,
                 "filtergraph": filtergraph,
                 "filtergraph_length": len(filtergraph),
@@ -418,10 +611,11 @@ class AgenticShortRenderer:
                 "output": {
                     "width": settings.width,
                     "height": settings.height,
-                    "fps": settings.fps,
+                    "fps": profile["output_fps"],
                     "video_codec": "h264",
                     "audio_codec": "aac",
                 },
+                "quality_profile": profile,
                 "summary": {
                     "clips": len(executions),
                     "encodes": len(executions),

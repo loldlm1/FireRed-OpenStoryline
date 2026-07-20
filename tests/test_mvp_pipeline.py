@@ -728,10 +728,15 @@ class MVPAgenticPipelineTests(unittest.IsolatedAsyncioTestCase):
             names = {name for name, _kind in store.registered}
             manifest = json.loads((root / "output" / "manifest.json").read_text(encoding="utf-8"))
             self.assertIn("render_execution.json", names)
+            self.assertIn("render_quality_profile.json", names)
             self.assertIn("render_qa.json", names)
             self.assertIn("retention_rhythm_qa.json", names)
             self.assertIn("creative_conformance.json", names)
             self.assertEqual(manifest["agentic"]["render_execution"], "render_execution.json")
+            self.assertEqual(
+                manifest["agentic"]["render_quality_profile"],
+                "render_quality_profile.json",
+            )
             self.assertEqual(manifest["agentic"]["qa"]["status"], "pass")
             self.assertEqual((root / "output" / "short-01.mp4").read_bytes(), b"agentic-render")
 

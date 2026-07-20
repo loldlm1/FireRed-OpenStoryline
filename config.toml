@@ -99,9 +99,8 @@ size = "1024x1024"
 frame_count = 6
 render_width = 1080
 render_height = 1920
-render_fps = 30
-render_preset = "veryfast"
-render_crf = 23
+render_quality_profile = "high"
+render_fps_cap = 60
 
 [agentic_editing]
 mode = "off"
