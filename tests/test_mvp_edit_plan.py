@@ -492,6 +492,7 @@ class AgenticEditPlannerTests(unittest.IsolatedAsyncioTestCase):
         )
         self.assertIn("orientation", serialized)
         self.assertIn("fallback", serialized)
+        self.assertIn('"observed_value": "skip"', serialized)
         self.assertNotIn("private-provider-response", serialized)
         self.assertNotIn("neutral supporting visual", serialized)
 

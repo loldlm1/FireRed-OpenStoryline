@@ -563,8 +563,22 @@ def _infer_overlay_source_window(
     }
 
 
+def _safe_invalid_literal(location: list[Any], value: Any) -> str | None:
+    if not isinstance(value, str) or not location:
+        return None
+    field = location[-1]
+    safe_field = (
+        field in {"orientation", "fallback"} and "asset_requests" in location
+        or field in {"kind", "position"} and "overlays" in location
+    )
+    text = value.strip().lower()
+    if not safe_field or not re.fullmatch(r"[a-z][a-z0-9_ -]{0,23}", text):
+        return None
+    return text
+
+
 def _validation_error_evidence(exc: ValidationError) -> dict[str, Any]:
-    errors = exc.errors(include_input=False, include_url=False)
+    errors = exc.errors(include_input=True, include_url=False)
     issues = []
     for error in errors[:12]:
         location = []
@@ -578,7 +592,11 @@ def _validation_error_evidence(exc: ValidationError) -> dict[str, Any]:
             "_",
             str(error.get("type") or "validation_error").lower(),
         )[:80]
-        issues.append({"location": location, "cause_code": cause_code})
+        issue = {"location": location, "cause_code": cause_code}
+        observed_value = _safe_invalid_literal(location, error.get("input"))
+        if observed_value is not None:
+            issue["observed_value"] = observed_value
+        issues.append(issue)
     return {
         "issue_count": len(errors),
         "issues": issues,
