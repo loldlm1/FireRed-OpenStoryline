@@ -205,6 +205,84 @@ class VisualUnderstandingTests(unittest.IsolatedAsyncioTestCase):
             ("Normalized unsupported motion values for 1 track(s).",),
         )
 
+    def test_aligns_track_role_with_unanimous_referenced_observations(self):
+        manifest = self._manifest()
+        frame = manifest.frames[0]
+        raw = {
+            "regions": [{
+                "id": "region-1",
+                "frame_id": frame.id,
+                "role": "speaker",
+                "bbox": {"x": 0.1, "y": 0.1, "width": 0.4, "height": 0.7},
+                "confidence": 0.9,
+            }],
+            "tracks": [{
+                "id": "track-1",
+                "role": "screen",
+                "region_ids": ["region-1"],
+                "start_ms": 0,
+                "end_ms": frame.timestamp_ms + 1000,
+                "confidence": 0.8,
+            }],
+        }
+
+        understanding = validate_visual_understanding(
+            raw,
+            frame_manifest=manifest,
+            scene_report=self.scenes,
+            model="cx/gpt-5.6-sol",
+        )
+
+        self.assertEqual(understanding.tracks[0].role, "speaker")
+        self.assertEqual(
+            understanding.warnings,
+            (
+                "Aligned semantic roles for 1 track(s) with unanimous "
+                "referenced observations.",
+            ),
+        )
+
+    def test_rejects_tracks_with_genuinely_mixed_region_roles(self):
+        manifest = self._manifest()
+        first_frame = manifest.frames[0]
+        second_frame = manifest.frames[1]
+        raw = {
+            "regions": [
+                {
+                    "id": "region-1",
+                    "frame_id": first_frame.id,
+                    "role": "speaker",
+                    "bbox": {"x": 0.1, "y": 0.1, "width": 0.4, "height": 0.7},
+                    "confidence": 0.9,
+                },
+                {
+                    "id": "region-2",
+                    "frame_id": second_frame.id,
+                    "role": "screen",
+                    "bbox": {"x": 0.5, "y": 0.1, "width": 0.4, "height": 0.7},
+                    "confidence": 0.9,
+                },
+            ],
+            "tracks": [{
+                "id": "track-1",
+                "role": "speaker",
+                "region_ids": ["region-1", "region-2"],
+                "start_ms": 0,
+                "end_ms": max(first_frame.timestamp_ms, second_frame.timestamp_ms) + 1000,
+                "confidence": 0.8,
+            }],
+        }
+
+        with self.assertRaises(VisualUnderstandingError) as caught:
+            validate_visual_understanding(
+                raw,
+                frame_manifest=manifest,
+                scene_report=self.scenes,
+                model="cx/gpt-5.6-sol",
+            )
+
+        self.assertEqual(caught.exception.code, "VISUAL_TRACK_ROLE_INVALID")
+
     def test_removes_cross_scene_salient_regions(self):
         manifest = self._manifest()
         first_frame = manifest.frames[0]
