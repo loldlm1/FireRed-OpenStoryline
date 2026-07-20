@@ -12,6 +12,7 @@ from open_storyline.mvp.edit_plan import (
     EditPlan,
     EditPlanError,
     EditSegment,
+    FocalTarget,
     LayoutSpec,
     OverlaySpec,
     TimeWindow,
@@ -24,6 +25,7 @@ from open_storyline.mvp.render import AgenticRenderResult, MediaInfo, RenderedSh
 from open_storyline.mvp.scene_boundaries import build_scene_boundaries
 from open_storyline.mvp.shorts import ShortCandidate, ShortsPlan
 from open_storyline.mvp.stock import PexelsAsset, PexelsAttempt
+from open_storyline.mvp.visual_understanding import VisualUnderstanding
 from open_storyline.utils.remote_image import ImageAttempt, RemoteImageResult
 
 
@@ -90,28 +92,20 @@ class FakeAssetAwareRenderer(FakeAgenticRenderer):
         return super().render_plan(**kwargs)
 
 
-class FakeVisualUnderstanding:
-    frame_manifest = {"frames": [{"id": "frame-001", "timestamp_ms": 250}]}
-    regions = ()
-    tracks = ()
-
-    def to_dict(self):
-        return {
-            "version": "visual_understanding.v1",
-            "frame_manifest": self.frame_manifest,
-            "regions": [],
-            "tracks": [],
-            "scenes": [],
-            "warnings": [],
-        }
-
-
 class FakeVisualPlanner:
     def __init__(self, _client):
         pass
 
-    async def plan(self, **_kwargs):
-        return FakeVisualUnderstanding()
+    async def plan(self, *, frame_manifest, **_kwargs):
+        return VisualUnderstanding(
+            model="fake-vision",
+            source_duration_ms=frame_manifest.source_duration_ms,
+            frame_manifest=frame_manifest.to_dict(),
+            regions=(),
+            tracks=(),
+            scenes=(),
+            warnings=(),
+        )
 
 
 class FakeEditPlanner:
@@ -162,6 +156,38 @@ class FakeBlockedEditPlanner:
                     purpose="explain a visual gap",
                     rationale="the source lacks the requested diagram",
                     prompt="a simple editorial diagram",
+                ),),
+            ),),
+        )
+
+
+class FakeMissingCropEditPlanner:
+    calls = 0
+
+    def __init__(self, _client):
+        pass
+
+    async def plan(self, *, shorts_plan, source_duration_ms, **_kwargs):
+        type(self).calls += 1
+        clip = shorts_plan.clips[0]
+        return EditPlan(
+            planner_version="agentic-editor.v1",
+            source_duration_ms=source_duration_ms,
+            requested_capabilities=("crop", "hard_cut", "subtitles"),
+            clips=(ClipEditPlan(
+                clip_index=1,
+                source_window=TimeWindow(start_ms=clip.start_ms, end_ms=clip.end_ms),
+                output_name="short-01.mp4",
+                segments=(EditSegment(
+                    id="segment-1",
+                    source_window=TimeWindow(start_ms=clip.start_ms, end_ms=clip.end_ms),
+                    timeline_window=TimeWindow(start_ms=0, end_ms=clip.duration_ms),
+                    layout=LayoutSpec(
+                        mode="crop",
+                        focal_target=FocalTarget(track_id="clip-01-track-missing"),
+                        fallback="crop",
+                    ),
+                    reason="keep the tracked speaker visible",
                 ),),
             ),),
         )
@@ -391,9 +417,14 @@ def config(mode: str, *, generated_assets: bool = False, pexels_assets: bool = F
             min_scene_duration_ms=1000,
             max_scenes=64,
             vision_frame_count=6,
+            vision_clip_frame_count=6,
+            vision_clip_repair_frame_count=12,
             vision_frame_max_width=512,
             vision_frame_max_height=512,
             vision_frame_max_bytes=1_500_000,
+            crop_coverage_min_observations=2,
+            crop_coverage_min_ratio=0.5,
+            crop_coverage_max_gap_ms=8_000,
             crop_hysteresis_ratio=0.03,
             crop_smoothing_alpha=0.65,
             max_crop_velocity_ratio_per_second=0.45,
@@ -460,6 +491,7 @@ class MVPAgenticPipelineTests(unittest.IsolatedAsyncioTestCase):
             self.assertIn("shorts_plan.json", names)
             self.assertIn("scene_boundaries.json", names)
             self.assertIn("visual_understanding.json", names)
+            self.assertIn("clip_visual_coverage.json", names)
             self.assertIn("edit_plan.json", names)
             self.assertIn("creative_intent.json", names)
             self.assertIn("edit_preflight.json", names)
@@ -481,7 +513,7 @@ class MVPAgenticPipelineTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(manifest["agentic"]["edit_planner"]["schema_version"], "edit_plan.v1")
             self.assertEqual(
                 manifest["agentic"]["edit_planner"]["prompt_version"],
-                "mvp-agentic-edit-plan.v5",
+                "mvp-agentic-edit-plan.v6",
             )
             registered_names = [name for name, _kind in store.registered]
             self.assertLess(
@@ -517,6 +549,68 @@ class MVPAgenticPipelineTests(unittest.IsolatedAsyncioTestCase):
                 "CREATIVE_INTENT_CAPABILITY_UNAVAILABLE",
             )
             self.assertEqual(store.registered, [])
+
+    async def test_crop_coverage_repairs_once_then_fails_before_render(self):
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            store = FakeStore(
+                root,
+                server_request={
+                    "max_clips": 1,
+                    "edit_mode": "agentic",
+                    "asset_policy": "off",
+                },
+            )
+            processor = object.__new__(MVPJobProcessor)
+            processor.config = config("render")
+            processor.stt = FakeSTT()
+            scene_report = build_scene_boundaries(
+                [],
+                source_duration_ms=30_000,
+                threshold=0.35,
+            )
+            frame_manifest = FrameManifest(
+                source_duration_ms=30_000,
+                source_width=1920,
+                source_height=1080,
+                frames=(SampledFrame(
+                    id="frame-001",
+                    timestamp_ms=250,
+                    scene_id="scene-001",
+                    width=512,
+                    height=288,
+                    extraction_reason="scene_opening",
+                    encoded_bytes=4,
+                    data_url="data:image/jpeg;base64,ZmFrZQ==",
+                ),),
+            )
+            FakeMissingCropEditPlanner.calls = 0
+
+            with (
+                patch("open_storyline.mvp.pipeline.probe_media", return_value=MediaInfo(30_000, 1920, 1080, True)),
+                patch("open_storyline.mvp.pipeline.extract_audio_for_stt", side_effect=lambda _source, target: target),
+                patch("open_storyline.mvp.pipeline.detect_scene_boundaries", return_value=scene_report),
+                patch("open_storyline.mvp.pipeline.sample_frames", return_value=frame_manifest) as sampler,
+                patch("open_storyline.mvp.pipeline.VisualUnderstandingPlanner", FakeVisualPlanner),
+                patch("open_storyline.mvp.pipeline.AgenticEditPlanner", FakeMissingCropEditPlanner),
+                patch("open_storyline.mvp.pipeline.NineRouterClient.from_config", return_value=FakeRemoteClient()),
+                patch("open_storyline.mvp.pipeline.ShortsPlanner", FakePlanner),
+                patch("open_storyline.mvp.pipeline.AgenticShortRenderer", side_effect=AssertionError("render called")),
+            ):
+                with self.assertRaises(EditPlanError) as caught:
+                    await processor("8" * 32, store)
+
+            self.assertEqual(
+                caught.exception.code,
+                "EDIT_PLAN_VISUAL_COVERAGE_INSUFFICIENT",
+            )
+            self.assertEqual(FakeMissingCropEditPlanner.calls, 2)
+            self.assertEqual(sampler.call_count, 3)
+            coverage = json.loads(
+                (root / "output" / "clip_visual_coverage.json").read_text(encoding="utf-8")
+            )
+            self.assertTrue(coverage["repair"]["attempted"])
+            self.assertEqual(coverage["status"], "blocked")
 
     async def test_agentic_request_fails_explicitly_when_server_is_off(self):
         with TemporaryDirectory() as directory:

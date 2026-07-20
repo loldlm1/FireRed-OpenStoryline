@@ -27,7 +27,7 @@ from open_storyline.mvp.ffmpega import (
     FFMPEGAClient,
     ffmpega_enabled,
 )
-from open_storyline.mvp.frame_sampling import sample_frames
+from open_storyline.mvp.frame_sampling import FrameManifest, sample_frames
 from open_storyline.mvp.compositor import REFRAME_RENDER_CAPABILITIES
 from open_storyline.mvp.creative_intent import (
     build_creative_intent,
@@ -56,7 +56,13 @@ from open_storyline.mvp.preflight import build_preflight
 from open_storyline.mvp.scene_boundaries import detect_scene_boundaries
 from open_storyline.mvp.shorts import ShortsPlanner, build_shorts_plan_artifact
 from open_storyline.mvp.stock import PexelsClient, pexels_enabled, pexels_server_cap
-from open_storyline.mvp.visual_understanding import VisualUnderstandingPlanner
+from open_storyline.mvp.visual_coverage import build_clip_visual_coverage
+from open_storyline.mvp.visual_understanding import (
+    VisualUnderstanding,
+    VisualUnderstandingPlanner,
+    merge_visual_understandings,
+    scope_visual_understanding,
+)
 from open_storyline.utils.remote_stt import MistralSTTClient, RemoteSTTError, extract_audio_for_stt
 from open_storyline.utils.remote_image import RemoteImageCascade
 
@@ -199,7 +205,11 @@ class MVPJobProcessor:
         creative_conformance = None
         scene_report = None
         frame_manifest = None
+        global_visual_understanding = None
         visual_understanding = None
+        clip_frame_manifests: dict[int, FrameManifest] = {}
+        clip_visual_understandings: dict[int, VisualUnderstanding] = {}
+        clip_vision_call_count = 0
         visual_attempts: list[dict[str, Any]] = []
         shorts_attempts: list[dict[str, Any]] = []
         edit_planner_attempts: list[dict[str, Any]] = []
@@ -254,7 +264,7 @@ class MVPJobProcessor:
                 sampled_frames=len(frame_manifest.frames),
             )
             await activity.stage(job_id, "remote_visual_understanding")
-            visual_understanding = await VisualUnderstandingPlanner(remote_client).plan(
+            global_visual_understanding = await VisualUnderstandingPlanner(remote_client).plan(
                 frame_manifest=frame_manifest,
                 scene_report=scene_report,
                 editing_prompt=state["prompt"],
@@ -275,12 +285,7 @@ class MVPJobProcessor:
                 tool="Visual understanding",
                 attempt_number=max(1, len(visual_attempts)),
             )
-            visual_path = output_dir / names.visual_understanding
-            visual_path.write_text(
-                json.dumps(visual_understanding.to_dict(), ensure_ascii=False, indent=2),
-                encoding="utf-8",
-            )
-            await store.register_artifact(job_id, visual_path, kind="visual_understanding")
+            visual_understanding = global_visual_understanding
             frames = frame_manifest.image_data_urls
         else:
             await activity.stage(job_id, "sampling_frames")
@@ -338,6 +343,84 @@ class MVPJobProcessor:
 
         agentic_manifest = None
         if agentic_requested:
+            agentic_config = self.config.agentic_editing
+
+            async def analyze_clip_windows(
+                clip_indexes: set[int],
+                *,
+                max_frames: int,
+            ) -> None:
+                nonlocal clip_vision_call_count
+                for clip_index, clip in enumerate(plan.clips, start=1):
+                    if clip_index not in clip_indexes:
+                        continue
+                    local_manifest = await asyncio.to_thread(
+                        sample_frames,
+                        source,
+                        scene_report=scene_report,
+                        source_width=media.width,
+                        source_height=media.height,
+                        max_frames=max_frames,
+                        max_width=agentic_config.vision_frame_max_width,
+                        max_height=agentic_config.vision_frame_max_height,
+                        max_frame_bytes=agentic_config.vision_frame_max_bytes,
+                        clip_start_ms=clip.start_ms,
+                        clip_end_ms=clip.end_ms,
+                        id_prefix=f"clip-{clip_index:02d}-",
+                    )
+                    local_understanding = await VisualUnderstandingPlanner(remote_client).plan(
+                        frame_manifest=local_manifest,
+                        scene_report=scene_report,
+                        editing_prompt=state["prompt"],
+                        transcript_text=" ".join(
+                            str(segment.get("text") or "").strip()
+                            for segment in transcript.segments
+                            if int(segment.get("end") or 0) > clip.start_ms
+                            and int(segment.get("start") or 0) < clip.end_ms
+                        ),
+                    )
+                    clip_vision_call_count += 1
+                    clip_frame_manifests[clip_index] = local_manifest
+                    clip_visual_understandings[clip_index] = scope_visual_understanding(
+                        local_understanding,
+                        clip_index=clip_index,
+                    )
+                    visual_attempts.extend(
+                        attempt.to_dict()
+                        for attempt in getattr(remote_client, "last_attempts", ())
+                    )
+
+            await activity.stage(job_id, "sampling_agentic_frames")
+            await analyze_clip_windows(
+                set(range(1, len(plan.clips) + 1)),
+                max_frames=agentic_config.vision_clip_frame_count,
+            )
+            visual_understanding = merge_visual_understandings(
+                global_visual_understanding,
+                tuple(
+                    clip_visual_understandings[index]
+                    for index in sorted(clip_visual_understandings)
+                ),
+            )
+            visual_path = output_dir / names.visual_understanding
+            visual_path.write_text(
+                json.dumps(visual_understanding.to_dict(), ensure_ascii=False, indent=2),
+                encoding="utf-8",
+            )
+            await store.register_artifact(job_id, visual_path, kind="visual_understanding")
+            await activity.emit_safely(
+                job_id,
+                stage="sampling_agentic_frames",
+                category="analysis",
+                status="completed",
+                message_key="activity.analysis.frames_ready",
+                progress=STAGES["sampling_agentic_frames"].progress,
+                tool="FFmpeg + 9Router clip-local analysis",
+                sampled_frames=sum(
+                    len(manifest.frames) for manifest in clip_frame_manifests.values()
+                ),
+            )
+
             shorts_plan_artifact = build_shorts_plan_artifact(
                 plan,
                 transcript_segments=transcript.segments,
@@ -368,28 +451,90 @@ class MVPJobProcessor:
             )
 
             await activity.stage(job_id, "planning_agentic_edit")
-            edit_plan = await AgenticEditPlanner(remote_client).plan(
-                editing_prompt=state["prompt"],
-                shorts_plan=plan,
-                shorts_plan_artifact=shorts_plan_artifact,
-                transcript_segments=transcript.segments,
-                scene_report=scene_report,
-                visual_understanding=visual_understanding,
-                source_duration_ms=media.duration_ms,
-                asset_policy=effective_asset_policy,
-                max_segments_per_clip=self.config.agentic_editing.max_segments_per_clip,
-                max_overlays_per_clip=self.config.agentic_editing.max_overlays_per_clip,
-                max_assets_per_clip=min(
-                    self.config.agentic_editing.max_assets_per_clip,
-                    effective_generated_asset_cap + effective_stock_asset_cap,
-                ),
-                max_generated_assets_per_clip=effective_generated_asset_cap,
-                max_stock_assets_per_clip=effective_stock_asset_cap,
-                stock_policy=effective_stock_policy,
-                creative_intent=creative_intent,
-                allow_degraded_fallback=(server_mode == "shadow"),
-                renderer_capabilities=REFRAME_RENDER_CAPABILITIES,
+            async def plan_agentic_edit(
+                visual_coverage_feedback: dict[str, Any] | None = None,
+            ):
+                return await AgenticEditPlanner(remote_client).plan(
+                    editing_prompt=state["prompt"],
+                    shorts_plan=plan,
+                    shorts_plan_artifact=shorts_plan_artifact,
+                    transcript_segments=transcript.segments,
+                    scene_report=scene_report,
+                    visual_understanding=visual_understanding,
+                    source_duration_ms=media.duration_ms,
+                    asset_policy=effective_asset_policy,
+                    max_segments_per_clip=agentic_config.max_segments_per_clip,
+                    max_overlays_per_clip=agentic_config.max_overlays_per_clip,
+                    max_assets_per_clip=min(
+                        agentic_config.max_assets_per_clip,
+                        effective_generated_asset_cap + effective_stock_asset_cap,
+                    ),
+                    max_generated_assets_per_clip=effective_generated_asset_cap,
+                    max_stock_assets_per_clip=effective_stock_asset_cap,
+                    stock_policy=effective_stock_policy,
+                    creative_intent=creative_intent,
+                    allow_degraded_fallback=(server_mode == "shadow"),
+                    visual_coverage_feedback=visual_coverage_feedback,
+                    renderer_capabilities=REFRAME_RENDER_CAPABILITIES,
+                )
+
+            edit_plan = await plan_agentic_edit()
+            visual_coverage = build_clip_visual_coverage(
+                edit_plan,
+                visual=visual_understanding,
+                clip_frame_manifests=clip_frame_manifests,
+                min_observations=agentic_config.crop_coverage_min_observations,
+                min_temporal_coverage_ratio=agentic_config.crop_coverage_min_ratio,
+                max_observation_gap_ms=agentic_config.crop_coverage_max_gap_ms,
             )
+            if visual_coverage.blocking:
+                initial_blocker_codes = visual_coverage.blocker_codes
+                repair_frame_count = max(
+                    agentic_config.vision_clip_frame_count,
+                    agentic_config.vision_clip_repair_frame_count,
+                )
+                await analyze_clip_windows(
+                    set(visual_coverage.affected_clip_indexes),
+                    max_frames=repair_frame_count,
+                )
+                visual_understanding = merge_visual_understandings(
+                    global_visual_understanding,
+                    tuple(
+                        clip_visual_understandings[index]
+                        for index in sorted(clip_visual_understandings)
+                    ),
+                )
+                visual_path.write_text(
+                    json.dumps(
+                        visual_understanding.to_dict(),
+                        ensure_ascii=False,
+                        indent=2,
+                    ),
+                    encoding="utf-8",
+                )
+                shorts_plan_artifact = build_shorts_plan_artifact(
+                    plan,
+                    transcript_segments=transcript.segments,
+                    scene_report=scene_report,
+                    visual_understanding=visual_understanding,
+                )
+                shorts_plan_path.write_text(
+                    json.dumps(shorts_plan_artifact, ensure_ascii=False, indent=2),
+                    encoding="utf-8",
+                )
+                edit_plan = await plan_agentic_edit(
+                    visual_coverage.compact_feedback(),
+                )
+                visual_coverage = build_clip_visual_coverage(
+                    edit_plan,
+                    visual=visual_understanding,
+                    clip_frame_manifests=clip_frame_manifests,
+                    min_observations=agentic_config.crop_coverage_min_observations,
+                    min_temporal_coverage_ratio=agentic_config.crop_coverage_min_ratio,
+                    max_observation_gap_ms=agentic_config.crop_coverage_max_gap_ms,
+                    repair_attempted=True,
+                    initial_blocker_codes=initial_blocker_codes,
+                )
             if edit_plan.degraded:
                 creative_conformance = {
                     "version": creative_intent.version,
@@ -429,6 +574,21 @@ class MVPJobProcessor:
                 encoding="utf-8",
             )
             await store.register_artifact(job_id, edit_plan_path, kind="edit_plan")
+            visual_coverage_path = output_dir / names.clip_visual_coverage
+            visual_coverage_path.write_text(
+                json.dumps(visual_coverage.to_dict(), ensure_ascii=False, indent=2),
+                encoding="utf-8",
+            )
+            await store.register_artifact(
+                job_id,
+                visual_coverage_path,
+                kind="clip_visual_coverage",
+            )
+            if visual_coverage.blocking and server_mode == "render":
+                raise EditPlanError(
+                    "EDIT_PLAN_VISUAL_COVERAGE_INSUFFICIENT",
+                    "crop evidence remained insufficient after one bounded clip-local repair",
+                )
 
             planned_asset_ids = {
                 asset.id
@@ -455,6 +615,7 @@ class MVPJobProcessor:
                     int(clip["clip_index"]): clip["evidence_ids"]
                     for clip in shorts_plan_artifact["clips"]
                 },
+                visual_coverage=visual_coverage,
                 max_segments_per_clip=self.config.agentic_editing.max_segments_per_clip,
                 max_overlays_per_clip=self.config.agentic_editing.max_overlays_per_clip,
                 max_assets_per_clip=self.config.agentic_editing.max_assets_per_clip,
@@ -527,6 +688,7 @@ class MVPJobProcessor:
                         int(clip["clip_index"]): clip["evidence_ids"]
                         for clip in shorts_plan_artifact["clips"]
                     },
+                    visual_coverage=visual_coverage,
                     max_segments_per_clip=self.config.agentic_editing.max_segments_per_clip,
                     max_overlays_per_clip=self.config.agentic_editing.max_overlays_per_clip,
                     max_assets_per_clip=self.config.agentic_editing.max_assets_per_clip,
@@ -579,7 +741,13 @@ class MVPJobProcessor:
                 "scene_boundaries": names.scene_boundaries,
                 "visual_understanding": names.visual_understanding,
                 "vision_frame_count": len(frame_manifest.frames) if frame_manifest else 0,
-                "vision_call_count": 1 if visual_understanding else 0,
+                "clip_visual_coverage": names.clip_visual_coverage,
+                "clip_vision_frame_count": sum(
+                    len(manifest.frames) for manifest in clip_frame_manifests.values()
+                ),
+                "vision_call_count": (
+                    (1 if visual_understanding else 0) + clip_vision_call_count
+                ),
                 "visual_attempts": visual_attempts,
                 "shorts_attempts": shorts_attempts,
                 "edit_plan": names.edit_plan,

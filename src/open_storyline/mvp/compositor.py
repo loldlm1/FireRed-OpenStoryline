@@ -79,6 +79,9 @@ class ResolvedSegment:
     overlays: tuple[ResolvedOverlay, ...]
     reason: str
     fallback_used: bool
+    fallback_allowed: bool
+    fallback_cause: str
+    expected_active_area_ratio: float
     smoothed: bool
 
     def to_dict(self) -> dict[str, Any]:
@@ -118,6 +121,17 @@ def _crop_dimensions(source_width: int, source_height: int, output_width: int, o
     crop_width = max(2, min(source_width, crop_width - crop_width % 2))
     crop_height = max(2, min(source_height, crop_height - crop_height % 2))
     return crop_width, crop_height
+
+
+def _fit_active_area_ratio(
+    source_width: int,
+    source_height: int,
+    output_width: int,
+    output_height: int,
+) -> float:
+    scale = min(output_width / source_width, output_height / source_height)
+    active_area = (source_width * scale) * (source_height * scale)
+    return round(active_area / (output_width * output_height), 6)
 
 
 def _frame_times(visual: VisualUnderstanding) -> dict[str, int]:
@@ -189,7 +203,10 @@ def _crop_at_focus(
 
 
 def _fallback_strategy(segment: EditSegment) -> str:
-    if segment.layout.fallback in {"fit", "letterbox"}:
+    if (
+        segment.layout.allow_full_frame_fallback
+        and segment.layout.fallback in {"fit", "letterbox"}
+    ):
         return segment.layout.fallback
     return "crop"
 
@@ -238,6 +255,14 @@ def _resolve_segment(
             overlays=_resolve_overlays(segment),
             reason="The validated plan explicitly preserves the full source frame.",
             fallback_used=False,
+            fallback_allowed=False,
+            fallback_cause="explicit_layout",
+            expected_active_area_ratio=_fit_active_area_ratio(
+                source_width,
+                source_height,
+                output_width,
+                output_height,
+            ),
             smoothed=False,
         )
     if segment.layout.mode == "source":
@@ -254,6 +279,14 @@ def _resolve_segment(
             overlays=_resolve_overlays(segment),
             reason="The segment is an explicit source cutaway rendered full-frame.",
             fallback_used=False,
+            fallback_allowed=False,
+            fallback_cause="explicit_source_cutaway",
+            expected_active_area_ratio=_fit_active_area_ratio(
+                source_width,
+                source_height,
+                output_width,
+                output_height,
+            ),
             smoothed=False,
         )
     if segment.layout.mode != "crop":
@@ -299,6 +332,22 @@ def _resolve_segment(
             overlays=_resolve_overlays(segment),
             reason="No matching visual observation exists in this source window; explicit fallback applied.",
             fallback_used=True,
+            fallback_allowed=(
+                segment.layout.allow_full_frame_fallback
+                if fallback in {"fit", "letterbox"}
+                else True
+            ),
+            fallback_cause="missing_same_window_observation",
+            expected_active_area_ratio=(
+                1.0
+                if fallback == "crop"
+                else _fit_active_area_ratio(
+                    source_width,
+                    source_height,
+                    output_width,
+                    output_height,
+                )
+            ),
             smoothed=False,
         )
 
@@ -308,7 +357,10 @@ def _resolve_segment(
     if target_width > crop_width * 1.05 or target_height > crop_height * 1.05:
         fallback = _fallback_strategy(segment)
         if fallback == "crop":
-            fallback = "letterbox"
+            raise CompositionError(
+                "COMPOSITION_CROP_TARGET_TOO_WIDE",
+                "the protected target cannot fit the portrait crop without an approved full-frame fallback",
+            )
         return ResolvedSegment(
             id=segment.id,
             source_window=segment.source_window,
@@ -322,6 +374,14 @@ def _resolve_segment(
             overlays=_resolve_overlays(segment),
             reason="The protected visual union is wider than a safe portrait crop; full-frame fallback applied.",
             fallback_used=True,
+            fallback_allowed=segment.layout.allow_full_frame_fallback,
+            fallback_cause="protected_target_exceeds_crop",
+            expected_active_area_ratio=_fit_active_area_ratio(
+                source_width,
+                source_height,
+                output_width,
+                output_height,
+            ),
             smoothed=False,
         )
     focus_x = ((x1 + x2) / 2) * source_width
@@ -350,6 +410,9 @@ def _resolve_segment(
             else "Portrait crop is centered on the validated semantic target union."
         ),
         fallback_used=False,
+        fallback_allowed=False,
+        fallback_cause="",
+        expected_active_area_ratio=1.0,
         smoothed=False,
     )
 

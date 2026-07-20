@@ -231,6 +231,17 @@ explícitos conserva encuadres, cortes, capas de fuente, texto, transiciones y
 subtítulos sin llamadas de assets. No existe fallback entre Pexels, 9Router y
 el video fuente.
 
+El análisis visual ahora tiene dos escalas. Las muestras globales ayudan a
+elegir el fragmento, pero cada fragmento seleccionado recibe además muestras
+propias cerca del inicio, final, cuartiles, centro y cambios de escena. Un
+recorte automático sólo puede usar regiones o tracks observados dentro de esa
+ventana. Si la cobertura no alcanza, el sistema repite una vez el análisis y la
+planificación con más frames; si todavía falla, termina antes de buscar assets o
+renderizar. `clip_visual_coverage.json` conserva sólo IDs, timestamps, métricas
+y códigos de bloqueo. Un fallback a `fit`/letterbox debe estar autorizado de
+forma explícita; el motor ya no convierte silenciosamente un recorte en una
+imagen horizontal pequeña dentro del lienzo vertical.
+
 En dominio/HTTPS, la sesión usa una cookie opaca `HttpOnly`, `Secure` y
 `SameSite`, junto con un token CSRF separado para operaciones que modifican
 estado. El opt-in HTTP de desarrollo no puede usar `Secure`. En ningún modo hay

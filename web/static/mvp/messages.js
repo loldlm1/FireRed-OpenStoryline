@@ -80,6 +80,7 @@ const ERROR_MESSAGES = Object.freeze({
   CREATIVE_INTENT_CAPABILITY_UNAVAILABLE: 'La versión exige un recurso que no está habilitado en este despliegue.',
   EDIT_PLAN_INTENT_MISMATCH: 'La planificación no convirtió todos los requisitos obligatorios en operaciones editables.',
   EDIT_PLAN_REPAIR_EXHAUSTED: 'La planificación siguió siendo inválida después del único intento de reparación seguro.',
+  EDIT_PLAN_VISUAL_COVERAGE_INSUFFICIENT: 'No hubo evidencia visual suficiente dentro del fragmento para ejecutar un recorte seguro.',
   REQUIRED_GENERATED_ASSET_COUNT_INVALID: 'Indica una cantidad positiva para las imágenes generadas obligatorias.',
   REQUIRED_STOCK_ASSET_COUNT_INVALID: 'Indica una cantidad positiva para los videos Pexels obligatorios.',
   ACTIVITY_STREAM_UNAVAILABLE: 'La conexión en vivo no está disponible. Seguiremos consultando el avance.',
