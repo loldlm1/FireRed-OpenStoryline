@@ -131,7 +131,12 @@ def planner_fixture(role: str, editing_prompt: str):
 
 class EditPlanContractTests(unittest.TestCase):
     def test_normalizes_observed_source_fallback_aliases(self):
-        for alias in ("keep_source_video", "source_only"):
+        for alias in (
+            "keep_source_video",
+            "source_only",
+            "use_source_video",
+            "Use source video",
+        ):
             with self.subTest(alias=alias):
                 normalized = _normalize_edit_plan_response({
                     "clips": [{"asset_requests": [{"fallback": alias}]}],
