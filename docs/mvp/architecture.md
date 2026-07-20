@@ -251,6 +251,10 @@ and the development venv never enter the remote-image build context.
 - The 9Router endpoint key, direct `MISTRAL_API_KEYS` key ring, and optional
   `PEXELS_API_KEY` are delivered through Kamal secrets and never written to job
   state, logs, manifests, or Git.
+- Optional VMAF/XPSNR research runs in the separate, network-disabled
+  [`Dockerfile.quality`](../../Dockerfile.quality) image described in
+  [quality-sidecar.md](quality-sidecar.md). The remote web image does not ship
+  VMAF, research models, or quality-provider dependencies.
 - Error bodies are truncated and sanitized before persistence.
 - One in-process worker holds PostgreSQL coordinator and execution advisory
   locks. Overlapping Kamal web containers may serve requests, but only the lock

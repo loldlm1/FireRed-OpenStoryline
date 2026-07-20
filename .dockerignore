@@ -1,10 +1,14 @@
 **
 !.dockerignore
 !Dockerfile.remote
+!Dockerfile.quality
 !requirements-remote.txt
+!requirements-quality.txt
 !config.toml
 !mvp_fastapi.py
 !alembic.ini
+!scripts/
+!scripts/quality_metrics.py
 !migrations/
 !migrations/**
 !src/

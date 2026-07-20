@@ -48,6 +48,11 @@ class FavoriteRunPayload(BaseModel):
     run_id: str = Field(min_length=32, max_length=32)
 
 
+class PromptRunPayload(BaseModel):
+    prior_attempt_id: str | None = Field(default=None, min_length=32, max_length=32)
+    use_quality_feedback: bool = False
+
+
 def _http_error(exc: JobStoreError) -> HTTPException:
     if exc.code in {
         "JOB_NOT_FOUND",
@@ -56,6 +61,7 @@ def _http_error(exc: JobStoreError) -> HTTPException:
         "SESSION_SOURCE_NOT_FOUND",
         "SOURCE_UPLOAD_NOT_FOUND",
         "PROMPT_VERSION_NOT_FOUND",
+        "PRIOR_ATTEMPT_NOT_FOUND",
     }:
         status = 404
     elif exc.code in {
@@ -79,6 +85,7 @@ def _http_error(exc: JobStoreError) -> HTTPException:
         "PROMPT_RUN_CONFLICT",
         "FAVORITE_RUN_INVALID",
         "SESSION_SOURCE_CHANGED",
+        "PRIOR_ATTEMPT_NOT_READY",
     }:
         status = 409
     elif exc.code == "UPLOAD_TOO_LARGE":
@@ -90,6 +97,9 @@ def _http_error(exc: JobStoreError) -> HTTPException:
         "SOURCE_VALIDATION_TIMEOUT",
         "UPLOAD_INCOMPLETE",
         "PROMPT_INVALID",
+        "PRIOR_ATTEMPT_REQUIRED",
+        "PRIOR_QUALITY_FEEDBACK_FLAG_REQUIRED",
+        "PRIOR_QUALITY_EVIDENCE_UNAVAILABLE",
     }:
         status = 422
     elif exc.code in {"SESSION_SOURCE_EXPIRED", "SESSION_SOURCE_UNAVAILABLE"}:
@@ -437,9 +447,16 @@ def create_mvp_router(
             raise _http_error(exc) from exc
 
     @router.post("/prompt-versions/{prompt_version_id}/runs", status_code=202)
-    async def rerun_prompt_version(prompt_version_id: str):
+    async def rerun_prompt_version(
+        prompt_version_id: str,
+        payload: PromptRunPayload | None = None,
+    ):
         try:
-            run = await prompt_versions().rerun(prompt_version_id)
+            run = await prompt_versions().rerun(
+                prompt_version_id,
+                prior_attempt_id=payload.prior_attempt_id if payload else None,
+                use_quality_feedback=payload.use_quality_feedback if payload else False,
+            )
             await get_manager().enqueue(run["id"])
             return run
         except JobStoreError as exc:

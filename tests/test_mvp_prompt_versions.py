@@ -4,6 +4,8 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from tempfile import TemporaryDirectory
 import asyncio
+import hashlib
+import json
 import os
 import shutil
 import subprocess
@@ -19,7 +21,13 @@ from sqlalchemy.engine import make_url
 from open_storyline.mvp.api import create_mvp_router
 from open_storyline.mvp.database import Database, normalize_database_url
 from open_storyline.mvp.jobs import JobManager, JobStore, JobStoreError
-from open_storyline.mvp.models import Artifact, PromptVersion, SessionInputVideo, VideoJob
+from open_storyline.mvp.models import (
+    Artifact,
+    AuditDocument,
+    PromptVersion,
+    SessionInputVideo,
+    VideoJob,
+)
 from open_storyline.mvp.prompt_versions import PromptVersionService, validate_run_settings
 from open_storyline.mvp.session_media import SessionMediaStore
 
@@ -385,6 +393,76 @@ class PromptVersionPostgresTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(rerun["request"], created["run"]["request"])
         self.assertEqual(rerun["request"]["asset_policy"], "required")
         self.assertEqual(rerun["request"]["stock_policy"], "required")
+
+    async def test_explicit_rerun_can_use_sanitized_prior_quality_evidence(self):
+        editing_session, _source, _source_path = await self.ready_session()
+        created = await self.service.create_version(
+            editing_session["id"],
+            prompt="repair the prior objective quality blockers",
+            settings=self.settings,
+        )
+        prior = created["run"]
+        await self.store.update(prior["id"], state="completed", progress=1)
+        document = {
+            "version": "frame_quality_qa.v1",
+            "clips": [{
+                "clip_index": 1,
+                "active_picture": {"summary": {
+                    "median_active_area_ratio": 0.31,
+                    "median_active_height_ratio": 0.3125,
+                }},
+                "reference_metrics": {"samples": [{
+                    "timestamp_ms": 1000,
+                    "segment_id": "segment-1",
+                    "operation": "crop",
+                    "strategy": "crop",
+                    "ssim": 0.6,
+                    "psnr": 17.0,
+                }]},
+                "findings": [{
+                    "code": "ACTIVE_PICTURE_TOO_SMALL",
+                    "severity": "blocker",
+                }],
+            }],
+        }
+        raw = json.dumps(document)
+        async with self.database.sessions() as session:
+            async with session.begin():
+                session.add(AuditDocument(
+                    job_id=prior["id"],
+                    kind="frame_quality_qa",
+                    source_name="frame_quality_qa.json",
+                    raw_text=raw,
+                    parsed_data=document,
+                    parse_status="parsed",
+                    parser_version="audit.v1",
+                    sha256=hashlib.sha256(raw.encode()).hexdigest(),
+                    byte_size=len(raw.encode()),
+                ))
+
+        rerun = await self.service.rerun(
+            created["prompt_version"]["id"],
+            prior_attempt_id=prior["id"],
+            use_quality_feedback=True,
+        )
+        feedback = rerun["request"]["prior_attempt_quality_feedback"]
+
+        self.assertEqual(rerun["prompt"], created["run"]["prompt"])
+        self.assertEqual(rerun["request"]["settings_version"], 2)
+        self.assertEqual(feedback["prior_attempt_id"], prior["id"])
+        self.assertEqual(feedback["prior_attempt_number"], 1)
+        self.assertIn("ACTIVE_PICTURE_TOO_SMALL", feedback["blocker_codes"])
+        self.assertEqual(feedback["worst_metric_samples"][0]["timestamp_ms"], 1000)
+
+        with self.assertRaises(JobStoreError) as missing_flag:
+            await self.service.rerun(
+                created["prompt_version"]["id"],
+                prior_attempt_id=prior["id"],
+            )
+        self.assertEqual(
+            missing_flag.exception.code,
+            "PRIOR_QUALITY_FEEDBACK_FLAG_REQUIRED",
+        )
 
     async def test_history_favorite_and_cross_session_rules(self):
         editing_session, _source, _path = await self.ready_session("History")

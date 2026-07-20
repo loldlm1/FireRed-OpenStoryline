@@ -703,6 +703,7 @@ class AgenticEditPlanner:
         creative_intent: CreativeIntent | None = None,
         allow_degraded_fallback: bool = False,
         visual_coverage_feedback: dict[str, Any] | None = None,
+        prior_attempt_quality_feedback: dict[str, Any] | None = None,
         renderer_capabilities: Iterable[str] = SUPPORTED_CAPABILITIES,
     ) -> EditPlan:
         available_capabilities = frozenset(str(value) for value in renderer_capabilities)
@@ -788,6 +789,7 @@ class AgenticEditPlanner:
                 "Never return FFmpeg expressions, commands, paths, or unsupported operations.",
             ],
             "visual_coverage_feedback": visual_coverage_feedback or {},
+            "prior_attempt_quality_feedback": prior_attempt_quality_feedback or {},
             "exact_field_contract": _edit_plan_field_contract(),
         }
         known_region_ids = tuple(region.id for region in visual_understanding.regions)

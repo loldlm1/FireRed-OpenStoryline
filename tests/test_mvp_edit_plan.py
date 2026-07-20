@@ -379,6 +379,30 @@ class AgenticEditPlannerTests(unittest.IsolatedAsyncioTestCase):
                     "region-1",
                 )
 
+    async def test_prior_attempt_quality_feedback_is_explicit_planner_input(self):
+        planner, client, kwargs = planner_fixture(
+            "speaker", "Keep the speaker primary and repair objective blockers."
+        )
+        kwargs["prior_attempt_quality_feedback"] = {
+            "version": "quality_feedback.v1",
+            "prior_attempt_id": "a" * 32,
+            "prior_attempt_number": 1,
+            "blocker_codes": ["ACTIVE_PICTURE_TOO_SMALL"],
+            "active_picture": [{
+                "clip_index": 1,
+                "median_active_height_ratio": 0.31,
+            }],
+        }
+
+        await planner.plan(**kwargs)
+        payload = json.loads(client.call["user_prompt"])
+
+        self.assertEqual(
+            payload["prior_attempt_quality_feedback"]["blocker_codes"],
+            ["ACTIVE_PICTURE_TOO_SMALL"],
+        )
+        self.assertEqual(payload["visual_coverage_feedback"], {})
+
     async def test_repairs_one_structurally_invalid_response(self):
         planner, client, kwargs = planner_fixture(
             "screen", "Keep the visible screen readable."

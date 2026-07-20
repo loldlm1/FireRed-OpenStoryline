@@ -5,6 +5,7 @@ from typing import Any, Optional, Sequence
 import json
 import os
 import re
+import time
 
 import httpx
 
@@ -17,6 +18,12 @@ class NineRouterAttempt:
     number: int
     status_code: Optional[int]
     reason: str
+    duration_ms: int = 0
+    input_tokens: int | None = None
+    output_tokens: int | None = None
+    reasoning_tokens: int | None = None
+    total_tokens: int | None = None
+    cost_usd: float | None = None
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -65,6 +72,37 @@ def _message_text(content: Any) -> str:
         if isinstance(value, str):
             parts.append(value)
     return "\n".join(parts)
+
+
+def _usage(payload: Any) -> dict[str, int | float | None]:
+    usage = payload.get("usage") if isinstance(payload, dict) else None
+    usage = usage if isinstance(usage, dict) else {}
+    details = usage.get("completion_tokens_details")
+    details = details if isinstance(details, dict) else {}
+
+    def integer(name: str, source: dict[str, Any] = usage) -> int | None:
+        try:
+            value = int(source.get(name))
+        except (TypeError, ValueError, OverflowError):
+            return None
+        return value if 0 <= value <= 100_000_000 else None
+
+    cost_value = usage.get("cost")
+    if cost_value is None and isinstance(payload, dict):
+        cost_value = payload.get("cost")
+    try:
+        cost = float(cost_value)
+    except (TypeError, ValueError):
+        cost = None
+    if cost is not None and not 0 <= cost <= 100_000:
+        cost = None
+    return {
+        "input_tokens": integer("prompt_tokens"),
+        "output_tokens": integer("completion_tokens"),
+        "reasoning_tokens": integer("reasoning_tokens", details),
+        "total_tokens": integer("total_tokens"),
+        "cost_usd": round(cost, 8) if cost is not None else None,
+    }
 
 
 def parse_json_object(value: str) -> dict[str, Any]:
@@ -176,10 +214,16 @@ class NineRouterClient:
         headers = {"Authorization": f"Bearer {self.api_key}"}
         async with httpx.AsyncClient(timeout=self.timeout, transport=self.transport) as client:
             for number in range(1, self.max_retries + 2):
+                started = time.monotonic()
                 try:
                     response = await client.post(self.endpoint, headers=headers, json=request_body)
                 except httpx.HTTPError as exc:
-                    attempts.append(NineRouterAttempt(number, None, _sanitize(exc, self.api_key)))
+                    attempts.append(NineRouterAttempt(
+                        number,
+                        None,
+                        _sanitize(exc, self.api_key),
+                        duration_ms=max(0, int(round((time.monotonic() - started) * 1000))),
+                    ))
                     continue
 
                 if response.status_code >= 400:
@@ -187,6 +231,7 @@ class NineRouterClient:
                         number,
                         response.status_code,
                         _sanitize(response.text, self.api_key),
+                        duration_ms=max(0, int(round((time.monotonic() - started) * 1000))),
                     ))
                     if response.status_code < 500 and response.status_code != 429:
                         break
@@ -196,7 +241,13 @@ class NineRouterClient:
                     payload = response.json()
                     content = payload["choices"][0]["message"]["content"]
                     parsed = parse_json_object(_message_text(content))
-                    attempts.append(NineRouterAttempt(number, response.status_code, "ok"))
+                    attempts.append(NineRouterAttempt(
+                        number,
+                        response.status_code,
+                        "ok",
+                        duration_ms=max(0, int(round((time.monotonic() - started) * 1000))),
+                        **_usage(payload),
+                    ))
                     self.last_attempts = tuple(attempts)
                     return parsed
                 except (KeyError, IndexError, TypeError, ValueError, json.JSONDecodeError) as exc:
@@ -204,6 +255,7 @@ class NineRouterClient:
                         number,
                         response.status_code,
                         _sanitize(exc, self.api_key),
+                        duration_ms=max(0, int(round((time.monotonic() - started) * 1000))),
                     ))
 
         last_status = attempts[-1].status_code if attempts else None
