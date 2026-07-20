@@ -139,6 +139,7 @@ def build_clip_frame_requests(
     clip_start_ms: int,
     clip_end_ms: int,
     max_frames: int,
+    focus_windows: Sequence[tuple[int, int]] = (),
 ) -> tuple[FrameRequest, ...]:
     if (
         source_duration_ms <= 0
@@ -155,6 +156,50 @@ def build_clip_frame_requests(
         raise FrameSamplingError(
             "FRAME_CLIP_LIMIT_INVALID",
             "clip-local max_frames must be between 5 and 32",
+        )
+
+    try:
+        normalized_focus_windows = tuple(sorted({
+            (int(window[0]), int(window[1]))
+            for window in focus_windows
+            if isinstance(window, (list, tuple)) and len(window) == 2
+        }))
+    except (TypeError, ValueError, OverflowError):
+        normalized_focus_windows = ()
+    if len(normalized_focus_windows) != len(focus_windows):
+        raise FrameSamplingError(
+            "FRAME_FOCUS_INVALID",
+            "focus windows must contain integer start and end timestamps",
+        )
+    if any(
+        start_ms < clip_start_ms
+        or end_ms > clip_end_ms
+        or end_ms <= start_ms
+        for start_ms, end_ms in normalized_focus_windows
+    ):
+        raise FrameSamplingError(
+            "FRAME_FOCUS_INVALID",
+            "focus windows must stay inside the selected clip",
+        )
+
+    focused: list[FrameRequest] = []
+    for start_ms, end_ms in normalized_focus_windows:
+        duration_ms = end_ms - start_ms
+        safe_offset = min(250, max(1, duration_ms // 20))
+        for timestamp_ms, reason in (
+            (min(end_ms - 1, start_ms + safe_offset), "repair_window_start"),
+            (max(start_ms, end_ms - safe_offset - 1), "repair_window_end"),
+        ):
+            focused.append(FrameRequest(
+                timestamp_ms,
+                _scene_for_time(scenes, timestamp_ms).id,
+                reason,
+            ))
+    focused_timestamps = {item.timestamp_ms for item in focused}
+    if len(focused_timestamps) > max_frames:
+        raise FrameSamplingError(
+            "FRAME_FOCUS_LIMIT_INVALID",
+            "focused repair windows exceed the clip-local frame budget",
         )
 
     duration_ms = clip_end_ms - clip_start_ms
@@ -221,7 +266,10 @@ def build_clip_frame_requests(
             reasons,
         )
 
-    for candidate in required:
+    for candidate in focused:
+        add(candidate)
+    remaining = max_frames - len(selected)
+    for candidate in _evenly_select(required, max(0, remaining)):
         add(candidate)
     remaining = max_frames - len(selected)
     for candidate in _evenly_select(scene_candidates, max(0, remaining)):
@@ -262,6 +310,7 @@ def sample_frames(
     clip_start_ms: int | None = None,
     clip_end_ms: int | None = None,
     id_prefix: str = "",
+    focus_windows: Sequence[tuple[int, int]] = (),
 ) -> FrameManifest:
     if not 16_384 <= max_frame_bytes <= 8 * 1024 * 1024:
         raise FrameSamplingError(
@@ -272,6 +321,11 @@ def sample_frames(
         raise FrameSamplingError(
             "FRAME_CLIP_INVALID",
             "clip_start_ms and clip_end_ms must be supplied together",
+        )
+    if focus_windows and clip_start_ms is None:
+        raise FrameSamplingError(
+            "FRAME_FOCUS_INVALID",
+            "focus windows require selected clip bounds",
         )
     requests = (
         build_frame_requests(
@@ -286,6 +340,7 @@ def sample_frames(
             clip_start_ms=int(clip_start_ms),
             clip_end_ms=int(clip_end_ms),
             max_frames=max_frames,
+            focus_windows=focus_windows,
         )
     )
     clean_prefix = str(id_prefix or "")

@@ -4,6 +4,7 @@ import unittest
 from unittest.mock import patch
 
 from open_storyline.mvp.frame_sampling import (
+    FrameSamplingError,
     build_clip_frame_requests,
     build_frame_requests,
     sample_frames,
@@ -116,6 +117,42 @@ class VisualUnderstandingTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(all(20_000 <= item.timestamp_ms < 29_000 for item in first))
         self.assertLessEqual(first[0].timestamp_ms, 20_500)
         self.assertGreaterEqual(first[-1].timestamp_ms, 28_500)
+
+    def test_clip_repair_sampling_covers_each_blocked_window(self):
+        windows = ((20_000, 23_000), (25_000, 29_000))
+        requests = build_clip_frame_requests(
+            self.scenes.scenes,
+            source_duration_ms=30_000,
+            clip_start_ms=20_000,
+            clip_end_ms=29_000,
+            max_frames=8,
+            focus_windows=windows,
+        )
+
+        self.assertEqual(len(requests), 8)
+        for start_ms, end_ms in windows:
+            focused = [
+                item for item in requests
+                if start_ms <= item.timestamp_ms < end_ms
+                and "repair_window" in item.reason
+            ]
+            self.assertEqual(len(focused), 2)
+
+        with self.assertRaises(FrameSamplingError) as caught:
+            build_clip_frame_requests(
+                self.scenes.scenes,
+                source_duration_ms=30_000,
+                clip_start_ms=10_000,
+                clip_end_ms=29_000,
+                max_frames=5,
+                focus_windows=(
+                    (10_000, 14_000),
+                    (15_000, 19_000),
+                    (20_000, 24_000),
+                ),
+            )
+
+        self.assertEqual(caught.exception.code, "FRAME_FOCUS_LIMIT_INVALID")
 
     async def test_prompt_maps_attached_images_to_exact_frame_order(self):
         manifest = self._manifest()

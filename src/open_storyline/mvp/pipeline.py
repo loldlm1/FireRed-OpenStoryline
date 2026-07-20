@@ -363,6 +363,7 @@ class MVPJobProcessor:
                 clip_indexes: set[int],
                 *,
                 max_frames: int,
+                focus_windows_by_clip: dict[int, tuple[tuple[int, int], ...]] | None = None,
             ) -> None:
                 nonlocal clip_vision_call_count
                 for clip_index, clip in enumerate(plan.clips, start=1):
@@ -381,6 +382,7 @@ class MVPJobProcessor:
                         clip_start_ms=clip.start_ms,
                         clip_end_ms=clip.end_ms,
                         id_prefix=f"clip-{clip_index:02d}-",
+                        focus_windows=(focus_windows_by_clip or {}).get(clip_index, ()),
                     )
                     local_understanding = await VisualUnderstandingPlanner(remote_client).plan(
                         frame_manifest=local_manifest,
@@ -504,6 +506,14 @@ class MVPJobProcessor:
             )
             if visual_coverage.blocking:
                 initial_blocker_codes = visual_coverage.blocker_codes
+                focus_windows_by_clip: dict[int, tuple[tuple[int, int], ...]] = {}
+                for segment in visual_coverage.segments:
+                    if not segment.blocker_codes:
+                        continue
+                    focus_windows_by_clip.setdefault(segment.clip_index, ())
+                    focus_windows_by_clip[segment.clip_index] += (
+                        (segment.source_start_ms, segment.source_end_ms),
+                    )
                 repair_frame_count = max(
                     agentic_config.vision_clip_frame_count,
                     agentic_config.vision_clip_repair_frame_count,
@@ -511,6 +521,7 @@ class MVPJobProcessor:
                 await analyze_clip_windows(
                     set(visual_coverage.affected_clip_indexes),
                     max_frames=repair_frame_count,
+                    focus_windows_by_clip=focus_windows_by_clip,
                 )
                 visual_understanding = merge_visual_understandings(
                     global_visual_understanding,
@@ -608,6 +619,9 @@ class MVPJobProcessor:
                 raise EditPlanError(
                     "EDIT_PLAN_VISUAL_COVERAGE_INSUFFICIENT",
                     "crop evidence remained insufficient after one bounded clip-local repair",
+                    evidence={
+                        "visual_coverage": visual_coverage.compact_feedback(),
+                    },
                 )
 
             planned_asset_ids = {

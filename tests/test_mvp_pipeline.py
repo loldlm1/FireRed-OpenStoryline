@@ -610,6 +610,14 @@ class MVPAgenticPipelineTests(unittest.IsolatedAsyncioTestCase):
             )
             self.assertEqual(FakeMissingCropEditPlanner.calls, 2)
             self.assertEqual(sampler.call_count, 3)
+            self.assertEqual(
+                sampler.call_args_list[-1].kwargs["focus_windows"],
+                ((0, 20_000),),
+            )
+            self.assertIn(
+                "CROP_VISUAL_OBSERVATION_MISSING",
+                caught.exception.evidence["visual_coverage"]["blockers"][0]["codes"],
+            )
             coverage = json.loads(
                 (root / "output" / "clip_visual_coverage.json").read_text(encoding="utf-8")
             )
