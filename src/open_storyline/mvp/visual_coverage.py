@@ -5,7 +5,10 @@ from typing import Any
 
 from open_storyline.mvp.edit_plan import EditPlan, EditSegment
 from open_storyline.mvp.frame_sampling import FrameManifest
-from open_storyline.mvp.visual_understanding import VisualUnderstanding
+from open_storyline.mvp.visual_understanding import (
+    VisualUnderstanding,
+    select_target_regions,
+)
 
 
 CLIP_VISUAL_COVERAGE_VERSION = "clip_visual_coverage.v1"
@@ -120,31 +123,23 @@ def _target_timestamps(
         and frame.get("id") is not None
         and frame.get("timestamp_ms") is not None
     }
-    region_ids: set[str] = set()
-    target_kind = "semantic_role"
-    target_id = target.semantic_role
-    if target.region_id:
-        target_kind = "region"
-        target_id = target.region_id
-        region_ids.add(target.region_id)
-    if target.track_id:
-        target_kind = "track"
-        target_id = target.track_id
-        track = next((item for item in visual.tracks if item.id == target.track_id), None)
-        if track is not None:
-            region_ids.update(track.region_ids)
+    regions, target_kind = select_target_regions(
+        visual,
+        target=target,
+        start_ms=segment.source_window.start_ms,
+        end_ms=segment.source_window.end_ms,
+    )
+    target_id = (
+        target.region_id
+        if target_kind == "region"
+        else target.track_id
+        if target_kind == "track"
+        else target.semantic_role
+    )
     timestamps = {
         frames[region.frame_id]
-        for region in visual.regions
+        for region in regions
         if region.frame_id in frames
-        and (
-            region.id in region_ids
-            if region_ids
-            else bool(target.semantic_role) and region.role == target.semantic_role
-        )
-        and segment.source_window.start_ms
-        <= frames[region.frame_id]
-        < segment.source_window.end_ms
     }
     return target_kind, target_id, tuple(sorted(timestamps))
 

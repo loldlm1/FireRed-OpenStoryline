@@ -346,6 +346,55 @@ class CompositorTests(unittest.TestCase):
                 (observation.bbox.x + observation.bbox.width) * source.width,
             )
 
+    def test_crop_uses_explicit_semantic_role_when_track_is_temporally_sparse(self):
+        source = MediaInfo(4000, 640, 360, True)
+        segment = EditSegment(
+            id="speaker-fallback",
+            source_window=TimeWindow(start_ms=0, end_ms=4000),
+            timeline_window=TimeWindow(start_ms=0, end_ms=4000),
+            layout=LayoutSpec(
+                mode="crop",
+                focal_target=FocalTarget(
+                    track_id="sparse-track",
+                    semantic_role="speaker",
+                ),
+                fallback="crop",
+            ),
+            reason="keep the visible speaker",
+        )
+        observations = [
+            region("speaker-1", "frame-001", x=0.1, width=0.18),
+            region("speaker-2", "frame-002", x=0.11, width=0.18),
+            region("speaker-3", "frame-003", x=0.12, width=0.18),
+        ]
+
+        composition = resolve_clip_composition(
+            clip_plan([segment]),
+            visual=visual(
+                [
+                    {"id": "frame-001", "timestamp_ms": 500},
+                    {"id": "frame-002", "timestamp_ms": 2000},
+                    {"id": "frame-003", "timestamp_ms": 3500},
+                ],
+                observations,
+                tracks=[SimpleNamespace(
+                    id="sparse-track",
+                    region_ids=("speaker-1",),
+                    role="speaker",
+                )],
+            ),
+            source_media=source,
+            output_width=180,
+            output_height=320,
+        )
+
+        resolved = composition.segments[0]
+        self.assertEqual(
+            resolved.target_region_ids,
+            ("speaker-1", "speaker-2", "speaker-3"),
+        )
+        self.assertIn("semantic-role fallback", resolved.reason)
+
     def test_filtergraph_is_server_generated_bounded_and_requires_audio(self):
         segment = SimpleNamespace(
             source_window=TimeWindow(start_ms=0, end_ms=4000),

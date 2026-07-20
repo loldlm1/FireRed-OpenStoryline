@@ -156,6 +156,67 @@ class VisualUnderstanding(VisualModel):
         return self.model_dump(mode="json")
 
 
+def select_target_regions(
+    visual: VisualUnderstanding,
+    *,
+    target: Any,
+    start_ms: int,
+    end_ms: int,
+) -> tuple[tuple[RegionObservation, ...], str]:
+    if target is None:
+        return (), "center"
+    frame_times = {
+        str(frame.get("id")): int(frame.get("timestamp_ms"))
+        for frame in visual.frame_manifest.get("frames") or []
+        if isinstance(frame, dict)
+        and frame.get("id") is not None
+        and frame.get("timestamp_ms") is not None
+    }
+    in_window = tuple(
+        region
+        for region in visual.regions
+        if region.frame_id in frame_times
+        and start_ms <= frame_times[region.frame_id] < end_ms
+    )
+    if target.region_id:
+        return (
+            tuple(region for region in in_window if region.id == target.region_id),
+            "region",
+        )
+
+    track_regions: tuple[RegionObservation, ...] = ()
+    if target.track_id:
+        track = next(
+            (item for item in visual.tracks if item.id == target.track_id),
+            None,
+        )
+        if track is not None:
+            track_ids = set(track.region_ids)
+            track_regions = tuple(
+                region for region in in_window if region.id in track_ids
+            )
+    semantic_regions = (
+        tuple(region for region in in_window if region.role == target.semantic_role)
+        if target.semantic_role
+        else ()
+    )
+    if target.track_id and semantic_regions:
+        def temporal_score(regions: tuple[RegionObservation, ...]) -> tuple[int, int]:
+            timestamps = sorted({frame_times[region.frame_id] for region in regions})
+            return (
+                len(timestamps),
+                timestamps[-1] - timestamps[0] if len(timestamps) >= 2 else 0,
+            )
+
+        if temporal_score(semantic_regions) > temporal_score(track_regions):
+            return semantic_regions, "semantic_role_fallback"
+    if target.track_id:
+        return track_regions, "track"
+    if target.semantic_role:
+        return semantic_regions, "semantic_role"
+    return (), "center"
+
+
 def scope_visual_understanding(
     understanding: VisualUnderstanding,
     *,
