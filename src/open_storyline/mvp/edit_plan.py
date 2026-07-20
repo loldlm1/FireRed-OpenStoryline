@@ -51,6 +51,21 @@ AssetKind = Literal["generated_image", "stock_image", "stock_video"]
 AssetProvider = Literal["9router", "pexels"]
 StockAssetKind = Literal["image", "video"]
 
+_VALIDATION_CONSTRAINT_CODES = {
+    "segment IDs must be unique": "segment_ids_not_unique",
+    "asset request IDs must be unique": "asset_ids_not_unique",
+    "intent decision IDs must be unique": "intent_ids_not_unique",
+    "segment source timing must stay inside the clip": "segment_source_outside_clip",
+    "the first segment must start at zero with a hard cut": "first_segment_invalid",
+    "segment timing must match its declared transition overlap": "segment_timeline_gap",
+    "clip timeline must cover the complete selected duration": "clip_timeline_incomplete",
+    "overlay source timing must stay inside the selected clip": "overlay_source_outside_clip",
+    "asset timing must stay inside the clip timeline": "asset_timeline_outside_clip",
+    "overlay IDs must be unique inside a clip": "overlay_ids_not_unique",
+    "image overlays and asset requests must reference the same asset IDs": "asset_overlay_ids_mismatch",
+    "image overlay timing must stay inside its asset request window": "asset_overlay_timing_mismatch",
+}
+
 
 class EditPlanError(RuntimeError):
     def __init__(
@@ -505,6 +520,12 @@ def _normalize_edit_plan_response(value: Any) -> Any:
         for segment in segments:
             if not isinstance(segment, dict) or not isinstance(segment.get("overlays"), list):
                 continue
+            layout = segment.get("layout")
+            focal_target = layout.get("focal_target") if isinstance(layout, dict) else None
+            if isinstance(focal_target, dict):
+                for field in ("region_id", "track_id", "semantic_role"):
+                    if focal_target.get(field) is None:
+                        focal_target[field] = ""
             normalized_overlays = []
             for overlay in segment["overlays"]:
                 if not isinstance(overlay, dict):
@@ -518,6 +539,9 @@ def _normalize_edit_plan_response(value: Any) -> Any:
                     and overlay["asset_id"]
                 ):
                     overlay["kind"] = "image"
+                for field in ("text", "asset_id"):
+                    if overlay.get(field) is None:
+                        overlay[field] = ""
                 if overlay.get("kind") in {"text", "image"}:
                     overlay.pop("source_window", None)
                 if overlay.get("protect_subtitles", True):
@@ -582,6 +606,7 @@ def _safe_invalid_literal(location: list[Any], value: Any) -> str | None:
     safe_field = (
         field in {"orientation", "fallback"} and "asset_requests" in location
         or field in {"kind", "position"} and "overlays" in location
+        or field == "kind" and "transition_in" in location
     )
     text = value.strip().lower()
     if not safe_field or not re.fullmatch(r"[a-z][a-z0-9_ -]{0,23}", text):
@@ -608,6 +633,10 @@ def _validation_error_evidence(exc: ValidationError) -> dict[str, Any]:
         observed_value = _safe_invalid_literal(location, error.get("input"))
         if observed_value is not None:
             issue["observed_value"] = observed_value
+        context_error = str((error.get("ctx") or {}).get("error") or "")
+        constraint_code = _VALIDATION_CONSTRAINT_CODES.get(context_error)
+        if constraint_code is not None:
+            issue["constraint_code"] = constraint_code
         issues.append(issue)
     return {
         "issue_count": len(errors),

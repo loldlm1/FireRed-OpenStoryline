@@ -235,6 +235,24 @@ class EditPlanContractTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             LayoutSpec(mode="crop", safe_margin_ratio=float("nan"))
 
+    def test_schema_evidence_uses_allowlisted_constraint_codes(self):
+        payload = build_shadow_edit_plan(
+            [ShortCandidate(0, 20_000, "Title", "Hook", "Reason", 0.9)],
+            source_duration_ms=20_000,
+        ).to_dict()
+        payload["clips"][0]["segments"].append(
+            deepcopy(payload["clips"][0]["segments"][0])
+        )
+
+        with self.assertRaises(EditPlanError) as caught:
+            validate_edit_plan(payload)
+
+        issues = caught.exception.to_dict()["evidence"]["validation"]["issues"]
+        self.assertIn(
+            "segment_ids_not_unique",
+            {item.get("constraint_code") for item in issues},
+        )
+
     def test_overlay_contract_requires_kind_payload(self):
         with self.assertRaises(ValueError):
             OverlaySpec(
@@ -695,6 +713,11 @@ class AgenticEditPlannerTests(unittest.IsolatedAsyncioTestCase):
         response = client.response
         response["requested_capabilities"].extend(["image_overlay", "source_cutaway"])
         response["degradation_reason"] = None
+        response["clips"][0]["segments"][0]["layout"]["focal_target"] = {
+            "region_id": None,
+            "track_id": None,
+            "semantic_role": "speaker",
+        }
         response["clips"][0]["segments"][0]["overlays"] = [
             {
                 "id": "generated-overlay",
@@ -714,6 +737,8 @@ class AgenticEditPlannerTests(unittest.IsolatedAsyncioTestCase):
                 "id": "source-overlay",
                 "kind": "source",
                 "timeline_window": {"start_ms": 10_000, "end_ms": 12_000},
+                "text": None,
+                "asset_id": None,
                 "position": "top",
             },
             {
