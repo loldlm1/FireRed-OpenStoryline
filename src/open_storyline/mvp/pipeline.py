@@ -35,6 +35,7 @@ from open_storyline.mvp.frame_quality import (
 from open_storyline.mvp.compositor import REFRAME_RENDER_CAPABILITIES
 from open_storyline.mvp.creative_intent import (
     build_creative_intent,
+    creative_intent_conformance_evidence,
     validate_creative_intent_conformance,
     validate_intent_capabilities,
 )
@@ -565,6 +566,11 @@ class MVPJobProcessor:
                     raise EditPlanError(
                         "EDIT_PLAN_INTENT_MISMATCH",
                         str(exc),
+                        evidence={
+                            "intent_conformance": (
+                                creative_intent_conformance_evidence(exc)
+                            ),
+                        },
                     ) from exc
             edit_planner_attempts = [
                 attempt.to_dict()

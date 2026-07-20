@@ -4,11 +4,26 @@ import unittest
 
 from open_storyline.mvp.creative_intent import (
     build_creative_intent,
+    creative_intent_conformance_evidence,
     validate_intent_capabilities,
 )
 
 
 class CreativeIntentTests(unittest.TestCase):
+    def test_conformance_evidence_is_bounded_and_attributable(self):
+        evidence = creative_intent_conformance_evidence(ValueError(
+            "intent prompt-generated-image visible duration is outside its contract"
+        ))
+
+        self.assertEqual(evidence, {
+            "constraint_code": "asset_visible_duration_outside_contract",
+            "intent_id": "prompt-generated-image",
+        })
+        self.assertEqual(
+            creative_intent_conformance_evidence(ValueError("private provider body")),
+            {"constraint_code": "intent_conformance_failed"},
+        )
+
     def test_extracts_private_prompt_requirements_without_persisting_prompt_text(self):
         prompt = (
             "Use exactly one vertical Pexels video for approximately 3-5 seconds. "

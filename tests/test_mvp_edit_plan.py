@@ -157,6 +157,11 @@ class EditPlanContractTests(unittest.TestCase):
                         "timeline_window": {"start_ms": 5000, "end_ms": 9000},
                     },
                 ],
+                "intent_decisions": [{
+                    "intent_id": "prompt-generated-image",
+                    "decision": "execute",
+                    "asset_ids": ["generated-1"],
+                }],
                 "segments": [{
                     "timeline_window": {"start_ms": 0, "end_ms": 20_000},
                 }],
@@ -167,6 +172,10 @@ class EditPlanContractTests(unittest.TestCase):
         self.assertEqual(
             [(item["asset_id"], item["position"]) for item in overlays],
             [("generated-1", "top_left"), ("stock-1", "top_right")],
+        )
+        self.assertEqual(
+            normalized["clips"][0]["intent_decisions"][0]["operation_ids"],
+            ["asset-overlay-01"],
         )
 
         executable = build_shadow_edit_plan(
@@ -1001,6 +1010,11 @@ class AgenticEditPlannerTests(unittest.IsolatedAsyncioTestCase):
             await planner.plan(**kwargs)
 
         self.assertEqual(caught.exception.code, "EDIT_PLAN_REPAIR_EXHAUSTED")
+        attempts = caught.exception.evidence["attempts"]
+        self.assertEqual(
+            attempts[0]["intent_conformance"]["constraint_code"],
+            "asset_visible_duration_outside_contract",
+        )
 
 
 if __name__ == "__main__":

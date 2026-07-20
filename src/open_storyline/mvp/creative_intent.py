@@ -186,6 +186,39 @@ _REQUIRED = r"(?:must\s+(?:use|include|add)|use|include|add|requiere|usa|incluye
 _GENERATED_IMAGE = r"(?:generated|ai[- ]generated|gpt[- ]generated|generada?|editorial)\s+(?:editorial\s+)?(?:image|still|visual|imagen)"
 _PEXELS_VIDEO = r"(?:vertical\s+)?(?:pexels\s+(?:stock\s+)?video|(?:stock\s+)?video\s+(?:from|de)\s+pexels|video\s+pexels)"
 
+_CONFORMANCE_ERROR_PATTERNS = (
+    (r"^intent decisions must be unique across the edit plan$", "intent_decisions_not_unique"),
+    (r"^intent decision references an unknown intent$", "unknown_intent_decision"),
+    (r"^required intent (?P<intent_id>[A-Za-z0-9][A-Za-z0-9._-]{0,79}) is not fully executable$", "required_asset_not_executable"),
+    (r"^required intent (?P<intent_id>[A-Za-z0-9][A-Za-z0-9._-]{0,79}) lacks an execute decision$", "required_asset_decision_missing"),
+    (r"^optional intent (?P<intent_id>[A-Za-z0-9][A-Za-z0-9._-]{0,79}) lacks a decision$", "optional_asset_decision_missing"),
+    (r"^intent decision (?P<intent_id>[A-Za-z0-9][A-Za-z0-9._-]{0,79}) does not map its asset requests$", "asset_decision_request_mismatch"),
+    (r"^intent decision (?P<intent_id>[A-Za-z0-9][A-Za-z0-9._-]{0,79}) references unknown operations$", "intent_operation_unknown"),
+    (r"^intent decision (?P<intent_id>[A-Za-z0-9][A-Za-z0-9._-]{0,79}) does not map executed overlays$", "asset_decision_overlay_mismatch"),
+    (r"^intent (?P<intent_id>[A-Za-z0-9][A-Za-z0-9._-]{0,79}) asset duration is outside its contract$", "asset_duration_outside_contract"),
+    (r"^intent (?P<intent_id>[A-Za-z0-9][A-Za-z0-9._-]{0,79}) visible duration is outside its contract$", "asset_visible_duration_outside_contract"),
+    (r"^required operation intent (?P<intent_id>[A-Za-z0-9][A-Za-z0-9._-]{0,79}) lacks an execute decision$", "required_operation_decision_missing"),
+    (r"^required operation intent (?P<intent_id>[A-Za-z0-9][A-Za-z0-9._-]{0,79}) lacks valid segment mappings$", "required_operation_mapping_invalid"),
+    (r"^required footer captions are absent from the plan$", "footer_captions_absent"),
+    (r"^required portrait reframe is absent from the plan$", "portrait_reframe_absent"),
+    (r"^plan narrative claims a generated image without an executable request$", "generated_asset_narrative_mismatch"),
+    (r"^plan narrative claims stock media without an executable request$", "stock_asset_narrative_mismatch"),
+)
+
+
+def creative_intent_conformance_evidence(exc: ValueError) -> dict[str, str]:
+    message = str(exc)
+    for pattern, code in _CONFORMANCE_ERROR_PATTERNS:
+        match = re.fullmatch(pattern, message)
+        if match is None:
+            continue
+        evidence = {"constraint_code": code}
+        intent_id = match.groupdict().get("intent_id")
+        if intent_id:
+            evidence["intent_id"] = intent_id
+        return evidence
+    return {"constraint_code": "intent_conformance_failed"}
+
 
 def _explicit_one(prompt: str, asset_pattern: str) -> bool:
     patterns = (

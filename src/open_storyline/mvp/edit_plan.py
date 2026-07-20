@@ -13,6 +13,7 @@ from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_valida
 from open_storyline.mvp.creative_intent import (
     CreativeIntent,
     CreativeIntentDecision,
+    creative_intent_conformance_evidence,
     validate_creative_intent_conformance,
 )
 from open_storyline.mvp.ninerouter import NineRouterClient
@@ -555,6 +556,20 @@ def _derive_missing_asset_overlays(clip: dict[str, Any]) -> None:
             "asset_id": asset_id,
             "position": "top_left" if derived_count % 2 else "top_right",
         })
+        intent_decisions = clip.get("intent_decisions")
+        if isinstance(intent_decisions, list):
+            for decision in intent_decisions:
+                if not isinstance(decision, dict) or decision.get("decision") != "execute":
+                    continue
+                asset_ids = decision.get("asset_ids") or []
+                if not isinstance(asset_ids, (list, tuple)) or asset_id not in asset_ids:
+                    continue
+                operation_ids = decision.get("operation_ids")
+                if operation_ids is None:
+                    operation_ids = []
+                    decision["operation_ids"] = operation_ids
+                if isinstance(operation_ids, list) and overlay_id not in operation_ids:
+                    operation_ids.append(overlay_id)
         existing_ids.add(overlay_id)
         used_asset_ids.add(asset_id)
 
@@ -745,9 +760,10 @@ def _repair_failure_evidence(*errors: EditPlanError) -> dict[str, Any]:
             "phase": phase,
             "cause_code": error.code,
         }
-        validation = error.evidence.get("validation")
-        if isinstance(validation, dict):
-            item["validation"] = validation
+        for key in ("validation", "intent_conformance"):
+            evidence = error.evidence.get(key)
+            if isinstance(evidence, dict):
+                item[key] = evidence
         attempts.append(item)
     return {"attempts": attempts}
 
@@ -1182,6 +1198,11 @@ class AgenticEditPlanner:
                         raise EditPlanError(
                             "EDIT_PLAN_INTENT_MISMATCH",
                             _safe_text(str(exc), limit=1000),
+                            evidence={
+                                "intent_conformance": (
+                                    creative_intent_conformance_evidence(exc)
+                                ),
+                            },
                         ) from exc
                 return clip_plan
 
