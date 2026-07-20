@@ -506,11 +506,14 @@ def _normalize_edit_plan_response(value: Any) -> Any:
                         "horizontal": "landscape",
                     }.get(asset.get("orientation"), asset.get("orientation"))
                 if "fallback" in asset:
-                    asset["fallback"] = {
+                    fallback = {
                         "none": "omit",
                         "source_video": "source",
                         "use_source": "source",
                     }.get(asset.get("fallback"), asset.get("fallback"))
+                    if fallback == "fail" and asset.get("required", True) is True:
+                        fallback = "omit"
+                    asset["fallback"] = fallback
         intent_decisions = clip.get("intent_decisions")
         if isinstance(intent_decisions, list):
             for decision in intent_decisions:
