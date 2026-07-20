@@ -1,5 +1,8 @@
 from pathlib import Path
+import os
 import re
+import subprocess
+import tempfile
 import unittest
 
 import yaml
@@ -245,9 +248,67 @@ class KamalConfigTests(unittest.TestCase):
 
         self.assertLess(dispatch, provider_requirements)
         self.assertLess(dispatch, release_scan)
-        self.assertIn("migrate|current|backup|restore-check", wrapper)
+        self.assertIn("migrate|current|readiness|backup|restore-check", wrapper)
         self.assertIn("docker run --rm --network kamal", wrapper)
         self.assertNotIn("app exec --primary alembic", wrapper)
+
+    def test_release_hooks_prepare_non_root_outputs_and_check_readiness(self):
+        pre_deploy = (ROOT / ".kamal" / "hooks" / "pre-deploy").read_text(
+            encoding="utf-8"
+        )
+        post_deploy = (ROOT / ".kamal" / "hooks" / "post-deploy").read_text(
+            encoding="utf-8"
+        )
+
+        self.assertIn("APP_UID=65532", pre_deploy)
+        self.assertIn("APP_GID=65532", pre_deploy)
+        self.assertIn('as_root install -d -m 0750 -o "$app_uid" -g "$app_gid"', pre_deploy)
+        self.assertIn('as_root find "$resolved_outputs" -xdev', pre_deploy)
+        self.assertIn('readlink -m -- "$outputs_dir"', pre_deploy)
+        self.assertIn('paths_overlap "$outputs_dir" "$postgres_data_dir"', pre_deploy)
+        self.assertIn('paths_overlap "$outputs_dir" "$postgres_backup_dir"', pre_deploy)
+        self.assertLess(
+            post_deploy.index('check_endpoint "/up"'),
+            post_deploy.index('check_endpoint "/health"'),
+        )
+        self.assertIn("for attempt in 1 2 3 4 5 6 7 8 9 10", post_deploy)
+
+    def test_pre_deploy_rejects_outputs_overlapping_postgres_storage(self):
+        hook = ROOT / ".kamal" / "hooks" / "pre-deploy"
+        with tempfile.TemporaryDirectory() as directory:
+            env_file = Path(directory) / "kamal.env"
+            env_file.write_text(
+                "KAMAL_HOSTS=example.test\n"
+                "KAMAL_DOMAIN=example.test\n"
+                "KAMAL_OUTPUTS_DIR=/var/lib/openstoryline/postgres/jobs\n"
+                "KAMAL_POSTGRES_DATA_DIR=/var/lib/openstoryline/postgres\n"
+                "KAMAL_POSTGRES_BACKUP_DIR=/var/lib/openstoryline/backups\n",
+                encoding="utf-8",
+            )
+            result = subprocess.run(
+                [str(hook)],
+                env={
+                    **os.environ,
+                    "KAMAL_ENV_FILE": str(env_file),
+                    "KAMAL_COMMAND": "rollback",
+                },
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("not a safe dedicated absolute path", result.stderr)
+
+    def test_rollback_requires_target_image_database_readiness(self):
+        wrapper = (ROOT / "bin" / "kamal-mvp").read_text(encoding="utf-8")
+        rollback_gate = wrapper.index('if [[ "${1:-}" == "rollback" ]]')
+        release_scan = wrapper.index('for arg in "$@"')
+
+        self.assertLess(rollback_gate, release_scan)
+        self.assertIn("explicit target version", wrapper)
+        self.assertIn("run_remote_database_command readiness", wrapper)
+        self.assertIn("result = asyncio.run(database.readiness())", wrapper)
 
     def test_password_hash_command_is_local_and_precedes_env_loading(self):
         wrapper = (ROOT / "bin" / "kamal-mvp").read_text(encoding="utf-8")

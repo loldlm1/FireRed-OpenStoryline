@@ -49,6 +49,7 @@ Create or inspect the schema with:
 ```bash
 ./bin/kamal-mvp db migrate
 ./bin/kamal-mvp db current
+./bin/kamal-mvp db readiness
 ```
 
 In Kamal mode these commands start a disposable container from the exact
@@ -58,7 +59,9 @@ repeats `db migrate` for the candidate image before stopping the current
 direct-port container; rollback skips this forward-migration step.
 
 Code rollback after an additive migration leaves the database directory and
-tables in place. Do not use Alembic downgrade as a production rollback method.
+tables in place. `./bin/kamal-mvp rollback VERSION` requires an explicit target
+image and runs that image's database readiness contract before Kamal selects
+it. Do not use Alembic downgrade as a production rollback method.
 
 After migrating, link legacy jobs to immutable compatibility prompt versions in
 bounded, advisory-locked batches. This does not change workflow version or move

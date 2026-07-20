@@ -198,6 +198,9 @@ run_remote_database_command() {
     current)
       remote_command="alembic current"
       ;;
+    readiness)
+      remote_command="python -c 'import asyncio; from open_storyline.mvp.database import Database; database = Database.from_env(); result = asyncio.run(database.readiness()); print(result.code); raise SystemExit(0 if result.ready else 1)'"
+      ;;
     *)
       fail "unsupported database command: $action"
       ;;
@@ -215,10 +218,10 @@ run_database_command() {
   local python_bin
 
   case "$action" in
-    migrate|current|backup|restore-check)
+    migrate|current|readiness|backup|restore-check)
       ;;
     *)
-      fail "usage: bin/kamal-mvp db {migrate|current|backup|restore-check}"
+      fail "usage: bin/kamal-mvp db {migrate|current|readiness|backup|restore-check}"
       ;;
   esac
 
@@ -232,6 +235,12 @@ run_database_command() {
           exec "$python_bin" -m alembic upgrade head
         fi
         exec "$python_bin" -m alembic current
+        ;;
+      readiness)
+        require_value DATABASE_URL
+        python_bin="$(resolve_python)"
+        cd "$ROOT_DIR"
+        exec "$python_bin" -c 'import asyncio; from open_storyline.mvp.database import Database; database = Database.from_env(); result = asyncio.run(database.readiness()); print(result.code); raise SystemExit(0 if result.ready else 1)'
         ;;
       backup)
         exec "$ROOT_DIR/scripts/mvp-postgres-backup.sh"
@@ -248,7 +257,7 @@ run_database_command() {
   [[ "${KAMAL_SSH_PORT:-22}" =~ ^[0-9]+$ ]] || fail "KAMAL_SSH_PORT must be numeric"
 
   case "$action" in
-    migrate|current)
+    migrate|current|readiness)
       require_value DATABASE_URL
       run_remote_database_command "$action"
       ;;
@@ -326,6 +335,14 @@ fi
 
 command -v docker >/dev/null 2>&1 || fail "Docker is required on the deploy machine to build the image"
 ensure_kamal
+
+if [[ "${1:-}" == "rollback" ]]; then
+  rollback_version="${2:-}"
+  [[ "$rollback_version" =~ ^[A-Za-z0-9._-]+$ ]] \
+    || fail "rollback requires an explicit target version for schema compatibility validation"
+  printf 'Checking the rollback image against the current PostgreSQL schema...\n'
+  OPENSTORYLINE_APP_VERSION="$rollback_version" run_remote_database_command readiness
+fi
 
 release_command=""
 for arg in "$@"; do

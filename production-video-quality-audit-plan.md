@@ -1080,7 +1080,8 @@ evidence, use only a disposable database named with the required
 PYTHONPATH=src .venv/bin/python -m unittest tests/test_kamal_config.py -v
 bash -n run.sh build_env.sh download.sh bin/kamal-mvp \
   scripts/mvp-postgres-init.sh scripts/mvp-postgres-backup.sh \
-  scripts/mvp-postgres-restore-check.sh .kamal/hooks/pre-deploy
+  scripts/mvp-postgres-restore-check.sh .kamal/hooks/pre-deploy \
+  .kamal/hooks/post-deploy
 docker build -f Dockerfile.remote .
 ```
 

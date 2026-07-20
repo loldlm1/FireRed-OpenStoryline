@@ -67,7 +67,10 @@ class RemoteProfileTests(unittest.TestCase):
         deploy = (ROOT / "config" / "deploy.yml").read_text(encoding="utf-8")
 
         self.assertIn("EXPOSE 8000", dockerfile)
-        self.assertIn("http://127.0.0.1:8000/health", dockerfile)
+        self.assertIn("http://127.0.0.1:8000/up", dockerfile)
+        self.assertIn("USER 65532:65532", dockerfile)
+        self.assertIn('"--no-proxy-headers"', dockerfile)
+        self.assertNotIn('"--proxy-headers"', dockerfile)
         self.assertIn('path: /up', deploy)
         self.assertIn('proxy: false', deploy)
         self.assertIn('publish: "<%= ENV.fetch("KAMAL_HTTP_PORT", "80") %>:8000"', deploy)

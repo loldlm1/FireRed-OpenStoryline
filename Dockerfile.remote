@@ -20,10 +20,14 @@ COPY src/ ./src/
 COPY web/mvp.html web/mvp-legacy.html ./web/
 COPY web/static/mvp/ ./web/static/mvp/
 
-RUN mkdir -p /app/outputs
+RUN groupadd --gid 65532 openstoryline \
+    && useradd --uid 65532 --gid 65532 --no-create-home --shell /usr/sbin/nologin openstoryline \
+    && install -d -m 0750 -o 65532 -g 65532 /app/outputs
 
 EXPOSE 8000
 HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
-    CMD curl -fsS http://127.0.0.1:8000/health || exit 1
+    CMD curl -fsS http://127.0.0.1:8000/up || exit 1
 
-CMD ["uvicorn", "mvp_fastapi:app", "--host", "0.0.0.0", "--port", "8000", "--proxy-headers"]
+USER 65532:65532
+
+CMD ["uvicorn", "mvp_fastapi:app", "--host", "0.0.0.0", "--port", "8000", "--no-proxy-headers"]

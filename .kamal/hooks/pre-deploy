@@ -3,6 +3,8 @@ set -Eeuo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 ENV_FILE="${KAMAL_ENV_FILE:-$ROOT_DIR/.env.kamal}"
+APP_UID=65532
+APP_GID=65532
 
 [[ -f "$ENV_FILE" ]] || {
   printf 'Error: Kamal environment file not found: %s\n' "$ENV_FILE" >&2
@@ -14,6 +16,94 @@ set -a
 source "$ENV_FILE"
 set +a
 
+outputs_dir="${KAMAL_OUTPUTS_DIR:-/var/lib/openstoryline/outputs}"
+postgres_data_dir="${KAMAL_POSTGRES_DATA_DIR:-/var/lib/openstoryline/postgres}"
+postgres_backup_dir="${KAMAL_POSTGRES_BACKUP_DIR:-/var/lib/openstoryline/backups}"
+
+validate_absolute_path() {
+  local value="$1"
+  [[ "$value" =~ ^/[A-Za-z0-9._/-]+$ ]] \
+    && [[ "$value" != "/" && "$value" != */ ]] \
+    && [[ "$value" != *"//"* ]] \
+    && [[ "$value" != "/." && "$value" != *"/./"* && "$value" != */. ]] \
+    && [[ "$value" != "/.." && "$value" != *"/../"* && "$value" != */.. ]]
+}
+
+paths_overlap() {
+  local left="$1"
+  local right="$2"
+  [[ "$left" == "$right" || "$left" == "$right/"* || "$right" == "$left/"* ]]
+}
+
+validate_absolute_path "$outputs_dir" \
+  && validate_absolute_path "$postgres_data_dir" \
+  && validate_absolute_path "$postgres_backup_dir" \
+  && [[ "$outputs_dir" != "/var" ]] \
+  && [[ "$outputs_dir" != "/var/lib" && "$outputs_dir" != "/var/lib/openstoryline" ]] \
+  && ! paths_overlap "$outputs_dir" "$postgres_data_dir" \
+  && ! paths_overlap "$outputs_dir" "$postgres_backup_dir" || {
+    printf 'Error: KAMAL_OUTPUTS_DIR is not a safe dedicated absolute path.\n' >&2
+    exit 1
+  }
+
+IFS=',' read -r -a hosts <<< "${KAMAL_HOSTS:?KAMAL_HOSTS is required}"
+for host in "${hosts[@]}"; do
+  printf 'Preparing the non-root FireRed output volume on %s...\n' "$host"
+  ssh \
+    -o BatchMode=yes \
+    -o ConnectTimeout=15 \
+    -p "${KAMAL_SSH_PORT:-22}" \
+    "${KAMAL_SSH_USER:-root}@$host" \
+    sh -s -- \
+      "$outputs_dir" "$postgres_data_dir" "$postgres_backup_dir" \
+      "$APP_UID" "$APP_GID" <<'REMOTE'
+set -eu
+outputs_dir="$1"
+postgres_data_dir="$2"
+postgres_backup_dir="$3"
+app_uid="$4"
+app_gid="$5"
+privilege=""
+if [ "$(id -u)" -ne 0 ]; then
+  command -v sudo >/dev/null 2>&1 && sudo -n true \
+    || { echo 'non-root SSH user requires passwordless sudo for output preparation' >&2; exit 1; }
+  privilege="sudo -n"
+fi
+
+as_root() {
+  if [ -n "$privilege" ]; then
+    sudo -n "$@"
+  else
+    "$@"
+  fi
+}
+
+paths_overlap() {
+  case "$1/" in
+    "$2/"* ) return 0 ;;
+  esac
+  case "$2/" in
+    "$1/"* ) return 0 ;;
+  esac
+  return 1
+}
+
+resolved_outputs="$(as_root readlink -m -- "$outputs_dir")"
+resolved_postgres_data="$(as_root readlink -m -- "$postgres_data_dir")"
+resolved_postgres_backup="$(as_root readlink -m -- "$postgres_backup_dir")"
+if paths_overlap "$resolved_outputs" "$resolved_postgres_data" \
+  || paths_overlap "$resolved_outputs" "$resolved_postgres_backup"; then
+  echo 'resolved output directory overlaps PostgreSQL storage' >&2
+  exit 1
+fi
+
+as_root install -d -m 0750 -o "$app_uid" -g "$app_gid" "$resolved_outputs"
+as_root find "$resolved_outputs" -xdev \
+  \( ! -user "$app_uid" -o ! -group "$app_gid" \) \
+  -exec chown "$app_uid:$app_gid" {} +
+REMOTE
+done
+
 if [[ "${KAMAL_COMMAND:-}" != "rollback" ]]; then
   printf 'Migrating the delivered FireRed image before application cutover...\n'
   KAMAL_ENV_FILE="$ENV_FILE" \
@@ -24,7 +114,6 @@ fi
 # Direct host-port publishing cannot run old and new containers concurrently.
 [[ -n "${KAMAL_DOMAIN:-}" ]] && exit 0
 
-IFS=',' read -r -a hosts <<< "${KAMAL_HOSTS:?KAMAL_HOSTS is required}"
 for host in "${hosts[@]}"; do
   printf 'Stopping the current FireRed container on %s before direct-port boot...\n' "$host"
   ssh \

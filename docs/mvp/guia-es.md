@@ -99,9 +99,10 @@ OPENSTORYLINE_ALLOW_INSECURE_HTTP=true
 ```
 
 La URL será `http://203.0.113.10:8080`. Este modo no cifra la contraseña durante
-el transporte; úsalo sólo en una red privada, VPN o prueba controlada. El
-wrapper exige el opt-in explícito y no permite activar este modo por accidente
-cuando existe un dominio.
+el transporte; este proyecto lo acepta únicamente para el uso personal privado
+confirmado, dentro de una red confiable, VPN o acceso equivalente. No es una
+recomendación para publicar HTTP en Internet. El wrapper exige el opt-in
+explícito y no permite activar este modo por accidente cuando existe un dominio.
 En este modo el contenedor publica el puerto directamente y no reinicia ni
 reconfigura un `kamal-proxy` compartido que ya exista en el VPS. Los deploys y
 rollbacks detienen sólo el contenedor web actual justo antes de arrancar el
@@ -175,6 +176,7 @@ datos y la copia verificable existan antes de arrancar la nueva aplicación:
 ./bin/kamal-mvp build deliver
 ./bin/kamal-mvp db migrate
 ./bin/kamal-mvp db current
+./bin/kamal-mvp db readiness
 ./bin/kamal-mvp db backup
 ./bin/kamal-mvp db restore-check
 ./bin/kamal-mvp deploy --skip-push
@@ -186,6 +188,10 @@ puerto web. El hook `pre-deploy` repite la migración idempotente antes de
 detener el contenedor actual; un rollback omite la migración hacia adelante.
 El despliegue monta `/var/lib/openstoryline/outputs` y conserva el accesorio
 PostgreSQL privado.
+Antes del corte, el mismo hook crea o corrige de forma idempotente el dueño del
+directorio de outputs para el UID/GID fijo `65532`; no cambia los directorios de
+datos ni backups de PostgreSQL. La imagen web corre sin root. El hook
+`post-deploy` exige que `/up` y `/health` respondan correctamente.
 Las sesiones de autenticación, las sesiones de edición, los límites de login,
 los trabajos y sus eventos sobreviven a redeploys en PostgreSQL. Los videos y
 los snapshots `job.json` permanecen en el volumen de outputs; PostgreSQL es la
@@ -202,8 +208,12 @@ Comandos útiles:
 ```bash
 ./bin/kamal-mvp details
 ./bin/kamal-mvp app logs
-./bin/kamal-mvp rollback
+./bin/kamal-mvp rollback VERSION_EXPLICITA
 ```
+
+El rollback ejecuta primero el contrato de readiness de la imagen objetivo
+contra la revisión PostgreSQL actual. Si la imagen no reconoce el esquema, el
+wrapper falla antes de pedirle a Kamal que la seleccione.
 
 Si cambias `KAMAL_HTTP_PORT` en modo IP, ejecuta `./bin/kamal-mvp deploy` para
 recrear el contenedor con la nueva publicación directa. Sólo el modo dominio
@@ -371,7 +381,7 @@ Sin autorización para desplegar o llamar proveedores, todos los flags permanece
 apagados. El rollback normal no requiere restaurar PostgreSQL: vuelve la UI a
 legacy, fija `OPENSTORYLINE_AGENTIC_EDITING_MODE=off`, desactiva assets/QA
 semántica, usa `OPENSTORYLINE_RENDER_PROMOTION_MODE=off` y el perfil `legacy`, y
-ejecuta `./bin/kamal-mvp rollback` al release previo. Restaura la base
+ejecuta `./bin/kamal-mvp rollback VERSION_EXPLICITA` al release previo. Restaura la base
 sólo ante una migración incompatible revisada por separado; esta entrega no añade
 migraciones.
 
