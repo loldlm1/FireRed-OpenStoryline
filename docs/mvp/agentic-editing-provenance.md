@@ -1,6 +1,6 @@
 # Agentic Editing Provenance
 
-The general-purpose agentic editing roadmap uses selected design ideas from the
+The general-purpose agentic editing implementation adapts selected design ideas from the
 local reference repository at `/home/loldlm/python_projects/video-editing-skill`.
 FireRed-OpenStoryline does not import that repository at runtime and does not
 reuse its CLI, local-model, or file-authoritative architecture.
@@ -19,9 +19,9 @@ reuse its CLI, local-model, or file-authoritative architecture.
 | `src/open_storyline/mvp/creative_qa.py` | `scripts/render_qa.py`, `scripts/retention_rhythm_qa.py`, `scripts/pipeline_manifest.py` | Reimplemented bounded structural analysis, rhythm-risk metrics, and plan-versus-execution checks as three job-scoped artifacts. Findings use blocker/warning/review severity, explicitly avoid virality claims, and cannot mutate a completed render or its plan. |
 | `src/open_storyline/mvp/stock.py`, `src/open_storyline/mvp/assets.py` | `scripts/stock_material_plan.py`, `scripts/asset_provenance.py` | Adapted the bounded stock-request and provenance concepts into a new async Pexels boundary with fixed endpoints, HTTPS host allowlists, media limits, provider-separated policy, and fail-closed batch cleanup. The reference repository's synchronous provider and file-state implementation was not copied. |
 
-Future sprints must append materially adapted reference paths here. Provider,
+Future changes must append materially adapted reference paths here. Provider,
 platform, local-inference, and niche-specific logic must not be copied into the
-remote MVP unless the plan explicitly changes those product boundaries.
+remote MVP unless an explicit product decision changes those boundaries.
 
 ## License Note
 

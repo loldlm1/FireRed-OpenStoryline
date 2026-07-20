@@ -282,7 +282,7 @@ Real server commands require a separately authorized maintenance window. Keep
 The normal emergency action is to set
 `OPENSTORYLINE_SESSION_WORKSPACE_MODE=legacy` and redeploy/restart, preserving
 all workflow-v2 rows and files. If code rollback is required, return to the
-Sprint 1 compatibility bridge, not a pre-bridge image. Keep schema
+compatibility bridge image (`71c9082`), not a pre-bridge image. Keep schema
 `20260719_0002`; do not downgrade after workflow-v2 data exists. Disable
 retention before investigating inconsistent state, preserve the output volume
 and restore-checked `openstoryline.latest.dump`, and repair bounded records
