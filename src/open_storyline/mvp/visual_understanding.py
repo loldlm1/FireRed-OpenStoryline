@@ -17,6 +17,14 @@ from open_storyline.mvp.scene_boundaries import SceneBoundaryReport
 
 VISUAL_UNDERSTANDING_VERSION = "visual_understanding.v1"
 MOTION_VALUES = frozenset({"static", "low", "medium", "high", "unknown"})
+SEMANTIC_ROLES = (
+    "speaker",
+    "screen",
+    "text",
+    "object",
+    "demonstration_target",
+    "background",
+)
 
 SemanticRole = Literal[
     "speaker",
@@ -256,12 +264,13 @@ def _normalize_tracks(
     raw_regions: Any,
     frame_manifest: FrameManifest,
     scene_report: SceneBoundaryReport,
-) -> tuple[Any, int, int]:
+) -> tuple[Any, int, int, int]:
     if not isinstance(raw_tracks, (list, tuple)):
-        return raw_tracks, 0, 0
+        return raw_tracks, 0, 0, 0
     frames = {frame.id: frame for frame in frame_manifest.frames}
     scenes = {scene.id: scene for scene in scene_report.scenes}
     region_frames: dict[str, Any] = {}
+    region_roles: dict[str, str] = {}
     if isinstance(raw_regions, (list, tuple)):
         for region in raw_regions:
             if not isinstance(region, dict):
@@ -270,9 +279,13 @@ def _normalize_tracks(
             frame = frames.get(region.get("frame_id"))
             if isinstance(region_id, str) and frame is not None:
                 region_frames[region_id] = frame
+            role = region.get("role")
+            if isinstance(region_id, str) and role in SEMANTIC_ROLES:
+                region_roles[region_id] = role
     normalized_tracks: list[Any] = []
     normalized_motion_count = 0
     normalized_timing_count = 0
+    normalized_role_count = 0
     for item in raw_tracks:
         if not isinstance(item, dict):
             normalized_tracks.append(item)
@@ -285,6 +298,19 @@ def _normalize_tracks(
             normalized_motion_count += 1
         track["motion"] = motion
         region_ids = track.get("region_ids")
+        referenced_roles = (
+            [region_roles.get(region_id) for region_id in region_ids]
+            if isinstance(region_ids, (list, tuple)) and region_ids
+            else []
+        )
+        if (
+            referenced_roles
+            and all(role is not None for role in referenced_roles)
+            and len(set(referenced_roles)) == 1
+            and track.get("role") != referenced_roles[0]
+        ):
+            track["role"] = referenced_roles[0]
+            normalized_role_count += 1
         referenced_frames = (
             [region_frames.get(region_id) for region_id in region_ids]
             if isinstance(region_ids, (list, tuple)) and region_ids
@@ -310,7 +336,12 @@ def _normalize_tracks(
                 track["end_ms"] = max(scene.end_ms for scene in referenced_scenes)
                 normalized_timing_count += 1
         normalized_tracks.append(track)
-    return normalized_tracks, normalized_motion_count, normalized_timing_count
+    return (
+        normalized_tracks,
+        normalized_motion_count,
+        normalized_timing_count,
+        normalized_role_count,
+    )
 
 
 def _normalize_scenes(
@@ -364,7 +395,12 @@ def validate_visual_understanding(
             "visual understanding response must be an object",
         )
     raw_regions = raw.get("regions") or ()
-    tracks, normalized_motion_count, normalized_timing_count = _normalize_tracks(
+    (
+        tracks,
+        normalized_motion_count,
+        normalized_timing_count,
+        normalized_role_count,
+    ) = _normalize_tracks(
         raw.get("tracks") or (),
         raw_regions=raw_regions,
         frame_manifest=frame_manifest,
@@ -385,6 +421,11 @@ def validate_visual_understanding(
         if normalized_timing_count:
             normalization_warnings.append(
                 f"Normalized invalid timing windows for {normalized_timing_count} track(s)."
+            )
+        if normalized_role_count:
+            normalization_warnings.append(
+                f"Aligned semantic roles for {normalized_role_count} track(s) "
+                "with unanimous referenced observations."
             )
         if removed_scene_region_count:
             normalization_warnings.append(
@@ -535,14 +576,7 @@ class VisualUnderstandingPlanner:
             "editing_context": _safe_text(editing_prompt, limit=12_000),
             "transcript_context": _safe_text(transcript_text, limit=24_000),
             "source_duration_ms": frame_manifest.source_duration_ms,
-            "allowed_roles": [
-                "speaker",
-                "screen",
-                "text",
-                "object",
-                "demonstration_target",
-                "background",
-            ],
+            "allowed_roles": list(SEMANTIC_ROLES),
             "allowed_motion_values": sorted(MOTION_VALUES),
             "track_timing_constraints": [
                 "start_ms and end_ms are integer source timestamps",
