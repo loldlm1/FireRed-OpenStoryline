@@ -1136,6 +1136,8 @@ class AgenticArtifactNames:
     asset_manifest: str = "asset_manifest.json"
     render_execution: str = "render_execution.json"
     render_quality_profile: str = "render_quality_profile.json"
+    frame_quality_qa: str = "frame_quality_qa.json"
+    render_promotion: str = "render_promotion.json"
     render_qa: str = "render_qa.json"
     retention_rhythm_qa: str = "retention_rhythm_qa.json"
     creative_conformance: str = "creative_conformance.json"

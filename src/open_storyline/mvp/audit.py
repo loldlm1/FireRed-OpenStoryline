@@ -716,6 +716,24 @@ class AuditService:
                         )
                     ).scalars()
                 )
+                promotion_document = await session.scalar(
+                    select(AuditDocument)
+                    .where(
+                        AuditDocument.job_id == job_id,
+                        AuditDocument.source_name == "render_promotion.json",
+                    )
+                    .order_by(AuditDocument.created_at.desc(), AuditDocument.id.desc())
+                    .limit(1)
+                )
+                frame_quality_document = await session.scalar(
+                    select(AuditDocument)
+                    .where(
+                        AuditDocument.job_id == job_id,
+                        AuditDocument.source_name == "frame_quality_qa.json",
+                    )
+                    .order_by(AuditDocument.created_at.desc(), AuditDocument.id.desc())
+                    .limit(1)
+                )
         except SQLAlchemyError:
             raise JobStoreError("DATABASE_UNAVAILABLE", "audit verification is unavailable") from None
         checks: list[dict[str, Any]] = []
@@ -724,6 +742,48 @@ class AuditService:
             checks.append({"code": "MANIFEST_MISSING", "status": "fail"})
             return await self._store_system_review(job, "rejected", checks)
         plan = manifest_data.get("plan") or {}
+        agentic = manifest_data.get("agentic") or {}
+        promotion_reference = (
+            agentic.get("render_promotion")
+            if isinstance(agentic, dict)
+            else None
+        )
+        if isinstance(promotion_reference, dict) and promotion_reference.get("artifact"):
+            promotion = (
+                promotion_document.parsed_data
+                if promotion_document is not None
+                and promotion_document.parse_status == "parsed"
+                else None
+            )
+            frame_quality = (
+                frame_quality_document.parsed_data
+                if frame_quality_document is not None
+                and frame_quality_document.parse_status == "parsed"
+                else None
+            )
+            mode = str((promotion or {}).get("mode") or "")
+            decision = str((promotion or {}).get("decision") or "")
+            promotion_ok = (
+                isinstance(promotion, dict)
+                and mode in {"off", "report", "enforce"}
+                and decision in {"off", "observe", "promote"}
+                and not (mode == "enforce" and decision != "promote")
+            )
+            checks.append({
+                "code": "RENDER_PROMOTION",
+                "status": "pass" if promotion_ok else "fail",
+                "mode": mode,
+                "decision": decision,
+            })
+            checks.append({
+                "code": "FRAME_QUALITY_EVIDENCE",
+                "status": "pass" if isinstance(frame_quality, dict) else "fail",
+                "quality_status": (
+                    str(frame_quality.get("status") or "")
+                    if isinstance(frame_quality, dict)
+                    else ""
+                ),
+            })
         clips = list(plan.get("clips") or []) if isinstance(plan, dict) else []
         outputs = list(manifest_data.get("outputs") or [])
         videos = {

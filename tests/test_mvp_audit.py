@@ -280,6 +280,22 @@ class DeterministicQualityTests(AuditPostgresTestCase):
             "1\n00:00:00,000 --> 00:00:00,900\nHello\n",
             encoding="utf-8",
         )
+        frame_quality = output / "frame_quality_qa.json"
+        frame_quality.write_text(
+            json.dumps({"version": "frame_quality_qa.v1", "status": "pass"}),
+            encoding="utf-8",
+        )
+        promotion = output / "render_promotion.json"
+        promotion.write_text(
+            json.dumps({
+                "version": "render_promotion.v1",
+                "mode": "enforce",
+                "decision": "promote",
+                "status": "pass",
+                "blocker_codes": [],
+            }),
+            encoding="utf-8",
+        )
         manifest = output / "manifest.json"
         manifest.write_text(
             json.dumps(
@@ -288,6 +304,14 @@ class DeterministicQualityTests(AuditPostgresTestCase):
                         "clips": [
                             {"start_ms": 0, "end_ms": 1000, "duration_ms": 1000}
                         ]
+                    },
+                    "agentic": {
+                        "render_promotion": {
+                            "artifact": promotion.name,
+                            "mode": "enforce",
+                            "decision": "promote",
+                            "blocker_codes": [],
+                        }
                     },
                     "outputs": [
                         {
@@ -306,6 +330,8 @@ class DeterministicQualityTests(AuditPostgresTestCase):
         )
         await self.store.register_artifact(job["id"], video, kind="video")
         await self.store.register_artifact(job["id"], subtitle, kind="subtitles")
+        await self.store.register_artifact(job["id"], frame_quality, kind="frame_quality_qa")
+        await self.store.register_artifact(job["id"], promotion, kind="render_promotion")
         await self.store.register_artifact(job["id"], manifest, kind="manifest")
 
         review = await self.audit.verify_job(job["id"])
@@ -318,6 +344,9 @@ class DeterministicQualityTests(AuditPostgresTestCase):
         )
         self.assertGreater(video_check["size"], 0)
         self.assertEqual(len(video_check["sha256"]), 64)
+        checks = {item["code"]: item for item in review["findings"]["checks"]}
+        self.assertEqual(checks["RENDER_PROMOTION"]["status"], "pass")
+        self.assertEqual(checks["FRAME_QUALITY_EVIDENCE"]["status"], "pass")
 
     async def test_missing_outputs_cannot_receive_approval(self):
         job = await self.create_job()

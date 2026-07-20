@@ -53,13 +53,15 @@ isolated so upstream behavior can continue to be merged into this fork.
    resolves only the generated-image and/or Pexels capabilities explicitly
    permitted for that job, and FFmpeg renders the typed timeline operations and
    subtitles on CPU.
-9. Agentic outputs produce `render_qa.json`, `retention_rhythm_qa.json`, and
-   `creative_conformance.json`. Structural, pacing, fallback, operation, and
-   asset-use findings are evidence for review and never rewrite a rendered job
-   to failed. The pacing heuristics do not predict retention or virality.
-10. PostgreSQL ingests sanitized JSON/SRT evidence, public activity events, and
-   deterministic
-   FFprobe/subtitle structural checks without storing media bytes.
+9. Agentic renders remain unregistered candidates while deterministic QA writes
+   `render_qa.json`, `frame_quality_qa.json`, `creative_conformance.json`,
+   caption-footprint evidence, and `render_promotion.json`. Report mode records
+   objective blockers without changing completion behavior; enforce mode
+   deletes blocked video candidates before artifact registration. Rhythm and
+   semantic findings remain advisory and do not predict retention or virality.
+10. PostgreSQL ingests sanitized JSON/SRT evidence, promotion decisions, public
+   activity events, and deterministic FFprobe/subtitle checks without storing
+   media or frame bytes.
 11. Native FastAPI SSE replays ordered, sanitized processing events and sends
    heartbeats. The browser reconnects from the last sequence and falls back to
    bounded event/job polling when the stream is unavailable.

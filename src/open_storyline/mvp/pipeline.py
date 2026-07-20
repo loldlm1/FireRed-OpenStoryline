@@ -28,6 +28,10 @@ from open_storyline.mvp.ffmpega import (
     ffmpega_enabled,
 )
 from open_storyline.mvp.frame_sampling import FrameManifest, sample_frames
+from open_storyline.mvp.frame_quality import (
+    FRAME_QUALITY_VERSION,
+    build_frame_quality_report,
+)
 from open_storyline.mvp.compositor import REFRAME_RENDER_CAPABILITIES
 from open_storyline.mvp.creative_intent import (
     build_creative_intent,
@@ -54,6 +58,11 @@ from open_storyline.mvp.render import (
     render_settings_from_config,
 )
 from open_storyline.mvp.preflight import build_preflight
+from open_storyline.mvp.promotion import (
+    build_render_promotion_report,
+    enforce_render_promotion,
+    render_promotion_mode,
+)
 from open_storyline.mvp.scene_boundaries import detect_scene_boundaries
 from open_storyline.mvp.shorts import ShortsPlanner, build_shorts_plan_artifact
 from open_storyline.mvp.stock import PexelsClient, pexels_enabled, pexels_server_cap
@@ -896,6 +905,7 @@ class MVPJobProcessor:
         effects_plan = None
         final_outputs = []
         qa_inputs: list[QAInput] = []
+        pending_artifacts: list[tuple[Path, str]] = []
         ffmpega = None
         if ffmpega_enabled(self.config.ffmpega):
             await activity.stage(job_id, "planning_effects")
@@ -940,21 +950,13 @@ class MVPJobProcessor:
                     plan=effects_plan,
                 )
                 item.video_path.unlink(missing_ok=True)
-            await store.register_artifact(job_id, final_video, kind="video")
+            pending_artifacts.append((final_video, "video"))
             if item.subtitle_path is not None:
-                await store.register_artifact(job_id, item.subtitle_path, kind="subtitles")
+                pending_artifacts.append((item.subtitle_path, "subtitles"))
             if item.subtitle_layout_path is not None:
-                await store.register_artifact(
-                    job_id,
-                    item.subtitle_layout_path,
-                    kind="subtitle_layout",
-                )
+                pending_artifacts.append((item.subtitle_layout_path, "subtitle_layout"))
             if item.caption_footprint_path is not None:
-                await store.register_artifact(
-                    job_id,
-                    item.caption_footprint_path,
-                    kind="caption_footprint",
-                )
+                pending_artifacts.append((item.caption_footprint_path, "caption_footprint"))
             final_outputs.append({
                 "video": final_video.name,
                 "subtitles": item.subtitle_path.name if item.subtitle_path else None,
@@ -967,6 +969,8 @@ class MVPJobProcessor:
                 subtitle_path=item.subtitle_path,
             ))
 
+        render_qa_report: dict[str, Any] | None = None
+        creative_conformance_report: dict[str, Any] | None = None
         if agentic_requested and server_mode == "render":
             qa_manifest: dict[str, Any] = {"enabled": False, "status": "disabled"}
             try:
@@ -1006,6 +1010,8 @@ class MVPJobProcessor:
                         "creative_conformance": names.creative_conformance,
                         "registered": registered,
                     }
+                    render_qa_report = qa_artifacts.render_qa
+                    creative_conformance_report = qa_artifacts.conformance
                     await activity.emit_safely(
                         job_id,
                         stage="post_render_qa",
@@ -1054,6 +1060,109 @@ class MVPJobProcessor:
                 message_key="activity.qa.skipped",
                 progress=STAGES["post_render_qa"].progress,
             )
+
+        if agentic_requested and server_mode == "render":
+            promotion_mode = render_promotion_mode(self.config.agentic_editing)
+            if promotion_mode == "off":
+                frame_quality_report = {
+                    "version": FRAME_QUALITY_VERSION,
+                    "status": "off",
+                    "findings": [],
+                    "summary": {"clips_analyzed": 0, "blockers": 0, "warnings": 0},
+                }
+            else:
+                frame_quality_report = await asyncio.to_thread(
+                    build_frame_quality_report,
+                    qa_inputs,
+                    source=source,
+                    render_execution=agentic_result.execution,
+                    expected_width=render_settings.width,
+                    expected_height=render_settings.height,
+                    strict=True,
+                )
+            frame_quality_path = output_dir / names.frame_quality_qa
+            frame_quality_path.write_text(
+                json.dumps(frame_quality_report, ensure_ascii=False, indent=2),
+                encoding="utf-8",
+            )
+            await store.register_artifact(
+                job_id,
+                frame_quality_path,
+                kind="frame_quality_qa",
+            )
+            caption_footprints = []
+            for item in rendered:
+                if item.caption_footprint_path is None:
+                    continue
+                try:
+                    caption_footprints.append(json.loads(
+                        item.caption_footprint_path.read_text(encoding="utf-8")
+                    ))
+                except (OSError, json.JSONDecodeError):
+                    caption_footprints.append({
+                        "status": "blocked",
+                        "summary": {"blocker_codes": ["CAPTION_FOOTPRINT_UNAVAILABLE"]},
+                    })
+            promotion_report = build_render_promotion_report(
+                mode=promotion_mode,
+                frame_quality=frame_quality_report,
+                render_qa=render_qa_report,
+                creative_conformance=creative_conformance_report,
+                caption_footprints=caption_footprints,
+            )
+            if promotion_report["decision"] == "block":
+                removed = 0
+                for path, kind in pending_artifacts:
+                    if kind == "video" and path.is_file():
+                        path.unlink()
+                        removed += 1
+                promotion_report["candidate_cleanup"] = {
+                    "video_candidates_removed": removed,
+                }
+            else:
+                promotion_report["candidate_cleanup"] = {
+                    "video_candidates_removed": 0,
+                }
+            promotion_path = output_dir / names.render_promotion
+            promotion_path.write_text(
+                json.dumps(promotion_report, ensure_ascii=False, indent=2),
+                encoding="utf-8",
+            )
+            await store.register_artifact(
+                job_id,
+                promotion_path,
+                kind="render_promotion",
+            )
+            agentic_manifest["frame_quality_qa"] = names.frame_quality_qa
+            agentic_manifest["render_promotion"] = {
+                "artifact": names.render_promotion,
+                "mode": promotion_mode,
+                "decision": promotion_report["decision"],
+                "blocker_codes": promotion_report["blocker_codes"],
+            }
+            await activity.emit_safely(
+                job_id,
+                stage="post_render_qa",
+                category="qa",
+                status=(
+                    "failed" if promotion_report["decision"] == "block"
+                    else "warning" if promotion_report["decision"] == "observe"
+                    else "completed"
+                ),
+                message_key="activity.qa.completed",
+                progress=STAGES["post_render_qa"].progress,
+                tool="Render promotion gate",
+                error_code=(
+                    promotion_report["blocker_codes"][0]
+                    if promotion_report["blocker_codes"]
+                    else None
+                ),
+                retryable=False,
+            )
+            enforce_render_promotion(promotion_report)
+
+        for path, kind in pending_artifacts:
+            await store.register_artifact(job_id, path, kind=kind)
 
         await activity.stage(job_id, "packaging", clip_count=len(rendered))
         manifest_path = output_dir / "manifest.json"
