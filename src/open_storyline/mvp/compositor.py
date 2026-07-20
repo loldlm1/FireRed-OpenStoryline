@@ -5,7 +5,11 @@ from typing import Any, Sequence
 import math
 
 from open_storyline.mvp.edit_plan import ClipEditPlan, EditSegment, TimeWindow
-from open_storyline.mvp.visual_understanding import RegionObservation, VisualUnderstanding
+from open_storyline.mvp.visual_understanding import (
+    RegionObservation,
+    VisualUnderstanding,
+    select_target_regions,
+)
 
 
 REFRAME_RENDER_CAPABILITIES = frozenset({
@@ -136,41 +140,6 @@ def _fit_active_area_ratio(
     scale = min(output_width / source_width, output_height / source_height)
     active_area = (source_width * scale) * (source_height * scale)
     return round(active_area / (output_width * output_height), 6)
-
-
-def _frame_times(visual: VisualUnderstanding) -> dict[str, int]:
-    return {
-        str(frame["id"]): int(frame["timestamp_ms"])
-        for frame in visual.frame_manifest.get("frames") or []
-        if isinstance(frame, dict) and frame.get("id") is not None
-    }
-
-
-def _target_regions(segment: EditSegment, visual: VisualUnderstanding) -> list[RegionObservation]:
-    target = segment.layout.focal_target
-    if target is None:
-        return []
-    region_ids: set[str] = set()
-    if target.region_id:
-        region_ids.add(target.region_id)
-    if target.track_id:
-        track = next((item for item in visual.tracks if item.id == target.track_id), None)
-        if track is not None:
-            region_ids.update(track.region_ids)
-    frame_times = _frame_times(visual)
-    regions = []
-    for region in visual.regions:
-        timestamp = frame_times.get(region.frame_id)
-        if timestamp is None or not (
-            segment.source_window.start_ms <= timestamp < segment.source_window.end_ms
-        ):
-            continue
-        if region_ids and region.id not in region_ids:
-            continue
-        if not region_ids and target.semantic_role and region.role != target.semantic_role:
-            continue
-        regions.append(region)
-    return regions
 
 
 def _union_box(regions: Sequence[RegionObservation], margin_ratio: float) -> tuple[float, float, float, float]:
@@ -323,7 +292,12 @@ def _resolve_segment(
         output_width,
         output_height,
     )
-    regions = _target_regions(segment, visual)
+    regions, target_selection = select_target_regions(
+        visual,
+        target=segment.layout.focal_target,
+        start_ms=segment.source_window.start_ms,
+        end_ms=segment.source_window.end_ms,
+    )
     if not regions:
         resolved_zoom = segment.layout.max_zoom
         crop_width, crop_height = _zoomed_crop_dimensions(
@@ -461,6 +435,10 @@ def _resolve_segment(
         transition_duration_ms=segment.transition_in.duration_ms,
         overlays=_resolve_overlays(segment),
         reason=(
+            "Portrait crop uses the explicit semantic-role fallback because it "
+            "has stronger same-window temporal evidence."
+            if target_selection == "semantic_role_fallback"
+            else
             "Focus zoom is centered on the validated semantic target union."
             if segment.layout.max_zoom > 1
             else "Portrait crop is centered on the validated semantic target union."

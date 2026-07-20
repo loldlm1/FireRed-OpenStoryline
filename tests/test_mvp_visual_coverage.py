@@ -112,6 +112,48 @@ class ClipVisualCoverageTests(unittest.TestCase):
         self.assertGreater(report.segments[0].temporal_coverage_ratio, 0.9)
         self.assertEqual(report.to_dict()["version"], "clip_visual_coverage.v1")
 
+    def test_explicit_semantic_role_fills_sparse_track_coverage(self):
+        timestamps = (20_250, 22_500, 24_500, 26_500, 28_750)
+        manifest = FrameManifest(
+            source_duration_ms=30_000,
+            source_width=1920,
+            source_height=1080,
+            frames=tuple(
+                sampled_frame(f"clip-01-frame-{index:03d}", timestamp)
+                for index, timestamp in enumerate(timestamps, start=1)
+            ),
+        )
+        visual = visual_for(timestamps)
+        visual = SimpleNamespace(
+            frame_manifest=visual.frame_manifest,
+            regions=visual.regions,
+            tracks=(visual.tracks[0].model_copy(update={
+                "region_ids": (visual.regions[0].id,),
+            }),),
+        )
+        plan = crop_plan()
+        segment = plan.clips[0].segments[0].model_copy(update={
+            "layout": plan.clips[0].segments[0].layout.model_copy(update={
+                "focal_target": FocalTarget(
+                    track_id="clip-01-track-001",
+                    semantic_role="speaker",
+                ),
+            }),
+        })
+        plan = plan.model_copy(update={
+            "clips": (plan.clips[0].model_copy(update={"segments": (segment,)}),),
+        })
+
+        report = build_clip_visual_coverage(
+            plan,
+            visual=visual,
+            clip_frame_manifests={1: manifest},
+        )
+
+        self.assertEqual(report.blocking, 0)
+        self.assertEqual(report.segments[0].target_kind, "semantic_role_fallback")
+        self.assertEqual(report.segments[0].observation_count, 5)
+
     def test_cross_window_track_observations_block(self):
         timestamps = (1_000, 5_000, 10_000)
         manifest = FrameManifest(
