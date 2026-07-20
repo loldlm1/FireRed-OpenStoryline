@@ -9,6 +9,7 @@ from open_storyline.mvp.frame_sampling import (
     build_frame_requests,
     sample_frames,
 )
+from open_storyline.mvp.ninerouter import NineRouterAttempt
 from open_storyline.mvp.scene_boundaries import build_scene_boundaries
 from open_storyline.mvp.visual_understanding import (
     VisualUnderstandingError,
@@ -57,6 +58,36 @@ class FakeVisionClient:
             }],
             "warnings": [],
         }
+
+
+class RepairingVisionClient(FakeVisionClient):
+    def __init__(self):
+        super().__init__()
+        self.calls = 0
+        self.user_prompts = []
+
+    async def complete_json(self, *, system_prompt, user_prompt, image_data_urls=()):
+        self.calls += 1
+        self.last_attempts = (NineRouterAttempt(1, 200, "ok"),)
+        self.user_prompts.append(json.loads(user_prompt))
+        response = await super().complete_json(
+            system_prompt=system_prompt,
+            user_prompt=user_prompt,
+            image_data_urls=image_data_urls,
+        )
+        if self.calls == 1:
+            frame = self.user_prompts[-1]["attached_images_in_exact_order"][0]
+            response["regions"].append({
+                "id": "region-2",
+                "frame_id": frame["frame_id"],
+                "role": "screen",
+                "bbox": {"x": 0.55, "y": 0.1, "width": 0.35, "height": 0.8},
+                "confidence": 0.9,
+                "salience": 0.8,
+                "description": "visible screen",
+            })
+            response["tracks"][0]["region_ids"].append("region-2")
+        return response
 
 
 class VisualUnderstandingTests(unittest.IsolatedAsyncioTestCase):
@@ -117,6 +148,26 @@ class VisualUnderstandingTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(all(20_000 <= item.timestamp_ms < 29_000 for item in first))
         self.assertLessEqual(first[0].timestamp_ms, 20_500)
         self.assertGreaterEqual(first[-1].timestamp_ms, 28_500)
+
+    async def test_planner_repairs_one_invalid_mixed_role_track_response(self):
+        client = RepairingVisionClient()
+        manifest = self._manifest()
+
+        understanding = await VisualUnderstandingPlanner(client).plan(
+            frame_manifest=manifest,
+            scene_report=self.scenes,
+            editing_prompt="Create a portrait edit.",
+            transcript_text="A short transcript.",
+        )
+
+        self.assertEqual(client.calls, 2)
+        self.assertEqual([item.number for item in client.last_attempts], [1, 2])
+        self.assertEqual(
+            client.user_prompts[1]["repair_feedback"]["error_code"],
+            "VISUAL_TRACK_ROLE_INVALID",
+        )
+        self.assertEqual(understanding.tracks[0].role, "speaker")
+        self.assertEqual(understanding.tracks[0].region_ids, ("region-1",))
 
     def test_clip_repair_sampling_covers_each_blocked_window(self):
         windows = ((20_000, 23_000), (25_000, 29_000))
