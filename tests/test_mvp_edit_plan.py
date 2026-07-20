@@ -724,7 +724,7 @@ class AgenticEditPlannerTests(unittest.IsolatedAsyncioTestCase):
                 "kind": "image",
                 "timeline_window": {"start_ms": 1000, "end_ms": 4000},
                 "asset_id": "generated-1",
-                "position": "top_right",
+                "position": "upper_right",
             },
             {
                 "id": "pexels-overlay",
@@ -759,7 +759,7 @@ class AgenticEditPlannerTests(unittest.IsolatedAsyncioTestCase):
                 "rationale": "an editorial still closes the conceptual gap",
                 "prompt": "a restrained editorial process diagram",
                 "orientation": "horizontal",
-                "fallback": "none",
+                "fallback": "use_source",
             },
             {
                 "id": "pexels-1",
@@ -820,8 +820,9 @@ class AgenticEditPlannerTests(unittest.IsolatedAsyncioTestCase):
         )
         self.assertEqual(
             [item.fallback for item in plan.clips[0].asset_requests],
-            ["omit", "omit"],
+            ["source", "omit"],
         )
+        self.assertEqual(plan.clips[0].segments[0].overlays[0].position, "top_right")
         self.assertEqual(
             plan.clips[0].segments[0].overlays[2].source_window,
             TimeWindow(start_ms=10_000, end_ms=12_000),

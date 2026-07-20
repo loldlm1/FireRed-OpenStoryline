@@ -508,6 +508,7 @@ def _normalize_edit_plan_response(value: Any) -> Any:
                 if "fallback" in asset:
                     asset["fallback"] = {
                         "none": "omit",
+                        "use_source": "source",
                     }.get(asset.get("fallback"), asset.get("fallback"))
         intent_decisions = clip.get("intent_decisions")
         if isinstance(intent_decisions, list):
@@ -545,6 +546,8 @@ def _normalize_edit_plan_response(value: Any) -> Any:
                 if overlay.get("kind") in {"text", "image"}:
                     overlay.pop("source_window", None)
                 if overlay.get("protect_subtitles", True):
+                    if overlay.get("position") == "upper_right":
+                        overlay["position"] = "top_right"
                     safe_position = {
                         "bottom": "top",
                         "bottom_left": "top_left",
