@@ -483,6 +483,82 @@ def _valid_clip_plan_template(clip_context: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def _window_bounds(value: Any) -> tuple[int, int] | None:
+    if not isinstance(value, dict):
+        return None
+    try:
+        start_ms = int(value["start_ms"])
+        end_ms = int(value["end_ms"])
+    except (KeyError, TypeError, ValueError):
+        return None
+    if start_ms < 0 or end_ms <= start_ms:
+        return None
+    return start_ms, end_ms
+
+
+def _derive_missing_asset_overlays(clip: dict[str, Any]) -> None:
+    asset_requests = clip.get("asset_requests")
+    segments = clip.get("segments")
+    if not isinstance(asset_requests, list) or not isinstance(segments, list):
+        return
+
+    existing_ids = {
+        str(overlay.get("id"))
+        for segment in segments
+        if isinstance(segment, dict)
+        for overlay in segment.get("overlays") or []
+        if isinstance(overlay, dict) and overlay.get("id")
+    }
+    used_asset_ids = {
+        str(overlay.get("asset_id"))
+        for segment in segments
+        if isinstance(segment, dict)
+        for overlay in segment.get("overlays") or []
+        if isinstance(overlay, dict)
+        and overlay.get("kind") == "image"
+        and overlay.get("asset_id")
+    }
+    derived_count = 0
+    for asset in asset_requests:
+        if not isinstance(asset, dict) or asset.get("kind") not in {
+            "generated_image",
+            "stock_image",
+            "stock_video",
+        }:
+            continue
+        asset_id = asset.get("id")
+        asset_window = _window_bounds(asset.get("timeline_window"))
+        if not isinstance(asset_id, str) or not asset_id or asset_window is None:
+            continue
+        if asset_id in used_asset_ids:
+            continue
+        containing_segments = [
+            segment
+            for segment in segments
+            if isinstance(segment, dict)
+            and isinstance(segment.get("overlays"), list)
+            and (segment_window := _window_bounds(segment.get("timeline_window")))
+            and segment_window[0] <= asset_window[0]
+            and asset_window[1] <= segment_window[1]
+        ]
+        if len(containing_segments) != 1:
+            continue
+        derived_count += 1
+        overlay_id = f"asset-overlay-{derived_count:02d}"
+        while overlay_id in existing_ids:
+            derived_count += 1
+            overlay_id = f"asset-overlay-{derived_count:02d}"
+        containing_segments[0]["overlays"].append({
+            "id": overlay_id,
+            "kind": "image",
+            "timeline_window": dict(asset["timeline_window"]),
+            "asset_id": asset_id,
+            "position": "top_left" if derived_count % 2 else "top_right",
+        })
+        existing_ids.add(overlay_id)
+        used_asset_ids.add(asset_id)
+
+
 def _normalize_edit_plan_response(value: Any) -> Any:
     if not isinstance(value, dict):
         return value
@@ -525,7 +601,11 @@ def _normalize_edit_plan_response(value: Any) -> Any:
         if not isinstance(segments, list):
             continue
         for segment in segments:
-            if not isinstance(segment, dict) or not isinstance(segment.get("overlays"), list):
+            if not isinstance(segment, dict):
+                continue
+            if segment.get("overlays") is None:
+                segment["overlays"] = []
+            if not isinstance(segment.get("overlays"), list):
                 continue
             transition = segment.get("transition_in")
             if isinstance(transition, dict) and transition.get("kind") == "hard_cut":
@@ -573,6 +653,7 @@ def _normalize_edit_plan_response(value: Any) -> Any:
                         overlay["source_window"] = inferred
                 normalized_overlays.append(overlay)
             segment["overlays"] = normalized_overlays
+        _derive_missing_asset_overlays(clip)
     return normalized
 
 

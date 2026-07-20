@@ -142,6 +142,78 @@ class EditPlanContractTests(unittest.TestCase):
                     "source",
                 )
 
+    def test_derives_only_unambiguous_missing_asset_overlays(self):
+        normalized = _normalize_edit_plan_response({
+            "clips": [{
+                "asset_requests": [
+                    {
+                        "id": "generated-1",
+                        "kind": "generated_image",
+                        "timeline_window": {"start_ms": 1000, "end_ms": 4000},
+                    },
+                    {
+                        "id": "stock-1",
+                        "kind": "stock_video",
+                        "timeline_window": {"start_ms": 5000, "end_ms": 9000},
+                    },
+                ],
+                "segments": [{
+                    "timeline_window": {"start_ms": 0, "end_ms": 20_000},
+                }],
+            }],
+        })
+
+        overlays = normalized["clips"][0]["segments"][0]["overlays"]
+        self.assertEqual(
+            [(item["asset_id"], item["position"]) for item in overlays],
+            [("generated-1", "top_left"), ("stock-1", "top_right")],
+        )
+
+        executable = build_shadow_edit_plan(
+            [ShortCandidate(0, 20_000, "Title", "Hook", "Reason", 0.9)],
+            source_duration_ms=20_000,
+        ).to_dict()
+        executable["clips"][0]["segments"][0].pop("overlays")
+        executable["clips"][0]["asset_requests"] = [{
+            "id": "generated-1",
+            "kind": "generated_image",
+            "provider": "9router",
+            "timeline_window": {"start_ms": 1000, "end_ms": 4000},
+            "visual_gap": "the source cannot show the abstract process",
+            "purpose": "show the abstract process",
+            "rationale": "an editorial still closes the visual gap",
+            "prompt": "a restrained editorial process diagram",
+        }]
+        plan = validate_edit_plan(_normalize_edit_plan_response(executable))
+        self.assertEqual(
+            plan.clips[0].segments[0].overlays[0].asset_id,
+            "generated-1",
+        )
+
+        ambiguous = _normalize_edit_plan_response({
+            "clips": [{
+                "asset_requests": [{
+                    "id": "spanning-asset",
+                    "kind": "stock_video",
+                    "timeline_window": {"start_ms": 4000, "end_ms": 6000},
+                }],
+                "segments": [
+                    {
+                        "timeline_window": {"start_ms": 0, "end_ms": 5000},
+                        "overlays": [],
+                    },
+                    {
+                        "timeline_window": {"start_ms": 5000, "end_ms": 10_000},
+                        "overlays": [],
+                    },
+                ],
+            }],
+        })
+        self.assertFalse(any(
+            segment["overlays"]
+            for segment in ambiguous["clips"][0]["segments"]
+        ))
+
     def test_accepts_explicit_empty_optional_identifiers(self):
         target = FocalTarget(region_id="", track_id="", semantic_role="speaker")
         overlay = OverlaySpec(
