@@ -48,9 +48,10 @@ from open_storyline.mvp.observability import emit_event
 from open_storyline.mvp.render import (
     AgenticShortRenderer,
     CPUShortRenderer,
-    RenderSettings,
+    RENDER_QUALITY_PROFILE_VERSION,
     extract_frame_data_urls,
     probe_media,
+    render_settings_from_config,
 )
 from open_storyline.mvp.preflight import build_preflight
 from open_storyline.mvp.scene_boundaries import detect_scene_boundaries
@@ -798,13 +799,7 @@ class MVPJobProcessor:
         render_floor = float(
             render_stage.get("progress", STAGES["rendering"].progress)
         )
-        render_settings = RenderSettings(
-            width=self.config.mvp.render_width,
-            height=self.config.mvp.render_height,
-            fps=self.config.mvp.render_fps,
-            preset=self.config.mvp.render_preset,
-            crf=self.config.mvp.render_crf,
-        )
+        render_settings = render_settings_from_config(self.config.mvp)
         loop = asyncio.get_running_loop()
 
         def render_activity(phase: str, current: int, total: int) -> None:
@@ -879,6 +874,25 @@ class MVPJobProcessor:
                 destination_dir=output_dir,
                 progress_callback=render_activity,
             )
+        render_quality_path = output_dir / names.render_quality_profile
+        render_quality_path.write_text(
+            json.dumps({
+                "version": RENDER_QUALITY_PROFILE_VERSION,
+                "configured_profile": render_settings.quality_profile,
+                "clips": [
+                    item.render_quality
+                    for item in rendered
+                    if item.render_quality is not None
+                ],
+            }, ensure_ascii=False, indent=2),
+            encoding="utf-8",
+        )
+        await store.register_artifact(
+            job_id,
+            render_quality_path,
+            kind="render_quality_profile",
+        )
+        agentic_manifest["render_quality_profile"] = names.render_quality_profile
         effects_plan = None
         final_outputs = []
         qa_inputs: list[QAInput] = []
@@ -929,6 +943,18 @@ class MVPJobProcessor:
             await store.register_artifact(job_id, final_video, kind="video")
             if item.subtitle_path is not None:
                 await store.register_artifact(job_id, item.subtitle_path, kind="subtitles")
+            if item.subtitle_layout_path is not None:
+                await store.register_artifact(
+                    job_id,
+                    item.subtitle_layout_path,
+                    kind="subtitle_layout",
+                )
+            if item.caption_footprint_path is not None:
+                await store.register_artifact(
+                    job_id,
+                    item.caption_footprint_path,
+                    kind="caption_footprint",
+                )
             final_outputs.append({
                 "video": final_video.name,
                 "subtitles": item.subtitle_path.name if item.subtitle_path else None,

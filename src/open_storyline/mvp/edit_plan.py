@@ -1135,6 +1135,7 @@ class AgenticArtifactNames:
     preflight: str = "edit_preflight.json"
     asset_manifest: str = "asset_manifest.json"
     render_execution: str = "render_execution.json"
+    render_quality_profile: str = "render_quality_profile.json"
     render_qa: str = "render_qa.json"
     retention_rhythm_qa: str = "retention_rhythm_qa.json"
     creative_conformance: str = "creative_conformance.json"

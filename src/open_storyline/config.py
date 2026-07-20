@@ -172,6 +172,9 @@ class MVPConfig(ConfigBaseModel):
     frame_count: int = Field(default=6, ge=0, le=24)
     render_width: int = Field(default=1080, ge=128, le=4320)
     render_height: int = Field(default=1920, ge=128, le=4320)
+    render_quality_profile: Literal["legacy", "balanced", "high"] = "high"
+    render_fps_cap: int = Field(default=60, ge=12, le=60)
+    # Retained for compatibility with older local config files; named profiles are authoritative.
     render_fps: int = Field(default=30, ge=12, le=60)
     render_preset: str = "veryfast"
     render_crf: int = Field(default=23, ge=0, le=51)

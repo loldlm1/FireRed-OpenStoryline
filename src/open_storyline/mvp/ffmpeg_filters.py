@@ -30,10 +30,13 @@ def validate_output_dimensions(width: int, height: int) -> tuple[int, int]:
 
 def validate_subtitle_filename(value: str | Path) -> str:
     name = str(value)
-    if Path(name).name != name or not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]*\.srt", name):
+    if Path(name).name != name or not re.fullmatch(
+        r"[A-Za-z0-9][A-Za-z0-9._-]*\.(?:srt|ass)",
+        name,
+    ):
         raise FilterGraphError(
             "FILTER_SUBTITLE_PATH_INVALID",
-            "subtitle filename must be a server-generated SRT basename",
+            "subtitle filename must be a server-generated SRT or ASS basename",
         )
     return name
 
@@ -358,10 +361,8 @@ def build_reframe_filtergraph(
 
     if subtitle_filename:
         name = validate_subtitle_filename(subtitle_filename)
-        style = "FontName=DejaVu Sans,FontSize=20,Outline=2,Shadow=1,Alignment=2,MarginV=100"
-        graph.append(
-            f"[{video_output}]subtitles=filename='{name}':force_style='{style}'[vout]"
-        )
+        filter_name = "ass" if name.endswith(".ass") else "subtitles"
+        graph.append(f"[{video_output}]{filter_name}=filename='{name}'[vout]")
         video_output = "vout"
 
     filtergraph = ";".join(graph)
