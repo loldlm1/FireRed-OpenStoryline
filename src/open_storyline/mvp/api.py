@@ -41,6 +41,7 @@ class PromptVersionPayload(BaseModel):
     max_generated_assets_per_clip: int = Field(default=2, ge=0, le=20)
     stock_policy: str = Field(default="off", max_length=32)
     max_stock_assets_per_clip: int = Field(default=0, ge=0, le=20)
+    stock_asset_kind: str = Field(default="video", max_length=16)
 
 
 class FavoriteRunPayload(BaseModel):
@@ -189,6 +190,7 @@ def create_mvp_router(
         max_generated_assets_per_clip: int = Form(2),
         stock_policy: str = Form("off"),
         max_stock_assets_per_clip: int = Form(0),
+        stock_asset_kind: str = Form("video"),
     ):
         suffix = Path(file.filename or "").suffix.lower()
         if suffix not in ALLOWED_VIDEO_SUFFIXES:
@@ -217,6 +219,7 @@ def create_mvp_router(
                 max_generated_assets_per_clip=max_generated_assets_per_clip,
                 stock_policy=stock_policy,
                 max_stock_assets_per_clip=max_stock_assets_per_clip,
+                stock_asset_kind=stock_asset_kind,
             )
         except JobStoreError as exc:
             await file.close()
@@ -418,6 +421,7 @@ def create_mvp_router(
                     ),
                     stock_policy=payload.stock_policy,
                     max_stock_assets_per_clip=payload.max_stock_assets_per_clip,
+                    stock_asset_kind=payload.stock_asset_kind,
                 ),
             )
             await get_manager().enqueue(result["run"]["id"])

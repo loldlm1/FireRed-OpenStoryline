@@ -209,11 +209,12 @@
                         <div class="field-pair">
                           <select id="asset-policy" name="asset_policy" aria-describedby="asset-policy-help">
                             <option value="auto" selected>Cuando ayuden a contar la historia</option>
+                            <option value="required">Cantidad exacta obligatoria por clip</option>
                             <option value="off">No usar</option>
                           </select>
-                          <input id="max-generated-assets" name="max_generated_assets_per_clip" type="number" min="0" max="20" value="2" aria-label="Máximo de imágenes generadas por clip">
+                          <input id="max-generated-assets" name="max_generated_assets_per_clip" type="number" min="0" max="8" value="2" aria-label="Máximo o cantidad requerida de imágenes generadas por clip">
                         </div>
-                        <p id="asset-policy-help" class="field-help">Solo se solicitan en modo agéntico y cuando la planificación las justifica.</p>
+                        <p id="asset-policy-help" class="field-help">“Cuando ayuden” define un máximo opcional; “obligatoria” exige exactamente la cantidad indicada.</p>
                       </fieldset>
                       <fieldset class="field fieldset-wide">
                         <legend>Video de archivo</legend>
@@ -221,10 +222,11 @@
                           <select id="stock-policy" name="stock_policy" aria-describedby="stock-policy-help">
                             <option value="off" selected>No usar</option>
                             <option value="auto">Buscar cuando aporte contexto</option>
+                            <option value="required">Cantidad exacta obligatoria por clip</option>
                           </select>
-                          <input id="max-stock-assets" name="max_stock_assets_per_clip" type="number" min="0" max="20" value="0" disabled aria-label="Máximo de videos de archivo por clip">
+                          <input id="max-stock-assets" name="max_stock_assets_per_clip" type="number" min="0" max="8" value="0" disabled aria-label="Máximo o cantidad requerida de videos de archivo por clip">
                         </div>
-                        <p id="stock-policy-help" class="field-help">Pexels es una fuente opcional y separada de las imágenes generadas.</p>
+                        <p id="stock-policy-help" class="field-help">Pexels es independiente: el modo opcional define un máximo y el obligatorio exige esa cantidad de videos.</p>
                       </fieldset>
                     </div>
                   </details>

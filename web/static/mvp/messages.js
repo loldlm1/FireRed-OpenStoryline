@@ -77,6 +77,11 @@ const ERROR_MESSAGES = Object.freeze({
   MISTRAL_STT_RATE_LIMITED: 'El servicio de transcripción está ocupado. Intenta de nuevo más tarde.',
   PEXELS_SEARCH_FAILED: 'La búsqueda opcional de video de archivo falló. Puedes reintentar o desactivarla.',
   REMOTE_IMAGE_REQUEST_FAILED: 'No se pudo crear un recurso visual solicitado. Puedes reintentar esta versión.',
+  CREATIVE_INTENT_CAPABILITY_UNAVAILABLE: 'La versión exige un recurso que no está habilitado en este despliegue.',
+  EDIT_PLAN_INTENT_MISMATCH: 'La planificación no convirtió todos los requisitos obligatorios en operaciones editables.',
+  EDIT_PLAN_REPAIR_EXHAUSTED: 'La planificación siguió siendo inválida después del único intento de reparación seguro.',
+  REQUIRED_GENERATED_ASSET_COUNT_INVALID: 'Indica una cantidad positiva para las imágenes generadas obligatorias.',
+  REQUIRED_STOCK_ASSET_COUNT_INVALID: 'Indica una cantidad positiva para los videos Pexels obligatorios.',
   ACTIVITY_STREAM_UNAVAILABLE: 'La conexión en vivo no está disponible. Seguiremos consultando el avance.',
 });
 

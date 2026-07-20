@@ -1,0 +1,481 @@
+from __future__ import annotations
+
+from dataclasses import dataclass
+from hashlib import sha256
+from typing import Any, Literal, Sequence
+import re
+
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+
+
+CREATIVE_INTENT_VERSION = "creative_intent.v1"
+ALLOWED_OMISSION_REASONS = frozenset({
+    "source_satisfies_intent",
+    "no_evidence_backed_gap",
+    "duplicate_visual_purpose",
+})
+
+IntentSource = Literal["settings", "user_prompt", "clip_selection", "planner"]
+IntentRequirement = Literal["required", "optional"]
+IntentScope = Literal["plan", "per_clip"]
+AssetIntentKind = Literal["generated_image", "stock_image", "stock_video"]
+AssetIntentProvider = Literal["9router", "pexels"]
+OperationIntentKind = Literal["portrait_reframe", "footer_captions"]
+
+
+class IntentModel(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+
+class CreativeAssetIntent(IntentModel):
+    id: str = Field(min_length=1, max_length=80)
+    source: IntentSource
+    requirement: IntentRequirement
+    scope: IntentScope
+    clip_index: int | None = Field(default=None, ge=1, le=50)
+    kind: AssetIntentKind
+    provider: AssetIntentProvider
+    count: int = Field(ge=1, le=8)
+    purpose: str = Field(min_length=1, max_length=240)
+    duration_min_ms: int = Field(default=0, ge=0, le=25_000)
+    duration_max_ms: int = Field(default=0, ge=0, le=25_000)
+
+    @field_validator("id")
+    @classmethod
+    def validate_id(cls, value: str) -> str:
+        text = str(value or "").strip()
+        if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]*", text):
+            raise ValueError("intent id contains unsafe characters")
+        return text
+
+    @field_validator("purpose")
+    @classmethod
+    def clean_purpose(cls, value: str) -> str:
+        return re.sub(r"\s+", " ", str(value or "")).strip()[:240]
+
+    @model_validator(mode="after")
+    def validate_contract(self) -> "CreativeAssetIntent":
+        if self.scope == "per_clip" and self.clip_index is None:
+            raise ValueError("per-clip intent requires clip_index")
+        if self.scope == "plan" and self.clip_index is not None:
+            raise ValueError("plan intent cannot declare clip_index")
+        if self.kind == "generated_image" and self.provider != "9router":
+            raise ValueError("generated image intent must use 9router")
+        if self.kind.startswith("stock_") and self.provider != "pexels":
+            raise ValueError("stock intent must use pexels")
+        if bool(self.duration_min_ms) != bool(self.duration_max_ms):
+            raise ValueError("asset duration bounds must be both set or both zero")
+        if self.duration_max_ms and self.duration_max_ms < self.duration_min_ms:
+            raise ValueError("asset duration maximum must not precede its minimum")
+        return self
+
+
+class CreativeOperationIntent(IntentModel):
+    id: str = Field(min_length=1, max_length=80)
+    source: IntentSource
+    requirement: IntentRequirement
+    scope: IntentScope
+    clip_index: int | None = Field(default=None, ge=1, le=50)
+    kind: OperationIntentKind
+    purpose: str = Field(min_length=1, max_length=240)
+
+    @model_validator(mode="after")
+    def validate_scope(self) -> "CreativeOperationIntent":
+        if self.scope == "per_clip" and self.clip_index is None:
+            raise ValueError("per-clip intent requires clip_index")
+        if self.scope == "plan" and self.clip_index is not None:
+            raise ValueError("plan intent cannot declare clip_index")
+        return self
+
+
+class CreativeIntentDecision(IntentModel):
+    intent_id: str = Field(min_length=1, max_length=80)
+    decision: Literal["execute", "omit"]
+    asset_ids: tuple[str, ...] = Field(default=(), max_length=8)
+    operation_ids: tuple[str, ...] = Field(default=(), max_length=32)
+    omission_reason: str = Field(default="", max_length=80)
+
+    @model_validator(mode="after")
+    def validate_decision(self) -> "CreativeIntentDecision":
+        if self.decision == "execute" and not (self.asset_ids or self.operation_ids):
+            raise ValueError("executed intent decision needs an asset or operation mapping")
+        if self.decision == "omit":
+            if self.asset_ids or self.operation_ids:
+                raise ValueError("omitted intent decision cannot map executable IDs")
+            if self.omission_reason not in ALLOWED_OMISSION_REASONS:
+                raise ValueError("omission reason is not allowlisted")
+        elif self.omission_reason:
+            raise ValueError("executed intent decision cannot include an omission reason")
+        return self
+
+
+class CreativeIntent(IntentModel):
+    version: Literal[CREATIVE_INTENT_VERSION] = CREATIVE_INTENT_VERSION
+    prompt_sha256: str = Field(pattern=r"^[a-f0-9]{64}$")
+    settings_version: int = Field(default=1, ge=1)
+    asset_intents: tuple[CreativeAssetIntent, ...] = Field(default=(), max_length=32)
+    operation_intents: tuple[CreativeOperationIntent, ...] = Field(default=(), max_length=32)
+
+    @model_validator(mode="after")
+    def validate_ids(self) -> "CreativeIntent":
+        ids = [item.id for item in (*self.asset_intents, *self.operation_intents)]
+        if len(ids) != len(set(ids)):
+            raise ValueError("creative intent IDs must be unique")
+        return self
+
+    @property
+    def has_required_assets(self) -> bool:
+        return any(item.requirement == "required" for item in self.asset_intents)
+
+    def planner_payload(self, *, clip_index: int) -> dict[str, Any]:
+        scoped = self.for_clip(clip_index)
+        return {
+            "version": self.version,
+            "asset_intents": [
+                item.model_dump(mode="json") for item in scoped.asset_intents
+            ],
+            "operation_intents": [
+                item.model_dump(mode="json") for item in scoped.operation_intents
+            ],
+        }
+
+    def for_clip(self, clip_index: int) -> "CreativeIntent":
+        return CreativeIntent(
+            prompt_sha256=self.prompt_sha256,
+            settings_version=self.settings_version,
+            asset_intents=tuple(
+                item
+                for item in self.asset_intents
+                if item.scope == "plan" and clip_index == 1
+                or item.scope == "per_clip" and item.clip_index == clip_index
+            ),
+            operation_intents=tuple(
+                item
+                for item in self.operation_intents
+                if item.scope == "plan" and clip_index == 1
+                or item.scope == "per_clip" and item.clip_index == clip_index
+            ),
+        )
+
+    def to_dict(self) -> dict[str, Any]:
+        return self.model_dump(mode="json")
+
+
+@dataclass(frozen=True)
+class CreativeIntentConformance:
+    required: dict[str, int]
+    requested: dict[str, int]
+    used: dict[str, int]
+    decision_count: int
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "version": CREATIVE_INTENT_VERSION,
+            "status": "conformant",
+            "counts": {
+                "required": dict(self.required),
+                "requested": dict(self.requested),
+                "used": dict(self.used),
+            },
+            "decision_count": self.decision_count,
+        }
+
+
+_ONE = r"(?:exactly\s+)?(?:one|1|a\s+single|una?\s+sola?|exactamente\s+una?)"
+_REQUIRED = r"(?:must\s+(?:use|include|add)|use|include|add|requiere|usa|incluye|agrega)"
+_GENERATED_IMAGE = r"(?:generated|ai[- ]generated|gpt[- ]generated|generada?|editorial)\s+(?:editorial\s+)?(?:image|still|visual|imagen)"
+_PEXELS_VIDEO = r"(?:vertical\s+)?(?:pexels\s+(?:stock\s+)?video|(?:stock\s+)?video\s+(?:from|de)\s+pexels|video\s+pexels)"
+
+
+def _explicit_one(prompt: str, asset_pattern: str) -> bool:
+    patterns = (
+        rf"\b{_REQUIRED}\b.{{0,50}}\b{_ONE}\b.{{0,100}}\b{asset_pattern}\b",
+        rf"\b{_ONE}\b.{{0,100}}\b{asset_pattern}\b",
+        rf"\b{asset_pattern}\b.{{0,100}}\b{_ONE}\b",
+    )
+    for pattern in patterns:
+        for match in re.finditer(pattern, prompt, flags=re.IGNORECASE):
+            prefix = prompt[max(0, match.start() - 120):match.start()]
+            prefix = re.split(r"[.!?;\n]", prefix)[-1]
+            if not re.search(
+                r"\b(?:do\s+not|don't|no\s+usar|sin)\b",
+                prefix,
+                re.IGNORECASE,
+            ):
+                return True
+    return False
+
+
+def _duration_bounds(prompt: str, asset_pattern: str, default: tuple[int, int]) -> tuple[int, int]:
+    match = re.search(asset_pattern, prompt, flags=re.IGNORECASE)
+    if not match:
+        return default
+    start = max(0, match.start() - 120)
+    end = min(len(prompt), match.end() + 160)
+    nearby = prompt[start:end]
+    durations = list(re.finditer(
+        r"(?:approximately|about|aproximadamente|durante)?\s*(\d{1,2})\s*(?:-|–|to|a)\s*(\d{1,2})\s*(?:seconds?|secs?|s|segundos?)\b",
+        nearby,
+        flags=re.IGNORECASE,
+    ))
+    if not durations:
+        return default
+    asset_center = (match.start() + match.end()) / 2 - start
+    duration = min(
+        durations,
+        key=lambda item: abs(((item.start() + item.end()) / 2) - asset_center),
+    )
+    minimum, maximum = int(duration.group(1)), int(duration.group(2))
+    if not 1 <= minimum <= maximum <= 25:
+        return default
+    return minimum * 1000, maximum * 1000
+
+
+def build_creative_intent(
+    editing_prompt: str,
+    settings: dict[str, Any],
+    *,
+    selected_clip_count: int,
+) -> CreativeIntent:
+    stored_prompt = str(editing_prompt or "").strip()
+    prompt = re.sub(r"\s+", " ", stored_prompt)
+    prompt_hash = sha256(stored_prompt.encode("utf-8")).hexdigest()
+    assets: list[CreativeAssetIntent] = []
+    operations: list[CreativeOperationIntent] = []
+
+    generated_policy = str(settings.get("asset_policy") or "auto").strip().lower()
+    stock_policy = str(settings.get("stock_policy") or "off").strip().lower()
+    generated_count = max(0, int(settings.get("max_generated_assets_per_clip") or 0))
+    stock_count = max(0, int(settings.get("max_stock_assets_per_clip") or 0))
+
+    if generated_policy == "required" and generated_count:
+        for clip_index in range(1, selected_clip_count + 1):
+            assets.append(CreativeAssetIntent(
+                id=f"settings-generated-image-clip-{clip_index:02d}",
+                source="settings",
+                requirement="required",
+                scope="per_clip",
+                clip_index=clip_index,
+                kind="generated_image",
+                provider="9router",
+                count=generated_count,
+                purpose="close evidence-backed conceptual visual gaps",
+            ))
+    elif _explicit_one(prompt, _GENERATED_IMAGE):
+        minimum, maximum = _duration_bounds(prompt, _GENERATED_IMAGE, (2000, 4000))
+        assets.append(CreativeAssetIntent(
+            id="prompt-generated-image",
+            source="user_prompt",
+            requirement="required",
+            scope="plan",
+            kind="generated_image",
+            provider="9router",
+            count=1,
+            purpose="close the explicit conceptual visual gap",
+            duration_min_ms=minimum,
+            duration_max_ms=maximum,
+        ))
+
+    if stock_policy == "required" and stock_count:
+        stock_kind = str(settings.get("stock_asset_kind") or "video").strip().lower()
+        kind: AssetIntentKind = "stock_image" if stock_kind == "image" else "stock_video"
+        for clip_index in range(1, selected_clip_count + 1):
+            assets.append(CreativeAssetIntent(
+                id=f"settings-{kind.replace('_', '-')}-clip-{clip_index:02d}",
+                source="settings",
+                requirement="required",
+                scope="per_clip",
+                clip_index=clip_index,
+                kind=kind,
+                provider="pexels",
+                count=stock_count,
+                purpose="close evidence-backed real-world visual gaps",
+            ))
+    elif _explicit_one(prompt, _PEXELS_VIDEO):
+        minimum, maximum = _duration_bounds(prompt, _PEXELS_VIDEO, (3000, 5000))
+        assets.append(CreativeAssetIntent(
+            id="prompt-pexels-video",
+            source="user_prompt",
+            requirement="required",
+            scope="plan",
+            kind="stock_video",
+            provider="pexels",
+            count=1,
+            purpose="close the explicit real-world visual gap",
+            duration_min_ms=minimum,
+            duration_max_ms=maximum,
+        ))
+
+    if re.search(r"\b(?:footer[- ]safe|footer|pie)\b.{0,60}\b(?:captions?|subtitles?|subtitulos?)\b", prompt, re.IGNORECASE):
+        operations.append(CreativeOperationIntent(
+            id="prompt-footer-captions",
+            source="user_prompt",
+            requirement="required",
+            scope="plan",
+            kind="footer_captions",
+            purpose="keep captions readable inside the footer safe zone",
+        ))
+    if re.search(r"\b(?:portrait|vertical|9:16)\b.{0,80}\b(?:crop|refram|encuadr|recort)\w*\b", prompt, re.IGNORECASE):
+        operations.append(CreativeOperationIntent(
+            id="prompt-portrait-reframe",
+            source="user_prompt",
+            requirement="required",
+            scope="plan",
+            kind="portrait_reframe",
+            purpose="fill the portrait canvas while preserving the primary subject",
+        ))
+
+    return CreativeIntent(
+        prompt_sha256=prompt_hash,
+        settings_version=max(1, int(settings.get("settings_version") or 1)),
+        asset_intents=tuple(assets),
+        operation_intents=tuple(operations),
+    )
+
+
+def validate_intent_capabilities(
+    intent: CreativeIntent,
+    *,
+    generated_available: bool,
+    stock_available: bool,
+) -> None:
+    required_assets = tuple(
+        item for item in intent.asset_intents if item.requirement == "required"
+    )
+    if any(item.provider == "9router" for item in required_assets) and not generated_available:
+        raise ValueError("required generated-image capability is unavailable")
+    if any(item.provider == "pexels" for item in required_assets) and not stock_available:
+        raise ValueError("required Pexels capability is unavailable")
+
+
+def validate_creative_intent_conformance(
+    plan: Any,
+    intent: CreativeIntent,
+) -> CreativeIntentConformance:
+    clips = tuple(getattr(plan, "clips", ()))
+    requests = [
+        (clip.clip_index, request)
+        for clip in clips
+        for request in clip.asset_requests
+    ]
+    overlays = {
+        overlay.id: (clip.clip_index, overlay)
+        for clip in clips
+        for segment in clip.segments
+        for overlay in segment.overlays
+    }
+    segments = {
+        segment.id: (clip.clip_index, segment)
+        for clip in clips
+        for segment in clip.segments
+    }
+    used_asset_ids = {
+        overlay.asset_id
+        for _clip_index, overlay in overlays.values()
+        if overlay.kind == "image"
+    }
+    decisions = [decision for clip in clips for decision in clip.intent_decisions]
+    decision_by_intent = {decision.intent_id: decision for decision in decisions}
+    if len(decision_by_intent) != len(decisions):
+        raise ValueError("intent decisions must be unique across the edit plan")
+
+    known_intent_ids = {
+        item.id for item in (*intent.asset_intents, *intent.operation_intents)
+    }
+    unknown_decisions = sorted(set(decision_by_intent) - known_intent_ids)
+    if unknown_decisions:
+        raise ValueError("intent decision references an unknown intent")
+
+    required_counts: dict[str, int] = {}
+    requested_counts: dict[str, int] = {}
+    used_counts: dict[str, int] = {}
+    for item in intent.asset_intents:
+        matches = [
+            request
+            for clip_index, request in requests
+            if request.kind == item.kind
+            and request.provider == item.provider
+            and (item.scope == "plan" or clip_index == item.clip_index)
+        ]
+        used = [request for request in matches if request.id in used_asset_ids]
+        key = f"{item.provider}:{item.kind}"
+        if item.requirement == "required":
+            required_counts[key] = required_counts.get(key, 0) + item.count
+        requested_counts[key] = requested_counts.get(key, 0) + len(matches)
+        used_counts[key] = used_counts.get(key, 0) + len(used)
+
+        decision = decision_by_intent.get(item.id)
+        if item.requirement == "required":
+            if len(matches) != item.count or len(used) != item.count:
+                raise ValueError(f"required intent {item.id} is not fully executable")
+            if decision is None or decision.decision != "execute":
+                raise ValueError(f"required intent {item.id} lacks an execute decision")
+        elif decision is not None and decision.decision == "omit":
+            continue
+        elif decision is None and matches:
+            raise ValueError(f"optional intent {item.id} lacks a decision")
+
+        if decision is not None and decision.decision == "execute":
+            matched_ids = {request.id for request in matches}
+            if set(decision.asset_ids) != matched_ids:
+                raise ValueError(f"intent decision {item.id} does not map its asset requests")
+            if not set(decision.operation_ids) <= set(overlays):
+                raise ValueError(f"intent decision {item.id} references unknown operations")
+            mapped_assets = {
+                overlays[operation_id][1].asset_id
+                for operation_id in decision.operation_ids
+                if overlays[operation_id][1].kind == "image"
+            }
+            if mapped_assets != matched_ids:
+                raise ValueError(f"intent decision {item.id} does not map executed overlays")
+
+        if item.duration_max_ms:
+            for request in matches:
+                request_duration = request.timeline_window.duration_ms
+                if not item.duration_min_ms <= request_duration <= item.duration_max_ms:
+                    raise ValueError(f"intent {item.id} asset duration is outside its contract")
+                overlay_duration = sum(
+                    overlay.timeline_window.duration_ms
+                    for _clip_index, overlay in overlays.values()
+                    if overlay.kind == "image" and overlay.asset_id == request.id
+                )
+                if not item.duration_min_ms <= overlay_duration <= item.duration_max_ms:
+                    raise ValueError(f"intent {item.id} visible duration is outside its contract")
+
+    required_operations = {
+        item.id: item for item in intent.operation_intents if item.requirement == "required"
+    }
+    for intent_id, item in required_operations.items():
+        decision = decision_by_intent.get(intent_id)
+        if decision is None or decision.decision != "execute":
+            raise ValueError(f"required operation intent {intent_id} lacks an execute decision")
+        if not decision.operation_ids or not set(decision.operation_ids) <= set(segments):
+            raise ValueError(f"required operation intent {intent_id} lacks valid segment mappings")
+        if item.kind == "footer_captions" and "subtitles" not in plan.requested_capabilities:
+            raise ValueError("required footer captions are absent from the plan")
+        if item.kind == "portrait_reframe" and not any(
+            segments[segment_id][1].layout.mode == "crop"
+            for segment_id in decision.operation_ids
+        ):
+            raise ValueError("required portrait reframe is absent from the plan")
+
+    for clip in clips:
+        narrative = " ".join(segment.reason for segment in clip.segments).lower()
+        clip_kinds = {request.kind for request in clip.asset_requests}
+        if re.search(
+            r"\b(?:insert|use|show|overlay|cut\s+to)\b.{0,80}\b(?:generated|gpt|ai-generated)\s+(?:image|visual)\b",
+            narrative,
+        ) and "generated_image" not in clip_kinds:
+            raise ValueError("plan narrative claims a generated image without an executable request")
+        if re.search(
+            r"\b(?:insert|use|show|overlay|cut\s+to)\b.{0,80}\b(?:pexels|stock)\s+(?:image|video|cutaway)\b",
+            narrative,
+        ) and not clip_kinds & {"stock_image", "stock_video"}:
+            raise ValueError("plan narrative claims stock media without an executable request")
+
+    return CreativeIntentConformance(
+        required=required_counts,
+        requested=requested_counts,
+        used=used_counts,
+        decision_count=len(decisions),
+    )

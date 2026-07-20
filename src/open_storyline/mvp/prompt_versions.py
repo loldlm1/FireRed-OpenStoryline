@@ -19,6 +19,7 @@ from open_storyline.mvp.edit_plan import (
     validate_generated_asset_limit,
     validate_job_controls,
     validate_stock_asset_limit,
+    validate_stock_asset_kind,
     validate_stock_policy,
 )
 from open_storyline.mvp.jobs import (
@@ -65,6 +66,7 @@ def validate_run_settings(
     max_generated_assets_per_clip: int = 2,
     stock_policy: str = "off",
     max_stock_assets_per_clip: int = 0,
+    stock_asset_kind: str = "video",
 ) -> dict[str, Any]:
     if not 1 <= int(max_clips) <= 50:
         raise JobStoreError("MAX_CLIPS_INVALID", "max_clips must be between 1 and 50")
@@ -78,16 +80,28 @@ def validate_run_settings(
         )
         normalized_stock_policy = validate_stock_policy(stock_policy)
         stock_asset_limit = validate_stock_asset_limit(max_stock_assets_per_clip)
+        normalized_stock_kind = validate_stock_asset_kind(stock_asset_kind)
     except EditPlanError as exc:
         raise JobStoreError(exc.code, str(exc)) from exc
+    if normalized_asset_policy == "required" and generated_asset_limit == 0:
+        raise JobStoreError(
+            "REQUIRED_GENERATED_ASSET_COUNT_INVALID",
+            "required generated images need a positive per-clip count",
+        )
+    if normalized_stock_policy == "required" and stock_asset_limit == 0:
+        raise JobStoreError(
+            "REQUIRED_STOCK_ASSET_COUNT_INVALID",
+            "required stock media needs a positive per-clip count",
+        )
     return {
-        "settings_version": 1,
+        "settings_version": 2,
         "max_clips": int(max_clips),
         "edit_mode": normalized_edit_mode,
         "asset_policy": normalized_asset_policy,
         "max_generated_assets_per_clip": generated_asset_limit,
         "stock_policy": normalized_stock_policy,
         "max_stock_assets_per_clip": stock_asset_limit,
+        "stock_asset_kind": normalized_stock_kind,
     }
 
 
@@ -124,6 +138,7 @@ class PromptVersionService:
             ),
             stock_policy=settings.get("stock_policy", "off"),
             max_stock_assets_per_clip=settings.get("max_stock_assets_per_clip", 0),
+            stock_asset_kind=settings.get("stock_asset_kind", "video"),
         )
         version_identifier = prompt_version_id or uuid.uuid4().hex
         job_identifier = job_id or uuid.uuid4().hex

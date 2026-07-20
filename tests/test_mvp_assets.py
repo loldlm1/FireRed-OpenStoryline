@@ -296,6 +296,26 @@ class GeneratedAssetTests(unittest.IsolatedAsyncioTestCase):
             self.assertIn("pexels", manifest["rights_notices"])
             self.assertNotIn("remote teamwork planning", json.dumps(manifest))
 
+    async def test_required_policies_use_the_same_bounded_provider_paths(self):
+        cascade = FakeCascade()
+        pexels = FakePexels()
+        with TemporaryDirectory() as tmpdir:
+            result = await resolve_assets(
+                mixed_edit_plan(),
+                output_dir=tmpdir,
+                asset_policy="required",
+                stock_policy="required",
+                max_generated_assets_per_clip=1,
+                max_stock_assets_per_clip=1,
+                cascade=cascade,
+                pexels=pexels,
+                size="1024x1024",
+            )
+
+        self.assertEqual(result.manifest["resolved_count"], 2)
+        self.assertEqual(len(cascade.calls), 1)
+        self.assertEqual(pexels.calls, ["stock-1"])
+
     async def test_mixed_provider_failure_removes_the_complete_partial_batch(self):
         with TemporaryDirectory() as tmpdir:
             with self.assertRaises(AssetResolutionError) as caught:

@@ -25,6 +25,7 @@ from open_storyline.mvp.edit_plan import (
     validate_stock_asset_limit,
     validate_stock_policy,
 )
+from open_storyline.mvp.creative_intent import build_creative_intent
 from open_storyline.mvp.shorts import ShortCandidate, ShortsPlan, build_shorts_plan_artifact
 from open_storyline.mvp.scene_boundaries import build_scene_boundaries
 
@@ -49,6 +50,7 @@ class FakeRegion:
 
 class FakeEditClient:
     model = "cx/gpt-5.6-sol"
+    reasoning_effort = "medium"
 
     def __init__(self, response):
         self.response = response
@@ -364,8 +366,12 @@ class AgenticEditPlannerTests(unittest.IsolatedAsyncioTestCase):
                         "evidence_ids",
                     ],
                 )
+                self.assertIn(
+                    "intent_decisions",
+                    payload["exact_field_contract"]["ClipEditPlan"],
+                )
                 self.assertNotIn("response_schema", client.call)
-                self.assertEqual(client.call["reasoning_effort"], "low")
+                self.assertEqual(client.call["reasoning_effort"], "medium")
                 template = payload["valid_output_template"]
                 self.assertEqual(template["clips"][0]["source_window"]["end_ms"], 20_000)
                 self.assertEqual(
@@ -401,10 +407,10 @@ class AgenticEditPlannerTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("do not collapse", repair_payload["repair_task"])
         self.assertNotIn("output_contract", repair_payload)
         self.assertNotIn("response_schema", client.calls[1])
-        self.assertEqual(client.calls[1]["reasoning_effort"], "low")
+        self.assertEqual(client.calls[1]["reasoning_effort"], "medium")
         self.assertEqual(plan.clips[0].segments[0].layout.mode, "crop")
 
-    async def test_falls_back_to_valid_evidence_template_after_invalid_repair(self):
+    async def test_render_mode_fails_after_invalid_repair(self):
         planner, client, kwargs = planner_fixture(
             "screen", "Keep the validated screen evidence visible."
         )
@@ -414,16 +420,33 @@ class AgenticEditPlannerTests(unittest.IsolatedAsyncioTestCase):
         }
         client.response = [deepcopy(invalid_response), deepcopy(invalid_response)]
 
-        plan = await planner.plan(**kwargs)
+        with self.assertRaises(EditPlanError) as caught:
+            await planner.plan(**kwargs)
 
+        self.assertEqual(caught.exception.code, "EDIT_PLAN_REPAIR_EXHAUSTED")
         self.assertEqual(len(client.calls), 2)
-        self.assertEqual(len(plan.clips[0].segments), 1)
+
+    async def test_shadow_mode_marks_schema_fallback_as_degraded(self):
+        planner, client, kwargs = planner_fixture(
+            "screen", "Keep the validated screen evidence visible."
+        )
+        invalid_response = {
+            "format": {"aspect_ratio": "9:16"},
+            "clips": [{"segments": [{"operation": "smart crop"}]}],
+        }
+        client.response = [deepcopy(invalid_response), deepcopy(invalid_response)]
+
+        plan = await planner.plan(**kwargs, allow_degraded_fallback=True)
+
+        self.assertTrue(plan.degraded)
+        self.assertEqual(
+            plan.degradation_reason,
+            "schema_repair_exhausted_shadow_fallback",
+        )
         self.assertEqual(
             plan.clips[0].segments[0].layout.focal_target.region_id,
             "region-1",
         )
-        self.assertIn("validation failed", plan.clips[0].segments[0].reason)
-        self.assertIn("crop", plan.requested_capabilities)
 
     async def test_removes_source_windows_from_text_and_image_overlays(self):
         planner, client, kwargs = planner_fixture(
@@ -573,23 +596,185 @@ class AgenticEditPlannerTests(unittest.IsolatedAsyncioTestCase):
             "max_stock_assets_per_clip": 0,
             "stock_policy": "off",
         })
-        fallback_plan = await planner.plan(**blocked_kwargs)
-        self.assertEqual(fallback_plan.clips[0].asset_requests, ())
+        with self.assertRaises(EditPlanError) as caught:
+            await planner.plan(**blocked_kwargs)
+        self.assertEqual(caught.exception.code, "EDIT_PLAN_REPAIR_EXHAUSTED")
         self.assertEqual(len(client.calls), 2)
 
-    async def test_falls_back_from_clip_expansion_and_derives_required_capabilities(self):
+    async def test_rejects_clip_expansion_after_one_repair_and_derives_capabilities(self):
         planner, client, kwargs = planner_fixture("speaker", "Keep the speaker visible.")
         client.response["clips"][0]["source_window"]["end_ms"] = 21_000
         client.response["clips"][0]["segments"][0]["source_window"]["end_ms"] = 21_000
         client.response["clips"][0]["segments"][0]["timeline_window"]["end_ms"] = 21_000
-        plan = await planner.plan(**kwargs)
-        self.assertEqual(plan.clips[0].source_window.end_ms, 20_000)
+        with self.assertRaises(EditPlanError) as caught:
+            await planner.plan(**kwargs)
+        self.assertEqual(caught.exception.code, "EDIT_PLAN_REPAIR_EXHAUSTED")
         self.assertEqual(len(client.calls), 2)
 
         planner, client, kwargs = planner_fixture("speaker", "Keep the speaker visible.")
         client.response["requested_capabilities"].remove("hard_cut")
         plan = await planner.plan(**kwargs)
         self.assertIn("hard_cut", plan.requested_capabilities)
+
+    async def test_required_prompt_assets_must_be_requested_and_executed(self):
+        prompt = (
+            "Use exactly one generated editorial image for approximately 2-4 seconds. "
+            "Use exactly one vertical Pexels video for approximately 3-5 seconds."
+        )
+        planner, client, kwargs = planner_fixture("speaker", prompt)
+        response = client.response
+        response["requested_capabilities"].append("image_overlay")
+        response["clips"][0]["segments"][0]["overlays"] = [
+            {
+                "id": "generated-overlay",
+                "kind": "image",
+                "timeline_window": {"start_ms": 1000, "end_ms": 4000},
+                "asset_id": "generated-1",
+                "position": "top_right",
+            },
+            {
+                "id": "pexels-overlay",
+                "kind": "image",
+                "timeline_window": {"start_ms": 5000, "end_ms": 9000},
+                "asset_id": "pexels-1",
+                "position": "top_left",
+            },
+        ]
+        response["clips"][0]["asset_requests"] = [
+            {
+                "id": "generated-1",
+                "kind": "generated_image",
+                "provider": "9router",
+                "timeline_window": {"start_ms": 1000, "end_ms": 4000},
+                "visual_gap": "the source cannot show the requested concept",
+                "purpose": "show the abstract process",
+                "rationale": "an editorial still closes the conceptual gap",
+                "prompt": "a restrained editorial process diagram",
+            },
+            {
+                "id": "pexels-1",
+                "kind": "stock_video",
+                "provider": "pexels",
+                "timeline_window": {"start_ms": 5000, "end_ms": 9000},
+                "visual_gap": "the source cannot show the mentioned real-world action",
+                "purpose": "show the real-world action",
+                "rationale": "a short vertical cutaway closes the visible gap",
+                "prompt": "vertical real-world action",
+            },
+        ]
+        response["clips"][0]["intent_decisions"] = [
+            {
+                "intent_id": "prompt-generated-image",
+                "decision": "execute",
+                "asset_ids": ["generated-1"],
+                "operation_ids": ["generated-overlay"],
+            },
+            {
+                "intent_id": "prompt-pexels-video",
+                "decision": "execute",
+                "asset_ids": ["pexels-1"],
+                "operation_ids": ["pexels-overlay"],
+            },
+        ]
+        intent = build_creative_intent(
+            prompt,
+            {
+                "settings_version": 1,
+                "asset_policy": "auto",
+                "max_generated_assets_per_clip": 1,
+                "stock_policy": "auto",
+                "max_stock_assets_per_clip": 1,
+            },
+            selected_clip_count=1,
+        )
+        kwargs.update({
+            "creative_intent": intent,
+            "max_generated_assets_per_clip": 1,
+            "max_stock_assets_per_clip": 1,
+            "stock_policy": "auto",
+        })
+
+        plan = await planner.plan(**kwargs)
+
+        self.assertEqual(
+            [item.kind for item in plan.clips[0].asset_requests],
+            ["generated_image", "stock_video"],
+        )
+        self.assertEqual(len(plan.clips[0].intent_decisions), 2)
+
+    async def test_required_prompt_assets_cannot_complete_source_only(self):
+        prompt = (
+            "Use exactly one generated editorial image and exactly one Pexels video."
+        )
+        planner, client, kwargs = planner_fixture("speaker", prompt)
+        client.response = [deepcopy(client.response), deepcopy(client.response)]
+        kwargs.update({
+            "creative_intent": build_creative_intent(
+                prompt,
+                {
+                    "asset_policy": "auto",
+                    "max_generated_assets_per_clip": 1,
+                    "stock_policy": "auto",
+                    "max_stock_assets_per_clip": 1,
+                },
+                selected_clip_count=1,
+            ),
+            "max_generated_assets_per_clip": 1,
+            "max_stock_assets_per_clip": 1,
+            "stock_policy": "auto",
+        })
+
+        with self.assertRaises(EditPlanError) as caught:
+            await planner.plan(**kwargs)
+
+        self.assertEqual(caught.exception.code, "EDIT_PLAN_REPAIR_EXHAUSTED")
+
+    async def test_required_asset_visible_duration_must_match_prompt_contract(self):
+        prompt = "Use exactly one generated editorial image for approximately 2-4 seconds."
+        planner, client, kwargs = planner_fixture("speaker", prompt)
+        response = client.response
+        response["requested_capabilities"].append("image_overlay")
+        response["clips"][0]["segments"][0]["overlays"] = [{
+            "id": "generated-overlay",
+            "kind": "image",
+            "timeline_window": {"start_ms": 1000, "end_ms": 1500},
+            "asset_id": "generated-1",
+            "position": "top_right",
+        }]
+        response["clips"][0]["asset_requests"] = [{
+            "id": "generated-1",
+            "kind": "generated_image",
+            "provider": "9router",
+            "timeline_window": {"start_ms": 1000, "end_ms": 4000},
+            "visual_gap": "the source cannot show the requested concept",
+            "purpose": "show the abstract process",
+            "rationale": "an editorial still closes the conceptual gap",
+            "prompt": "a restrained editorial process diagram",
+        }]
+        response["clips"][0]["intent_decisions"] = [{
+            "intent_id": "prompt-generated-image",
+            "decision": "execute",
+            "asset_ids": ["generated-1"],
+            "operation_ids": ["generated-overlay"],
+        }]
+        client.response = [deepcopy(response), deepcopy(response)]
+        kwargs.update({
+            "creative_intent": build_creative_intent(
+                prompt,
+                {
+                    "asset_policy": "auto",
+                    "max_generated_assets_per_clip": 1,
+                    "stock_policy": "off",
+                },
+                selected_clip_count=1,
+            ),
+            "max_generated_assets_per_clip": 1,
+        })
+
+        with self.assertRaises(EditPlanError) as caught:
+            await planner.plan(**kwargs)
+
+        self.assertEqual(caught.exception.code, "EDIT_PLAN_REPAIR_EXHAUSTED")
 
 
 if __name__ == "__main__":

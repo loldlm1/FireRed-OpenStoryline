@@ -537,6 +537,12 @@ function syncAdvancedSettings() {
   } else if (elements.assetPolicy.value === 'auto' && elements.maxGeneratedAssets.value === '0') {
     elements.maxGeneratedAssets.value = '2';
   }
+  if (agentic && elements.assetPolicy.value === 'required' && elements.maxGeneratedAssets.value === '0') {
+    elements.maxGeneratedAssets.value = '1';
+  }
+  if (agentic && elements.stockPolicy.value === 'required' && elements.maxStockAssets.value === '0') {
+    elements.maxStockAssets.value = '1';
+  }
 }
 
 function promptPayload() {
@@ -546,13 +552,14 @@ function promptPayload() {
     max_clips: Number(elements.maxClips.value),
     edit_mode: elements.editMode.value,
     asset_policy: agentic ? elements.assetPolicy.value : 'off',
-    max_generated_assets_per_clip: agentic && elements.assetPolicy.value === 'auto'
+    max_generated_assets_per_clip: agentic && elements.assetPolicy.value !== 'off'
       ? Number(elements.maxGeneratedAssets.value)
       : 0,
     stock_policy: agentic ? elements.stockPolicy.value : 'off',
-    max_stock_assets_per_clip: agentic && elements.stockPolicy.value === 'auto'
+    max_stock_assets_per_clip: agentic && elements.stockPolicy.value !== 'off'
       ? Number(elements.maxStockAssets.value)
       : 0,
+    stock_asset_kind: 'video',
   };
 }
 

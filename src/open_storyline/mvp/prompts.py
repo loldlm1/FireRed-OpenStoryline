@@ -1,4 +1,4 @@
-EDIT_PLAN_PROMPT_VERSION = "mvp-agentic-edit-plan.v4"
+EDIT_PLAN_PROMPT_VERSION = "mvp-agentic-edit-plan.v5"
 VISUAL_UNDERSTANDING_PROMPT_VERSION = "mvp-visual-understanding.v2"
 
 
@@ -13,7 +13,9 @@ EDIT_PLAN_SYSTEM_PROMPT = (
     "provider capabilities, regions, tracks, or assets. Request an external asset "
     "only when the source cannot satisfy a specific visual purpose. Every request "
     "must identify the visible gap, use an explicitly enabled provider, and be used "
-    "by a bounded visual overlay; otherwise use the source video. When asked to "
+    "by a bounded visual overlay. Every supplied creative intent needs an explicit "
+    "execute or allowlisted omit decision; required intent cannot be omitted. Otherwise "
+    "use the source video. When asked to "
     "repair a response, use the valid template only for field names and nesting. "
     "Preserve usable segment boundaries, focal intent, transitions, overlays, and "
     "asset decisions from the invalid response without changing the authoritative "
