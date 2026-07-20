@@ -159,6 +159,10 @@ class KamalConfigTests(unittest.TestCase):
         self.assertEqual(config["env"]["clear"]["OPENSTORYLINE_PEXELS_MAX_BYTES"], 83886080)
         self.assertIs(config["env"]["clear"]["OPENSTORYLINE_CREATIVE_QA_ENABLED"], True)
         self.assertIs(config["env"]["clear"]["OPENSTORYLINE_CREATIVE_QA_STRICT"], True)
+        self.assertEqual(
+            config["env"]["clear"]["OPENSTORYLINE_RENDER_PROMOTION_MODE"],
+            "report",
+        )
         self.assertIs(config["env"]["clear"]["OPENSTORYLINE_SEMANTIC_QA_ENABLED"], False)
         self.assertEqual(config["env"]["clear"]["OPENSTORYLINE_SEMANTIC_QA_MAX_FRAMES"], 4)
         self.assertEqual(
@@ -195,6 +199,8 @@ class KamalConfigTests(unittest.TestCase):
         self.assertIn("OPENSTORYLINE_PEXELS_LICENSE_REVIEWED_AT=", kamal_env)
         self.assertIn("OPENSTORYLINE_RENDER_QUALITY_PROFILE=high", kamal_env)
         self.assertIn("OPENSTORYLINE_RENDER_QUALITY_PROFILE=high", local_env)
+        self.assertIn("OPENSTORYLINE_RENDER_PROMOTION_MODE=report", kamal_env)
+        self.assertIn("OPENSTORYLINE_RENDER_PROMOTION_MODE=report", local_env)
 
     def test_pexels_release_gate_is_conditional_and_offline(self):
         wrapper = (ROOT / "bin" / "kamal-mvp").read_text(encoding="utf-8")

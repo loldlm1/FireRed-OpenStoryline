@@ -147,6 +147,15 @@ versioned `job.json` snapshots, every registered JSON/SRT document up to
 deterministic structural reviews, and optional agent/human reviews. Video,
 audio, frame, thumbnail, and ZIP bytes never enter PostgreSQL.
 
+Agentic render candidates also produce bounded `frame_quality_qa.json` and
+`render_promotion.json` documents. Frame quality records cropdetect active-area
+ratios, decoded frame counts, bounded blur/blockiness signal summaries, and
+caption-masked aligned SSIM/PSNR samples without retaining sampled frames or
+private paths. `OPENSTORYLINE_RENDER_PROMOTION_MODE=report` preserves completion
+while exposing blocker codes; `enforce` removes the candidate video before it
+can be registered when deterministic geometry, media structure, caption, or
+asset-conformance evidence blocks promotion. `off` is a rollback-only mode.
+
 Reusable runs also retain the session source hash, prompt version and attempt
 number, settings snapshot, and whether the user selected the completed run as
 the favorite. Favorite selection is human creative preference, not an audit or
@@ -171,9 +180,10 @@ Use bounded JSON or NDJSON output when another agent will inspect the result:
 `audit list` also filters by editing session, state, stage, latest verdict,
 error code, media availability, and audit hold. Follow its `next_cursor` for
 the next bounded page. `audit verify` uses FFprobe plus manifest/subtitle checks
-to assess decodability, stream metadata, duration/count agreement, and cue
-ordering. Its verdict is structural evidence only; it does not claim creative,
-semantic, or visual quality.
+to assess decodability, stream metadata, duration/count agreement, cue ordering,
+and the recorded promotion/frame-quality documents. Its verdict confirms
+evidence integrity and structure; it does not claim engagement, semantic
+relevance, or creative taste.
 
 Record a private agent or human review through stdin or a file so notes do not
 enter shell history:

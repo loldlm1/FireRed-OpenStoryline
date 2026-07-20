@@ -351,6 +351,9 @@ El release seguro mantiene estos valores iniciales:
 OPENSTORYLINE_AGENTIC_EDITING_MODE=shadow
 OPENSTORYLINE_GENERATED_ASSETS_ENABLED=false
 OPENSTORYLINE_PEXELS_ENABLED=false
+OPENSTORYLINE_RENDER_QUALITY_PROFILE=high
+OPENSTORYLINE_RENDER_FPS_CAP=60
+OPENSTORYLINE_RENDER_PROMOTION_MODE=report
 OPENSTORYLINE_SEMANTIC_QA_ENABLED=false
 ```
 
@@ -360,12 +363,15 @@ nichos no relacionados; esos medios y reportes nunca entran a Git. Activa en
 orden: render agentivo source-only, imágenes generadas y, finalmente, Pexels.
 Verifica `/up`, `/health`, recuperación de cola, descargas, auditoría, retención,
 visibilidad del objetivo, sincronía, latencia y errores de proveedor después de
-cada cambio.
+cada cambio. `report` conserva la finalización mientras calibra los bloqueadores;
+`enforce` se activa sólo para el canary aprobado y elimina el candidato antes de
+registrarlo si falla geometría, captions, estructura o conformidad de assets.
 
 Sin autorización para desplegar o llamar proveedores, todos los flags permanecen
 apagados. El rollback normal no requiere restaurar PostgreSQL: vuelve la UI a
 legacy, fija `OPENSTORYLINE_AGENTIC_EDITING_MODE=off`, desactiva assets/QA
-semántica y ejecuta `./bin/kamal-mvp rollback` al release previo. Restaura la base
+semántica, usa `OPENSTORYLINE_RENDER_PROMOTION_MODE=off` y el perfil `legacy`, y
+ejecuta `./bin/kamal-mvp rollback` al release previo. Restaura la base
 sólo ante una migración incompatible revisada por separado; esta entrega no añade
 migraciones.
 
