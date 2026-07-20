@@ -137,6 +137,41 @@ class EditPreflightTests(unittest.TestCase):
         self.assertIn("REGION_REFERENCE_UNKNOWN", codes)
         self.assertIn("EVIDENCE_REFERENCE_UNKNOWN", codes)
 
+    def test_blocks_unapproved_fit_fallback_from_an_automatic_crop(self):
+        clip = ClipEditPlan(
+            clip_index=1,
+            source_window=TimeWindow(start_ms=0, end_ms=20_000),
+            output_name="short.mp4",
+            segments=(EditSegment(
+                id="segment",
+                source_window=TimeWindow(start_ms=0, end_ms=20_000),
+                timeline_window=TimeWindow(start_ms=0, end_ms=20_000),
+                layout=LayoutSpec(
+                    mode="crop",
+                    focal_target=FocalTarget(semantic_role="speaker"),
+                    fallback="fit",
+                ),
+                reason="keep the speaker visible",
+            ),),
+        )
+        plan = EditPlan(
+            planner_version="test.v1",
+            source_duration_ms=20_000,
+            requested_capabilities=("crop", "hard_cut", "subtitles"),
+            clips=(clip,),
+        )
+
+        report = build_preflight(
+            plan,
+            available_capabilities=plan.requested_capabilities,
+            asset_policy="off",
+        )
+
+        self.assertIn(
+            "FULL_FRAME_FALLBACK_UNAPPROVED",
+            {finding.code for finding in report.findings},
+        )
+
     def test_blocks_subtitle_zone_conflicts_and_unresolved_image_layers(self):
         clip = ClipEditPlan(
             clip_index=1,

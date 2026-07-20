@@ -147,6 +147,109 @@ class VisualUnderstanding(VisualModel):
         return self.model_dump(mode="json")
 
 
+def scope_visual_understanding(
+    understanding: VisualUnderstanding,
+    *,
+    clip_index: int,
+) -> VisualUnderstanding:
+    prefix = f"clip-{int(clip_index):02d}"
+    raw_frames = list(understanding.frame_manifest.get("frames") or [])
+    frame_ids = {
+        str(frame.get("id")): f"{prefix}-frame-{index:03d}"
+        for index, frame in enumerate(raw_frames, start=1)
+        if isinstance(frame, dict) and frame.get("id")
+    }
+    scoped_frames = [
+        {**frame, "id": frame_ids.get(str(frame.get("id")), str(frame.get("id")))}
+        for frame in raw_frames
+        if isinstance(frame, dict)
+    ]
+    region_ids = {
+        region.id: f"{prefix}-region-{index:03d}"
+        for index, region in enumerate(understanding.regions, start=1)
+    }
+    track_ids = {
+        track.id: f"{prefix}-track-{index:03d}"
+        for index, track in enumerate(understanding.tracks, start=1)
+    }
+    regions = tuple(
+        region.model_copy(update={
+            "id": region_ids[region.id],
+            "frame_id": frame_ids.get(region.frame_id, region.frame_id),
+        })
+        for region in understanding.regions
+    )
+    tracks = tuple(
+        track.model_copy(update={
+            "id": track_ids[track.id],
+            "region_ids": tuple(region_ids[item] for item in track.region_ids),
+        })
+        for track in understanding.tracks
+    )
+    scenes = tuple(
+        scene.model_copy(update={
+            "salient_region_ids": tuple(
+                region_ids[item]
+                for item in scene.salient_region_ids
+                if item in region_ids
+            ),
+        })
+        for scene in understanding.scenes
+    )
+    manifest = {
+        **understanding.frame_manifest,
+        "frame_count": len(scoped_frames),
+        "frames": scoped_frames,
+        "scope": {"kind": "selected_clip", "clip_index": int(clip_index)},
+    }
+    return understanding.model_copy(update={
+        "frame_manifest": manifest,
+        "regions": regions,
+        "tracks": tracks,
+        "scenes": scenes,
+    })
+
+
+def merge_visual_understandings(
+    global_understanding: VisualUnderstanding,
+    clip_understandings: tuple[VisualUnderstanding, ...],
+) -> VisualUnderstanding:
+    frame_manifest = dict(global_understanding.frame_manifest)
+    frames = list(frame_manifest.get("frames") or [])
+    regions = list(global_understanding.regions)
+    tracks = list(global_understanding.tracks)
+    warnings = list(global_understanding.warnings)
+    for understanding in clip_understandings:
+        frames.extend(understanding.frame_manifest.get("frames") or [])
+        regions.extend(understanding.regions)
+        tracks.extend(understanding.tracks)
+        warnings.extend(understanding.warnings)
+    frame_ids = [str(frame.get("id")) for frame in frames if isinstance(frame, dict)]
+    region_ids = [region.id for region in regions]
+    track_ids = [track.id for track in tracks]
+    if (
+        len(frame_ids) != len(set(frame_ids))
+        or len(region_ids) != len(set(region_ids))
+        or len(track_ids) != len(set(track_ids))
+    ):
+        raise VisualUnderstandingError(
+            "VISUAL_SCOPE_COLLISION",
+            "clip-local visual IDs must be unique",
+        )
+    frame_manifest.update({
+        "frame_count": len(frames),
+        "frames": frames,
+        "global_frame_count": len(global_understanding.frame_manifest.get("frames") or []),
+        "clip_local_frame_count": len(frames) - len(global_understanding.frame_manifest.get("frames") or []),
+    })
+    return global_understanding.model_copy(update={
+        "frame_manifest": frame_manifest,
+        "regions": tuple(regions),
+        "tracks": tuple(tracks),
+        "warnings": tuple(warnings[:64]),
+    })
+
+
 def _normalize_tracks(
     raw_tracks: Any,
     *,

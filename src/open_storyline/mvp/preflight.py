@@ -5,6 +5,7 @@ from datetime import datetime, timezone
 from typing import Any, Iterable
 
 from open_storyline.mvp.edit_plan import AssetPolicy, EditPlan, required_capabilities
+from open_storyline.mvp.visual_coverage import ClipVisualCoverageReport
 
 
 PREFLIGHT_VERSION = "edit_preflight.v1"
@@ -64,6 +65,7 @@ def build_preflight(
     known_track_ids: Iterable[str] = (),
     known_evidence_ids: Iterable[str] = (),
     known_evidence_ids_by_clip: dict[int, Iterable[str]] | None = None,
+    visual_coverage: ClipVisualCoverageReport | None = None,
     max_segments_per_clip: int = 48,
     max_overlays_per_clip: int = 16,
     max_assets_per_clip: int = 8,
@@ -126,7 +128,18 @@ def build_preflight(
                     "warn",
                     "CROP_TARGET_MISSING",
                     f"clips.{clip.clip_index}.segments.{segment.id}.layout",
-                    "Crop has no semantic focal target and must use its explicit fallback policy.",
+                    "Crop has no semantic focal target and uses the explicit center-crop strategy.",
+                ))
+            if (
+                segment.layout.mode == "crop"
+                and segment.layout.fallback in {"fit", "letterbox"}
+                and not segment.layout.allow_full_frame_fallback
+            ):
+                findings.append(PreflightFinding(
+                    "block",
+                    "FULL_FRAME_FALLBACK_UNAPPROVED",
+                    f"clips.{clip.clip_index}.segments.{segment.id}.layout.fallback",
+                    "Automatic fit or letterbox fallback requires explicit permission.",
                 ))
             target = segment.layout.focal_target
             if target is not None:
@@ -232,6 +245,16 @@ def build_preflight(
                     "ASSET_UNRESOLVED",
                     source,
                     "A required asset has not been resolved.",
+                ))
+
+    if visual_coverage is not None:
+        for segment in visual_coverage.segments:
+            for code in segment.blocker_codes:
+                findings.append(PreflightFinding(
+                    "block",
+                    code,
+                    f"clips.{segment.clip_index}.segments.{segment.segment_id}.visual_coverage",
+                    "Crop target lacks sufficient observations from its own source window.",
                 ))
 
     blocking = sum(1 for finding in findings if finding.severity == "block")

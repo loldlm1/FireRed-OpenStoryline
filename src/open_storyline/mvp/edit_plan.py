@@ -122,7 +122,8 @@ class FocalTarget(PlanModel):
 class LayoutSpec(PlanModel):
     mode: LayoutMode
     focal_target: FocalTarget | None = None
-    fallback: Literal["crop", "fit", "letterbox", "source"] = "fit"
+    fallback: Literal["crop", "fit", "letterbox", "source"] = "crop"
+    allow_full_frame_fallback: bool = False
     safe_margin_ratio: float = Field(default=0.08, ge=0, le=0.35, allow_inf_nan=False)
     max_zoom: float = Field(default=1.0, ge=1.0, le=4.0, allow_inf_nan=False)
 
@@ -409,7 +410,11 @@ def _valid_clip_plan_template(clip_context: dict[str, Any]) -> dict[str, Any]:
     tracks = clip_context.get("tracks") or []
     valid_regions = [item for item in regions if isinstance(item, dict) and item.get("id")]
     valid_tracks = [item for item in tracks if isinstance(item, dict) and item.get("id")]
-    if valid_regions:
+    if valid_tracks:
+        track = max(valid_tracks, key=lambda item: float(item.get("confidence") or 0))
+        focal_target = {"track_id": str(track["id"])}
+        evidence_ids.append(str(track["id"]))
+    elif valid_regions:
         region = max(
             valid_regions,
             key=lambda item: (
@@ -419,13 +424,10 @@ def _valid_clip_plan_template(clip_context: dict[str, Any]) -> dict[str, Any]:
         )
         focal_target = {"region_id": str(region["id"])}
         evidence_ids.append(str(region["id"]))
-    elif valid_tracks:
-        track = max(valid_tracks, key=lambda item: float(item.get("confidence") or 0))
-        focal_target = {"track_id": str(track["id"])}
-        evidence_ids.append(str(track["id"]))
     layout = {
         "mode": "crop" if focal_target else "fit",
-        "fallback": "fit",
+        "fallback": "crop",
+        "allow_full_frame_fallback": False,
     }
     if focal_target:
         layout["focal_target"] = focal_target
@@ -700,6 +702,7 @@ class AgenticEditPlanner:
         stock_policy: AssetPolicy = "off",
         creative_intent: CreativeIntent | None = None,
         allow_degraded_fallback: bool = False,
+        visual_coverage_feedback: dict[str, Any] | None = None,
         renderer_capabilities: Iterable[str] = SUPPORTED_CAPABILITIES,
     ) -> EditPlan:
         available_capabilities = frozenset(str(value) for value in renderer_capabilities)
@@ -780,8 +783,11 @@ class AgenticEditPlanner:
                 "Every creative_intent requirement needs an explicit intent_decision.",
                 "Required asset intent must map exact-count asset_requests to executed image overlays.",
                 "Required intent cannot be omitted; optional omission reasons are allowlisted by the schema.",
+                "Crop/focus segments should use same-window track evidence spanning the segment.",
+                "A fit or letterbox crop fallback is valid only with allow_full_frame_fallback=true.",
                 "Never return FFmpeg expressions, commands, paths, or unsupported operations.",
             ],
+            "visual_coverage_feedback": visual_coverage_feedback or {},
             "exact_field_contract": _edit_plan_field_contract(),
         }
         known_region_ids = tuple(region.id for region in visual_understanding.regions)
@@ -1040,7 +1046,7 @@ def build_shadow_edit_plan(
                 id=f"clip-{index:02d}-segment-01",
                 source_window=TimeWindow(start_ms=clip.start_ms, end_ms=clip.end_ms),
                 timeline_window=timeline,
-                layout=LayoutSpec(mode="crop", fallback="fit"),
+                layout=LayoutSpec(mode="crop", fallback="crop"),
                 reason="Characterize the legacy center-crop render in shadow mode.",
             ),),
         ))
@@ -1123,6 +1129,7 @@ class AgenticArtifactNames:
     creative_intent: str = "creative_intent.json"
     scene_boundaries: str = "scene_boundaries.json"
     visual_understanding: str = "visual_understanding.json"
+    clip_visual_coverage: str = "clip_visual_coverage.json"
     shorts_plan: str = "shorts_plan.json"
     edit_plan: str = "edit_plan.json"
     preflight: str = "edit_preflight.json"

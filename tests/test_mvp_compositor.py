@@ -2,7 +2,7 @@ import json
 from types import SimpleNamespace
 import unittest
 
-from open_storyline.mvp.compositor import resolve_clip_composition
+from open_storyline.mvp.compositor import CompositionError, resolve_clip_composition
 from open_storyline.mvp.edit_plan import (
     ClipEditPlan,
     EditSegment,
@@ -109,6 +109,7 @@ class CompositorTests(unittest.TestCase):
                 mode="crop",
                 focal_target=FocalTarget(region_id="screen"),
                 fallback="letterbox",
+                allow_full_frame_fallback=True,
             ),
         })
         wide_visual = visual(
@@ -124,6 +125,23 @@ class CompositorTests(unittest.TestCase):
         )
         self.assertEqual(wide.segments[0].strategy, "letterbox")
         self.assertTrue(wide.segments[0].fallback_used)
+        self.assertTrue(wide.segments[0].fallback_allowed)
+        self.assertLess(wide.segments[0].expected_active_area_ratio, 0.4)
+
+        unapproved = wide_segment.model_copy(update={
+            "layout": wide_segment.layout.model_copy(update={
+                "allow_full_frame_fallback": False,
+            }),
+        })
+        with self.assertRaises(CompositionError) as caught:
+            resolve_clip_composition(
+                clip_plan([unapproved]),
+                visual=wide_visual,
+                source_media=source,
+                output_width=180,
+                output_height=320,
+            )
+        self.assertEqual(caught.exception.code, "COMPOSITION_CROP_TARGET_TOO_WIDE")
 
     def test_bounds_adjacent_crop_velocity_and_records_center_fallback(self):
         source = MediaInfo(4000, 640, 360, True)
@@ -186,7 +204,49 @@ class CompositorTests(unittest.TestCase):
             output_height=320,
         )
         self.assertEqual(fallback.fallback_count, 1)
+        self.assertEqual(fallback.segments[0].strategy, "crop")
+        self.assertEqual(fallback.segments[0].expected_active_area_ratio, 1.0)
         self.assertIn("fallback", fallback.segments[0].reason.lower())
+
+    def test_resolved_crop_contains_all_same_window_target_observations(self):
+        source = MediaInfo(4000, 640, 360, True)
+        segment = EditSegment(
+            id="tracked-speaker",
+            source_window=TimeWindow(start_ms=0, end_ms=4000),
+            timeline_window=TimeWindow(start_ms=0, end_ms=4000),
+            layout=LayoutSpec(
+                mode="crop",
+                focal_target=FocalTarget(semantic_role="speaker"),
+                fallback="crop",
+            ),
+            reason="keep the moving speaker visible",
+        )
+        observations = [
+            region("speaker-left", "frame-left", x=0.4, width=0.1),
+            region("speaker-right", "frame-right", x=0.5, width=0.1),
+        ]
+        composition = resolve_clip_composition(
+            clip_plan([segment]),
+            visual=visual(
+                [
+                    {"id": "frame-left", "timestamp_ms": 500},
+                    {"id": "frame-right", "timestamp_ms": 3500},
+                ],
+                observations,
+            ),
+            source_media=source,
+            output_width=180,
+            output_height=320,
+        )
+
+        crop = composition.segments[0].crop
+        self.assertIsNotNone(crop)
+        for observation in observations:
+            self.assertLessEqual(crop.x, observation.bbox.x * source.width)
+            self.assertGreaterEqual(
+                crop.x + crop.width,
+                (observation.bbox.x + observation.bbox.width) * source.width,
+            )
 
     def test_filtergraph_is_server_generated_bounded_and_requires_audio(self):
         segment = SimpleNamespace(

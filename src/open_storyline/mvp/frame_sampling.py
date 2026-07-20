@@ -132,6 +132,111 @@ def build_frame_requests(
     return tuple(_evenly_select(deduped, max_frames))
 
 
+def build_clip_frame_requests(
+    scenes: Sequence[SceneInterval],
+    *,
+    source_duration_ms: int,
+    clip_start_ms: int,
+    clip_end_ms: int,
+    max_frames: int,
+) -> tuple[FrameRequest, ...]:
+    if (
+        source_duration_ms <= 0
+        or not scenes
+        or clip_start_ms < 0
+        or clip_end_ms > source_duration_ms
+        or clip_end_ms <= clip_start_ms
+    ):
+        raise FrameSamplingError(
+            "FRAME_CLIP_INVALID",
+            "clip bounds must stay inside the source duration",
+        )
+    if not 5 <= max_frames <= 32:
+        raise FrameSamplingError(
+            "FRAME_CLIP_LIMIT_INVALID",
+            "clip-local max_frames must be between 5 and 32",
+        )
+
+    duration_ms = clip_end_ms - clip_start_ms
+    safe_offset = min(250, max(1, duration_ms // 20))
+    required = [
+        FrameRequest(
+            min(clip_end_ms - 1, clip_start_ms + safe_offset),
+            _scene_for_time(scenes, min(clip_end_ms - 1, clip_start_ms + safe_offset)).id,
+            "clip_safe_start",
+        ),
+        FrameRequest(
+            clip_start_ms + duration_ms // 4,
+            _scene_for_time(scenes, clip_start_ms + duration_ms // 4).id,
+            "clip_first_quartile",
+        ),
+        FrameRequest(
+            clip_start_ms + duration_ms // 2,
+            _scene_for_time(scenes, clip_start_ms + duration_ms // 2).id,
+            "clip_midpoint",
+        ),
+        FrameRequest(
+            clip_start_ms + (duration_ms * 3) // 4,
+            _scene_for_time(scenes, clip_start_ms + (duration_ms * 3) // 4).id,
+            "clip_third_quartile",
+        ),
+        FrameRequest(
+            max(clip_start_ms, clip_end_ms - safe_offset - 1),
+            _scene_for_time(scenes, max(clip_start_ms, clip_end_ms - safe_offset - 1)).id,
+            "clip_safe_end",
+        ),
+    ]
+    scene_candidates: list[FrameRequest] = []
+    for scene in scenes:
+        start_ms = max(scene.start_ms, clip_start_ms)
+        end_ms = min(scene.end_ms, clip_end_ms)
+        if end_ms <= start_ms:
+            continue
+        scene_candidates.append(FrameRequest(start_ms, scene.id, "clip_scene_opening"))
+        scene_candidates.append(FrameRequest(end_ms - 1, scene.id, "clip_scene_closing"))
+
+    uniform_candidates: list[FrameRequest] = []
+    for index in range(max_frames):
+        timestamp_ms = clip_start_ms + int(
+            round((index + 1) * duration_ms / (max_frames + 1))
+        )
+        timestamp_ms = min(clip_end_ms - 1, max(clip_start_ms, timestamp_ms))
+        uniform_candidates.append(FrameRequest(
+            timestamp_ms,
+            _scene_for_time(scenes, timestamp_ms).id,
+            "clip_uniform_coverage",
+        ))
+
+    selected: dict[int, FrameRequest] = {}
+
+    def add(candidate: FrameRequest) -> None:
+        previous = selected.get(candidate.timestamp_ms)
+        if previous is None:
+            selected[candidate.timestamp_ms] = candidate
+            return
+        reasons = "+".join(sorted(set(previous.reason.split("+") + candidate.reason.split("+"))))
+        selected[candidate.timestamp_ms] = FrameRequest(
+            candidate.timestamp_ms,
+            candidate.scene_id,
+            reasons,
+        )
+
+    for candidate in required:
+        add(candidate)
+    remaining = max_frames - len(selected)
+    for candidate in _evenly_select(scene_candidates, max(0, remaining)):
+        add(candidate)
+    remaining = max_frames - len(selected)
+    for candidate in _evenly_select(uniform_candidates, max(0, remaining)):
+        add(candidate)
+    if len(selected) < max_frames:
+        for candidate in uniform_candidates:
+            add(candidate)
+            if len(selected) == max_frames:
+                break
+    return tuple(sorted(selected.values(), key=lambda item: item.timestamp_ms))
+
+
 def _scaled_dimensions(source_width: int, source_height: int, max_width: int, max_height: int) -> tuple[int, int]:
     if min(source_width, source_height, max_width, max_height) <= 0:
         raise FrameSamplingError("FRAME_DIMENSIONS_INVALID", "frame dimensions must be positive")
@@ -154,17 +259,38 @@ def sample_frames(
     max_height: int = 512,
     max_frame_bytes: int = 1_500_000,
     timeout_per_frame: float = 120.0,
+    clip_start_ms: int | None = None,
+    clip_end_ms: int | None = None,
+    id_prefix: str = "",
 ) -> FrameManifest:
     if not 16_384 <= max_frame_bytes <= 8 * 1024 * 1024:
         raise FrameSamplingError(
             "FRAME_BYTES_LIMIT_INVALID",
             "max_frame_bytes must be between 16384 and 8388608",
         )
-    requests = build_frame_requests(
-        scene_report.scenes,
-        source_duration_ms=scene_report.source_duration_ms,
-        max_frames=max_frames,
+    if (clip_start_ms is None) != (clip_end_ms is None):
+        raise FrameSamplingError(
+            "FRAME_CLIP_INVALID",
+            "clip_start_ms and clip_end_ms must be supplied together",
+        )
+    requests = (
+        build_frame_requests(
+            scene_report.scenes,
+            source_duration_ms=scene_report.source_duration_ms,
+            max_frames=max_frames,
+        )
+        if clip_start_ms is None
+        else build_clip_frame_requests(
+            scene_report.scenes,
+            source_duration_ms=scene_report.source_duration_ms,
+            clip_start_ms=int(clip_start_ms),
+            clip_end_ms=int(clip_end_ms),
+            max_frames=max_frames,
+        )
     )
+    clean_prefix = str(id_prefix or "")
+    if clean_prefix and not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]*-", clean_prefix):
+        raise FrameSamplingError("FRAME_ID_PREFIX_INVALID", "frame ID prefix is invalid")
     width, height = _scaled_dimensions(source_width, source_height, max_width, max_height)
     sampled: list[SampledFrame] = []
     source_path = str(Path(source).resolve())
@@ -214,7 +340,7 @@ def sample_frames(
                 f"sampled frame exceeds the {max_frame_bytes}-byte limit",
             )
         sampled.append(SampledFrame(
-            id=f"frame-{index:03d}",
+            id=f"{clean_prefix}frame-{index:03d}",
             timestamp_ms=request.timestamp_ms,
             scene_id=request.scene_id,
             width=width,

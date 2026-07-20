@@ -3,11 +3,17 @@ import json
 import unittest
 from unittest.mock import patch
 
-from open_storyline.mvp.frame_sampling import build_frame_requests, sample_frames
+from open_storyline.mvp.frame_sampling import (
+    build_clip_frame_requests,
+    build_frame_requests,
+    sample_frames,
+)
 from open_storyline.mvp.scene_boundaries import build_scene_boundaries
 from open_storyline.mvp.visual_understanding import (
     VisualUnderstandingError,
     VisualUnderstandingPlanner,
+    merge_visual_understandings,
+    scope_visual_understanding,
     validate_visual_understanding,
 )
 
@@ -89,6 +95,28 @@ class VisualUnderstandingTests(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn("/tmp/source.mp4", serialized)
         self.assertTrue(all(frame.width == 512 and frame.height == 288 for frame in manifest.frames))
 
+    def test_clip_sampling_covers_a_late_selected_window_deterministically(self):
+        first = build_clip_frame_requests(
+            self.scenes.scenes,
+            source_duration_ms=30_000,
+            clip_start_ms=20_000,
+            clip_end_ms=29_000,
+            max_frames=6,
+        )
+        second = build_clip_frame_requests(
+            self.scenes.scenes,
+            source_duration_ms=30_000,
+            clip_start_ms=20_000,
+            clip_end_ms=29_000,
+            max_frames=6,
+        )
+
+        self.assertEqual(first, second)
+        self.assertEqual(len(first), 6)
+        self.assertTrue(all(20_000 <= item.timestamp_ms < 29_000 for item in first))
+        self.assertLessEqual(first[0].timestamp_ms, 20_500)
+        self.assertGreaterEqual(first[-1].timestamp_ms, 28_500)
+
     async def test_prompt_maps_attached_images_to_exact_frame_order(self):
         manifest = self._manifest()
         client = FakeVisionClient()
@@ -115,6 +143,30 @@ class VisualUnderstandingTests(unittest.IsolatedAsyncioTestCase):
         serialized = json.dumps(understanding.to_dict())
         self.assertNotIn("data:image", serialized)
         self.assertNotIn("jpeg-bytes", serialized)
+
+    async def test_clip_visual_ids_are_scoped_before_merging(self):
+        manifest = self._manifest()
+        first = await VisualUnderstandingPlanner(FakeVisionClient()).plan(
+            frame_manifest=manifest,
+            scene_report=self.scenes,
+            editing_prompt="Keep the speaker visible.",
+            transcript_text="A short explanation.",
+        )
+        second = await VisualUnderstandingPlanner(FakeVisionClient()).plan(
+            frame_manifest=manifest,
+            scene_report=self.scenes,
+            editing_prompt="Keep the speaker visible.",
+            transcript_text="A short explanation.",
+        )
+
+        scoped_first = scope_visual_understanding(first, clip_index=1)
+        scoped_second = scope_visual_understanding(second, clip_index=2)
+        merged = merge_visual_understandings(first, (scoped_first, scoped_second))
+
+        self.assertTrue(scoped_first.regions[0].id.startswith("clip-01-region-"))
+        self.assertTrue(scoped_second.tracks[0].id.startswith("clip-02-track-"))
+        self.assertEqual(len(merged.regions), 3)
+        self.assertEqual(len({region.id for region in merged.regions}), 3)
 
     def test_normalizes_prose_motion_to_unknown(self):
         manifest = self._manifest()

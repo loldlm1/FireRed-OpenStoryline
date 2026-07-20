@@ -43,10 +43,13 @@ isolated so upstream behavior can continue to be merged into this fork.
 4. The worker writes a rollback-compatible `job.json` snapshot and extracts
    compressed mono audio with FFmpeg from the session source.
 5. Direct Mistral Voxtral transcribes the audio with segment timestamps.
-6. `cx/gpt-5.6-sol` receives the transcript and sampled frames through
-   9Router and returns a structured clip plan.
-7. The server validates duration, bounds, overlap, and output count.
-8. In agentic render mode, the server validates an executable edit plan,
+6. `cx/gpt-5.6-sol` receives the transcript and bounded global scene samples
+   through 9Router and returns a structured clip plan.
+7. The server validates duration, bounds, overlap, and output count, then
+   samples every selected source window independently for crop evidence.
+8. In agentic render mode, the server validates an executable edit plan and
+   same-window crop coverage, performs at most one bounded visual re-analysis
+   and replan when coverage is insufficient,
    resolves only the generated-image and/or Pexels capabilities explicitly
    permitted for that job, and FFmpeg renders the typed timeline operations and
    subtitles on CPU.
@@ -108,6 +111,22 @@ isolated so upstream behavior can continue to be merged into this fork.
   only synthetic schema expectations. The private production session
   `Sesion prueba 1` is an operator-only regression gate and its media,
   transcript, prompts, frames, and reports must never be committed.
+
+## Clip-local crop evidence
+
+- Global samples guide clip selection but never authorize a crop outside their
+  timestamps. Every selected clip receives stable start/end, midpoint,
+  quartile, scene, and uniform samples bounded by `vision_clip_frame_count`.
+- Clip-local frame, region, and track IDs are namespaced by clip before they
+  enter the edit planner. `clip_visual_coverage.json` records timestamps,
+  observation counts, temporal coverage, maximum gaps, and one repair result;
+  it stores no frame bytes.
+- Crop targets without sufficient same-window coverage receive one bounded
+  higher-density re-analysis and replan. Remaining blockers fail before asset
+  acquisition or rendering.
+- Center crop is the safe deterministic fallback. Fit or letterbox from an
+  automatic crop requires `allow_full_frame_fallback=true`; an oversized target
+  without that permission fails instead of silently producing a small picture.
 
 ## External asset controls
 
