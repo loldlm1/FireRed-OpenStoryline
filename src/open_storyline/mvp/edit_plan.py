@@ -648,13 +648,24 @@ def _normalize_edit_plan_response(
                         "horizontal": "landscape",
                     }.get(asset.get("orientation"), asset.get("orientation"))
                 if "fallback" in asset:
+                    raw_fallback = asset.get("fallback")
+                    fallback_token = (
+                        re.sub(r"[\s-]+", "_", raw_fallback.strip().lower())
+                        if isinstance(raw_fallback, str)
+                        else raw_fallback
+                    )
                     fallback = {
+                        "source": "source",
+                        "fit": "fit",
+                        "omit": "omit",
+                        "fail": "fail",
                         "keep_source_video": "source",
                         "none": "omit",
                         "source_only": "source",
                         "source_video": "source",
                         "use_source": "source",
-                    }.get(asset.get("fallback"), asset.get("fallback"))
+                        "use_source_video": "source",
+                    }.get(fallback_token, raw_fallback)
                     if fallback == "fail" and asset.get("required", True) is True:
                         fallback = "omit"
                     asset["fallback"] = fallback
