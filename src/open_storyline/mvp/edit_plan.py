@@ -507,7 +507,9 @@ def _normalize_edit_plan_response(value: Any) -> Any:
                     }.get(asset.get("orientation"), asset.get("orientation"))
                 if "fallback" in asset:
                     fallback = {
+                        "keep_source_video": "source",
                         "none": "omit",
+                        "source_only": "source",
                         "source_video": "source",
                         "use_source": "source",
                     }.get(asset.get("fallback"), asset.get("fallback"))
