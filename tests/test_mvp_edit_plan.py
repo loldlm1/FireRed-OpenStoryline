@@ -718,6 +718,10 @@ class AgenticEditPlannerTests(unittest.IsolatedAsyncioTestCase):
             "track_id": None,
             "semantic_role": "speaker",
         }
+        response["clips"][0]["segments"][0]["transition_in"] = {
+            "kind": "hard_cut",
+            "duration_ms": 0,
+        }
         response["clips"][0]["segments"][0]["overlays"] = [
             {
                 "id": "generated-overlay",
@@ -771,7 +775,7 @@ class AgenticEditPlannerTests(unittest.IsolatedAsyncioTestCase):
                 "rationale": "a short vertical cutaway closes the visible gap",
                 "prompt": "vertical real-world action",
                 "orientation": "vertical",
-                "fallback": "none",
+                "fallback": "source_video",
             },
         ]
         response["clips"][0]["intent_decisions"] = [
@@ -820,8 +824,9 @@ class AgenticEditPlannerTests(unittest.IsolatedAsyncioTestCase):
         )
         self.assertEqual(
             [item.fallback for item in plan.clips[0].asset_requests],
-            ["source", "omit"],
+            ["source", "source"],
         )
+        self.assertEqual(plan.clips[0].segments[0].transition_in.kind, "cut")
         self.assertEqual(plan.clips[0].segments[0].overlays[0].position, "top_right")
         self.assertEqual(
             plan.clips[0].segments[0].overlays[2].source_window,

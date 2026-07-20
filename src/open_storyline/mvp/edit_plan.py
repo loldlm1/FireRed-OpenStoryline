@@ -508,6 +508,7 @@ def _normalize_edit_plan_response(value: Any) -> Any:
                 if "fallback" in asset:
                     asset["fallback"] = {
                         "none": "omit",
+                        "source_video": "source",
                         "use_source": "source",
                     }.get(asset.get("fallback"), asset.get("fallback"))
         intent_decisions = clip.get("intent_decisions")
@@ -521,6 +522,9 @@ def _normalize_edit_plan_response(value: Any) -> Any:
         for segment in segments:
             if not isinstance(segment, dict) or not isinstance(segment.get("overlays"), list):
                 continue
+            transition = segment.get("transition_in")
+            if isinstance(transition, dict) and transition.get("kind") == "hard_cut":
+                transition["kind"] = "cut"
             layout = segment.get("layout")
             focal_target = layout.get("focal_target") if isinstance(layout, dict) else None
             if isinstance(focal_target, dict):
