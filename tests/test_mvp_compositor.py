@@ -248,6 +248,49 @@ class CompositorTests(unittest.TestCase):
                 (observation.bbox.x + observation.bbox.width) * source.width,
             )
 
+    def test_focus_zoom_is_clamped_to_keep_the_target_visible(self):
+        source = MediaInfo(4000, 640, 360, True)
+        segment = EditSegment(
+            id="zoomed-speaker",
+            source_window=TimeWindow(start_ms=0, end_ms=4000),
+            timeline_window=TimeWindow(start_ms=0, end_ms=4000),
+            layout=LayoutSpec(
+                mode="crop",
+                focal_target=FocalTarget(semantic_role="speaker"),
+                fallback="crop",
+                max_zoom=3.2,
+            ),
+            reason="focus on the visible speaker",
+        )
+        observation = region(
+            "speaker",
+            "frame-001",
+            x=0.09,
+            width=0.22,
+        )
+
+        composition = resolve_clip_composition(
+            clip_plan([segment]),
+            visual=visual(
+                [{"id": "frame-001", "timestamp_ms": 1000}],
+                [observation],
+            ),
+            source_media=source,
+            output_width=180,
+            output_height=320,
+        )
+
+        resolved = composition.segments[0]
+        self.assertEqual(resolved.requested_max_zoom, 3.2)
+        self.assertGreater(resolved.resolved_zoom, 1.0)
+        self.assertLess(resolved.resolved_zoom, 3.2)
+        self.assertEqual(resolved.strategy, "crop")
+        self.assertLessEqual(resolved.crop.x, observation.bbox.x * source.width)
+        self.assertGreaterEqual(
+            resolved.crop.x + resolved.crop.width,
+            (observation.bbox.x + observation.bbox.width) * source.width,
+        )
+
     def test_filtergraph_is_server_generated_bounded_and_requires_audio(self):
         segment = SimpleNamespace(
             source_window=TimeWindow(start_ms=0, end_ms=4000),

@@ -73,6 +73,8 @@ class ResolvedSegment:
     operation: str
     strategy: str
     crop: CropRect | None
+    requested_max_zoom: float
+    resolved_zoom: float
     target_region_ids: tuple[str, ...]
     transition_kind: str
     transition_duration_ms: int
@@ -202,6 +204,16 @@ def _crop_at_focus(
     return CropRect(x=x, y=y, width=crop_width, height=crop_height)
 
 
+def _zoomed_crop_dimensions(
+    crop_width: int,
+    crop_height: int,
+    zoom: float,
+) -> tuple[int, int]:
+    width = max(2, int(round(crop_width / zoom)))
+    height = max(2, int(round(crop_height / zoom)))
+    return width - width % 2, height - height % 2
+
+
 def _fallback_strategy(segment: EditSegment) -> str:
     if (
         segment.layout.allow_full_frame_fallback
@@ -249,6 +261,8 @@ def _resolve_segment(
             operation=segment.layout.mode,
             strategy=segment.layout.mode,
             crop=None,
+            requested_max_zoom=segment.layout.max_zoom,
+            resolved_zoom=1.0,
             target_region_ids=(),
             transition_kind=segment.transition_in.kind,
             transition_duration_ms=segment.transition_in.duration_ms,
@@ -273,6 +287,8 @@ def _resolve_segment(
             operation="source_cutaway",
             strategy="fit",
             crop=None,
+            requested_max_zoom=segment.layout.max_zoom,
+            resolved_zoom=1.0,
             target_region_ids=(),
             transition_kind=segment.transition_in.kind,
             transition_duration_ms=segment.transition_in.duration_ms,
@@ -295,19 +311,20 @@ def _resolve_segment(
             f"Sprint 4 compositor cannot execute layout {segment.layout.mode}",
         )
 
-    crop_width, crop_height = _crop_dimensions(
+    base_crop_width, base_crop_height = _crop_dimensions(
         source_width,
         source_height,
         output_width,
         output_height,
     )
-    if segment.layout.max_zoom > 1:
-        crop_width = max(2, int(round(crop_width / segment.layout.max_zoom)))
-        crop_height = max(2, int(round(crop_height / segment.layout.max_zoom)))
-        crop_width -= crop_width % 2
-        crop_height -= crop_height % 2
     regions = _target_regions(segment, visual)
     if not regions:
+        resolved_zoom = segment.layout.max_zoom
+        crop_width, crop_height = _zoomed_crop_dimensions(
+            base_crop_width,
+            base_crop_height,
+            resolved_zoom,
+        )
         fallback = _fallback_strategy(segment)
         crop = None
         if fallback == "crop":
@@ -323,9 +340,11 @@ def _resolve_segment(
             id=segment.id,
             source_window=segment.source_window,
             timeline_window=segment.timeline_window,
-            operation="focus_zoom" if segment.layout.max_zoom > 1 else "crop",
+            operation="focus_zoom" if resolved_zoom > 1 else "crop",
             strategy=fallback,
             crop=crop,
+            requested_max_zoom=segment.layout.max_zoom,
+            resolved_zoom=resolved_zoom,
             target_region_ids=(),
             transition_kind=segment.transition_in.kind,
             transition_duration_ms=segment.transition_in.duration_ms,
@@ -354,6 +373,17 @@ def _resolve_segment(
     x1, y1, x2, y2 = _union_box(regions, segment.layout.safe_margin_ratio)
     target_width = (x2 - x1) * source_width
     target_height = (y2 - y1) * source_height
+    safe_zoom = min(
+        segment.layout.max_zoom,
+        base_crop_width * 1.04 / target_width,
+        base_crop_height * 1.04 / target_height,
+    )
+    resolved_zoom = max(1.0, safe_zoom)
+    crop_width, crop_height = _zoomed_crop_dimensions(
+        base_crop_width,
+        base_crop_height,
+        resolved_zoom,
+    )
     if target_width > crop_width * 1.05 or target_height > crop_height * 1.05:
         fallback = _fallback_strategy(segment)
         if fallback == "crop":
@@ -365,9 +395,11 @@ def _resolve_segment(
             id=segment.id,
             source_window=segment.source_window,
             timeline_window=segment.timeline_window,
-            operation="focus_zoom" if segment.layout.max_zoom > 1 else "crop",
+            operation="focus_zoom" if resolved_zoom > 1 else "crop",
             strategy=fallback,
             crop=None,
+            requested_max_zoom=segment.layout.max_zoom,
+            resolved_zoom=resolved_zoom,
             target_region_ids=tuple(region.id for region in regions),
             transition_kind=segment.transition_in.kind,
             transition_duration_ms=segment.transition_in.duration_ms,
@@ -390,7 +422,7 @@ def _resolve_segment(
         id=segment.id,
         source_window=segment.source_window,
         timeline_window=segment.timeline_window,
-        operation="focus_zoom" if segment.layout.max_zoom > 1 else "crop",
+        operation="focus_zoom" if resolved_zoom > 1 else "crop",
         strategy="crop",
         crop=_crop_at_focus(
             focus_x,
@@ -400,6 +432,8 @@ def _resolve_segment(
             crop_width=crop_width,
             crop_height=crop_height,
         ),
+        requested_max_zoom=segment.layout.max_zoom,
+        resolved_zoom=resolved_zoom,
         target_region_ids=tuple(region.id for region in regions),
         transition_kind=segment.transition_in.kind,
         transition_duration_ms=segment.transition_in.duration_ms,
