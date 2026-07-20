@@ -491,7 +491,8 @@ class AgenticEditPlannerTests(unittest.IsolatedAsyncioTestCase):
             "rationale": "a stock image closes the visual gap",
             "prompt": "a neutral supporting visual",
             "orientation": "vertical-private-provider-response",
-            "fallback": "skip",
+            "required": False,
+            "fallback": "fail",
         }]
         client.response = [deepcopy(response), deepcopy(response)]
         kwargs.update({
@@ -510,7 +511,7 @@ class AgenticEditPlannerTests(unittest.IsolatedAsyncioTestCase):
         )
         self.assertIn("orientation", serialized)
         self.assertIn("fallback", serialized)
-        self.assertIn('"observed_value": "skip"', serialized)
+        self.assertIn('"observed_value": "fail"', serialized)
         self.assertNotIn("private-provider-response", serialized)
         self.assertNotIn("neutral supporting visual", serialized)
 
@@ -775,7 +776,7 @@ class AgenticEditPlannerTests(unittest.IsolatedAsyncioTestCase):
                 "rationale": "a short vertical cutaway closes the visible gap",
                 "prompt": "vertical real-world action",
                 "orientation": "vertical",
-                "fallback": "source_video",
+                "fallback": "fail",
             },
         ]
         response["clips"][0]["intent_decisions"] = [
@@ -824,7 +825,7 @@ class AgenticEditPlannerTests(unittest.IsolatedAsyncioTestCase):
         )
         self.assertEqual(
             [item.fallback for item in plan.clips[0].asset_requests],
-            ["source", "source"],
+            ["source", "omit"],
         )
         self.assertEqual(plan.clips[0].segments[0].transition_in.kind, "cut")
         self.assertEqual(plan.clips[0].segments[0].overlays[0].position, "top_right")
