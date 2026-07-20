@@ -505,9 +505,19 @@ def _normalize_edit_plan_response(value: Any) -> Any:
         for segment in segments:
             if not isinstance(segment, dict) or not isinstance(segment.get("overlays"), list):
                 continue
+            normalized_overlays = []
             for overlay in segment["overlays"]:
                 if not isinstance(overlay, dict):
+                    normalized_overlays.append(overlay)
                     continue
+                if overlay.get("kind") in {"subtitle", "subtitles"}:
+                    continue
+                if (
+                    overlay.get("kind") == "image_overlay"
+                    and isinstance(overlay.get("asset_id"), str)
+                    and overlay["asset_id"]
+                ):
+                    overlay["kind"] = "image"
                 if overlay.get("kind") in {"text", "image"}:
                     overlay.pop("source_window", None)
                 if overlay.get("protect_subtitles", True):
@@ -525,6 +535,8 @@ def _normalize_edit_plan_response(value: Any) -> Any:
                     inferred = _infer_overlay_source_window(segment, overlay)
                     if inferred is not None:
                         overlay["source_window"] = inferred
+                normalized_overlays.append(overlay)
+            segment["overlays"] = normalized_overlays
     return normalized
 
 

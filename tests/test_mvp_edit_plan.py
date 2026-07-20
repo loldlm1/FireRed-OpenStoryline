@@ -705,7 +705,7 @@ class AgenticEditPlannerTests(unittest.IsolatedAsyncioTestCase):
             },
             {
                 "id": "pexels-overlay",
-                "kind": "image",
+                "kind": "image_overlay",
                 "timeline_window": {"start_ms": 5000, "end_ms": 9000},
                 "asset_id": "pexels-1",
                 "position": "top_left",
@@ -715,6 +715,12 @@ class AgenticEditPlannerTests(unittest.IsolatedAsyncioTestCase):
                 "kind": "source",
                 "timeline_window": {"start_ms": 10_000, "end_ms": 12_000},
                 "position": "top",
+            },
+            {
+                "id": "duplicate-subtitle-overlay",
+                "kind": "subtitles",
+                "timeline_window": {"start_ms": 0, "end_ms": 20_000},
+                "position": "bottom",
             },
         ]
         response["clips"][0]["asset_requests"] = [
@@ -794,6 +800,10 @@ class AgenticEditPlannerTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(
             plan.clips[0].segments[0].overlays[2].source_window,
             TimeWindow(start_ms=10_000, end_ms=12_000),
+        )
+        self.assertEqual(
+            [item.kind for item in plan.clips[0].segments[0].overlays],
+            ["image", "image", "source"],
         )
         self.assertEqual(plan.degradation_reason, "")
         self.assertTrue(
