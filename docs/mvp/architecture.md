@@ -252,9 +252,10 @@ and the development venv never enter the remote-image build context.
 
 Password rotation is an application-wide sign-out: generate a new Argon2id
 hash, update the ignored deploy environment, deploy/restart the application,
-and verify that old browser sessions are rejected. For a Sprint 2 rollback,
-revert application and deployment configuration together and use the privately
-retained legacy web token only with the matching older release.
+and verify that old browser sessions are rejected. When rolling back to a
+pre-password-session release, revert application and deployment configuration
+together and use the privately retained legacy web token only with that
+matching older release.
 
 Existing filesystem jobs can be inspected or imported idempotently without
 moving media:
