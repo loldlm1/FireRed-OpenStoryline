@@ -96,6 +96,8 @@ from open_storyline.mvp.repair import (
     TranscriptExcerpt,
     bounded_repair_findings,
     build_repair_batch,
+    build_repair_report,
+    compute_repair_resolution,
     evaluate_repair_quality_floor,
     make_repair_finding,
     predict_plan_findings,
@@ -106,6 +108,7 @@ from open_storyline.mvp.repair import (
 from open_storyline.mvp.promotion import (
     build_render_promotion_report,
     completion_policy,
+    delivery_policy,
     enforce_render_promotion,
     limited_output_promotion_enabled,
     render_promotion_mode,
@@ -626,6 +629,26 @@ class MVPJobProcessor:
         repair_mode = resolve_repair_mode() if agentic_requested else RepairMode.OFF
         visual_repair_attempts_used = 0
         repair_checkpoint_reports: dict[str, dict[str, Any]] = {}
+        repair_stage_records: dict[str, dict[str, Any]] = {}
+        predictive_repair_findings: tuple[Any, ...] = ()
+
+        async def persist_partial_repair_report() -> None:
+            if not agentic_requested:
+                return
+            report = build_repair_report(
+                mode=repair_mode,
+                stage_records=repair_stage_records.values(),
+                predictive_findings=predictive_repair_findings,
+                fallback_entries=(),
+                reused_stages=checkpoint_summary["reused_stages"],
+                recomputed_stages=checkpoint_summary["recomputed_stages"],
+            )
+            path = output_dir / names.repair_report
+            path.write_text(
+                json.dumps(report, ensure_ascii=False, indent=2),
+                encoding="utf-8",
+            )
+            await store.register_artifact(job_id, path, kind="repair_report")
 
         async def registry_visual_repair_handler(
             *,
@@ -660,7 +683,7 @@ class MVPJobProcessor:
                     text=transcript_text,
                 ),
             ) if transcript_text else ()
-            request, _ = build_repair_batch(
+            request, dispositions = build_repair_batch(
                 stage=RepairStage.VISUAL_UNDERSTANDING,
                 mode=repair_mode,
                 findings=(finding,),
@@ -716,11 +739,44 @@ class MVPJobProcessor:
                         else:
                             visual_repair_attempts_used = 1
                             track_checkpoint("visual_repair", reused=True)
+                            repair_stage_records["visual_repair"] = {
+                                "stage": RepairStage.VISUAL_UNDERSTANDING.value,
+                                "status": "repaired",
+                                "request": repair_checkpoint_reports["visual_repair"],
+                                "dispositions": [
+                                    item.to_dict() for item in dispositions
+                                ],
+                                "resolution": compute_repair_resolution(
+                                    (finding.code,), ()
+                                ).to_dict(),
+                                "quality_floor": {
+                                    "accepted": True,
+                                    "violation_codes": [],
+                                },
+                                "checkpoint_reused": True,
+                            }
                             remote_client.last_attempts = ()
                             return validated.to_dict()
                 else:
                     visual_repair_attempts_used = 1
                     track_checkpoint("visual_repair", reused=True)
+                    cached_status = str(hit.payload.get("status") or "failed")
+                    repair_stage_records["visual_repair"] = {
+                        "stage": RepairStage.VISUAL_UNDERSTANDING.value,
+                        "status": (
+                            cached_status
+                            if cached_status in {"report_only", "failed", "rejected"}
+                            else "failed"
+                        ),
+                        "request": repair_checkpoint_reports["visual_repair"],
+                        "dispositions": [item.to_dict() for item in dispositions],
+                        "resolution": compute_repair_resolution(
+                            (finding.code,), (finding.code,)
+                        ).to_dict(),
+                        "quality_floor": {"accepted": False, "violation_codes": []},
+                        "checkpoint_reused": True,
+                    }
+                    await persist_partial_repair_report()
                     raise error
             track_checkpoint("visual_repair", reused=False)
             visual_repair_attempts_used += 1
@@ -734,6 +790,18 @@ class MVPJobProcessor:
                     payload={"status": "report_only", "report": report},
                     metadata={"mode": repair_mode.value, "code": str(error.code)},
                 )
+                repair_stage_records["visual_repair"] = {
+                    "stage": RepairStage.VISUAL_UNDERSTANDING.value,
+                    "status": "report_only",
+                    "request": report,
+                    "dispositions": [item.to_dict() for item in dispositions],
+                    "resolution": compute_repair_resolution(
+                        (finding.code,), (finding.code,)
+                    ).to_dict(),
+                    "quality_floor": {"accepted": False, "violation_codes": []},
+                    "checkpoint_reused": False,
+                }
+                await persist_partial_repair_report()
                 raise error
             try:
                 repaired = await remote_client.complete_structured(
@@ -754,6 +822,14 @@ class MVPJobProcessor:
                 VisualUnderstandingError,
                 ValueError,
             ) as exc:
+                failed_attempts = [
+                    {**attempt.to_dict(), "category": "visual_repair"}
+                    for attempt in (
+                        tuple(getattr(exc, "attempts", ()))
+                        or tuple(getattr(remote_client, "last_attempts", ()))
+                    )
+                ]
+                visual_attempts.extend(failed_attempts)
                 await save_job_checkpoint(
                     job_id=job_id,
                     stage="visual_repair",
@@ -766,6 +842,19 @@ class MVPJobProcessor:
                     },
                     metadata={"mode": repair_mode.value, "code": str(error.code)},
                 )
+                repair_stage_records["visual_repair"] = {
+                    "stage": RepairStage.VISUAL_UNDERSTANDING.value,
+                    "status": "failed",
+                    "request": report,
+                    "dispositions": [item.to_dict() for item in dispositions],
+                    "resolution": compute_repair_resolution(
+                        (finding.code,), (finding.code,)
+                    ).to_dict(),
+                    "quality_floor": {"accepted": False, "violation_codes": []},
+                    "attempts": failed_attempts,
+                    "checkpoint_reused": False,
+                }
+                await persist_partial_repair_report()
                 raise
             await save_job_checkpoint(
                 job_id=job_id,
@@ -779,6 +868,17 @@ class MVPJobProcessor:
                 },
                 metadata={"mode": repair_mode.value, "code": str(error.code)},
             )
+            repair_stage_records["visual_repair"] = {
+                "stage": RepairStage.VISUAL_UNDERSTANDING.value,
+                "status": "repaired",
+                "request": report,
+                "dispositions": [item.to_dict() for item in dispositions],
+                "resolution": compute_repair_resolution(
+                    (finding.code,), ()
+                ).to_dict(),
+                "quality_floor": {"accepted": True, "violation_codes": []},
+                "checkpoint_reused": False,
+            }
             return validated.to_dict()
 
         visual_planner = VisualUnderstandingPlanner(remote_client)
@@ -1404,6 +1504,7 @@ class MVPJobProcessor:
                 }
 
                 def plan_objective_findings(candidate: Any, coverage: Any):
+                    nonlocal predictive_repair_findings
                     candidate_assets = {
                         asset.id
                         for clip in candidate.clips
@@ -1434,18 +1535,21 @@ class MVPJobProcessor:
                         max_overlays_per_clip=agentic_config.max_overlays_per_clip,
                         max_assets_per_clip=agentic_config.max_assets_per_clip,
                     )
+                    predictions = predict_plan_findings(
+                        candidate,
+                        source_aspect_ratios={
+                            clip.clip_index: media.width / max(1, media.height)
+                            for clip in candidate.clips
+                        },
+                    )
+                    if not predictive_repair_findings:
+                        predictive_repair_findings = tuple(predictions)
                     findings = [
                         *repair_findings_from_preflight(candidate_preflight),
                         *repair_findings_from_visual_coverage(coverage),
                         *(
                             item.to_repair_finding()
-                            for item in predict_plan_findings(
-                                candidate,
-                                source_aspect_ratios={
-                                    clip.clip_index: media.width / max(1, media.height)
-                                    for clip in candidate.clips
-                                },
-                            )
+                            for item in predictions
                         ),
                     ]
                     try:
@@ -1486,6 +1590,17 @@ class MVPJobProcessor:
                 selected_findings, overflow_findings = bounded_repair_findings(
                     repair_findings
                 )
+                plan_original_codes = tuple(sorted({
+                    finding.code
+                    for finding in selected_findings
+                    if finding.objective
+                }))
+                plan_stage_status = "not_triggered"
+                plan_quality_floor: dict[str, Any] = {
+                    "accepted": False,
+                    "violation_codes": [],
+                }
+                plan_checkpoint_reused = False
                 unresolved_repair_findings = overflow_findings
                 candidate_clips = {}
                 for clip in edit_plan.clips:
@@ -1623,9 +1738,17 @@ class MVPJobProcessor:
                                 repair_checkpoint_reports["plan_repair"] = repair_report
                         if repair_hit is not None:
                             track_checkpoint("plan_repair", reused=True)
+                            plan_checkpoint_reused = True
+                            plan_stage_status = str(
+                                repair_hit.payload.get("status") or "failed"
+                            )
+                            cached_quality = repair_hit.payload.get("quality")
+                            if isinstance(cached_quality, dict):
+                                plan_quality_floor = cached_quality
                     if repair_hit is None:
                         track_checkpoint("plan_repair", reused=False)
                     if repair_hit is None and repair_mode is RepairMode.REPORT:
+                        plan_stage_status = "report_only"
                         unresolved_repair_findings = tuple(
                             finding
                             for finding in selected_findings
@@ -1763,6 +1886,8 @@ class MVPJobProcessor:
                                     if finding.objective
                                 ) + overflow_findings
                                 repair_status = "rejected"
+                            plan_stage_status = repair_status
+                            plan_quality_floor = quality.to_dict()
                             await save_job_checkpoint(
                                 job_id=job_id,
                                 stage="plan_repair",
@@ -1786,6 +1911,15 @@ class MVPJobProcessor:
                             RepairContractError,
                             ValueError,
                         ) as exc:
+                            failed_attempts = [
+                                {**attempt.to_dict(), "category": "plan_repair"}
+                                for attempt in (
+                                    tuple(getattr(exc, "attempts", ()))
+                                    or tuple(getattr(remote_client, "last_attempts", ()))
+                                )
+                            ]
+                            edit_planner_attempts.extend(failed_attempts)
+                            plan_stage_status = "failed"
                             unresolved_repair_findings = tuple(
                                 finding
                                 for finding in selected_findings
@@ -1832,6 +1966,39 @@ class MVPJobProcessor:
                             for finding in selected_findings
                             if finding.objective
                         ) + overflow_findings
+
+                    plan_resolution = compute_repair_resolution(
+                        plan_original_codes,
+                        (
+                            finding.code
+                            for finding in unresolved_repair_findings
+                            if finding.objective
+                        ),
+                    )
+                    repair_stage_records["plan_repair"] = {
+                        "stage": RepairStage.PLAN_REPAIR.value,
+                        "status": (
+                            plan_stage_status
+                            if plan_stage_status in {
+                                "report_only", "repaired", "rejected", "failed"
+                            }
+                            else "failed"
+                        ),
+                        "request": repair_checkpoint_reports["plan_repair"],
+                        "dispositions": [
+                            item.to_dict() for item in repair_dispositions
+                        ],
+                        "resolution": plan_resolution.to_dict(),
+                        "quality_floor": plan_quality_floor,
+                        "attempts": [
+                            item
+                            for item in edit_planner_attempts
+                            if item.get("category") == "plan_repair"
+                        ],
+                        "checkpoint_reused": plan_checkpoint_reused,
+                    }
+                    if plan_stage_status in {"report_only", "rejected", "failed"}:
+                        await persist_partial_repair_report()
 
             proposed_edit_plan = edit_plan
             if (
@@ -2513,8 +2680,6 @@ class MVPJobProcessor:
                     ),
                 )
             except (FFMPEGAError, NineRouterError) as exc:
-                if not fallback_enabled:
-                    raise
                 effects_plan = None
                 fallback_entries = merge_fallback_entries(
                     fallback_entries,
@@ -2559,8 +2724,6 @@ class MVPJobProcessor:
                         plan=effects_plan,
                     )
                 except FFMPEGAError as exc:
-                    if not fallback_enabled:
-                        raise
                     fallback_entries = merge_fallback_entries(
                         fallback_entries,
                         (FallbackEntry(
@@ -2734,6 +2897,7 @@ class MVPJobProcessor:
                 mode=promotion_mode,
                 policy=completion_policy(self.config.agentic_editing),
                 limited_output_enabled=limited_output_promotion_enabled(),
+                delivery=delivery_policy(self.config.agentic_editing),
                 frame_quality=frame_quality_report,
                 render_qa=render_qa_report,
                 creative_conformance=creative_conformance_report,
@@ -2812,6 +2976,42 @@ class MVPJobProcessor:
             )
             agentic_manifest["fallbacks"] = fallback_ledger["summary"]
 
+        repair_report = None
+        if agentic_requested:
+            visual_stage = repair_stage_records.get("visual_repair")
+            if visual_stage is not None:
+                visual_stage["attempts"] = [
+                    item
+                    for item in visual_attempts
+                    if item.get("category") == "visual_repair"
+                ]
+            plan_stage = repair_stage_records.get("plan_repair")
+            if plan_stage is not None:
+                plan_stage["attempts"] = [
+                    item
+                    for item in edit_planner_attempts
+                    if item.get("category") == "plan_repair"
+                ]
+            repair_report = build_repair_report(
+                mode=repair_mode,
+                stage_records=repair_stage_records.values(),
+                predictive_findings=predictive_repair_findings,
+                fallback_entries=fallback_entries,
+                reused_stages=checkpoint_summary["reused_stages"],
+                recomputed_stages=checkpoint_summary["recomputed_stages"],
+            )
+            repair_report_path = output_dir / names.repair_report
+            repair_report_path.write_text(
+                json.dumps(repair_report, ensure_ascii=False, indent=2),
+                encoding="utf-8",
+            )
+            await store.register_artifact(
+                job_id,
+                repair_report_path,
+                kind="repair_report",
+            )
+            agentic_manifest["repair_report"] = names.repair_report
+
         outcome_report = build_completed_outcome_report(
             outputs=final_outputs,
             fallback_entries=fallback_entries,
@@ -2837,6 +3037,7 @@ class MVPJobProcessor:
                 "retry_reason_codes",
                 (),
             ),
+            repair_report=repair_report,
         )
         outcome_report_path = output_dir / names.outcome_report
         outcome_report_path.write_text(

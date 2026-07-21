@@ -48,7 +48,8 @@ function outcome(grade: 'enhanced' | 'with_limitations' | 'retryable_failure' | 
   const limited = grade === 'with_limitations';
   const failed = grade === 'retryable_failure' || grade === 'terminal_failure';
   return {
-    version: 'outcome_report.v1',
+    version: 'outcome_report.v2',
+    registry_version: 'defect_registry.v1',
     grade,
     technical_status: grade === 'retryable_failure' ? 'blocked' : 'pass',
     output_count: failed ? 0 : 1,
@@ -68,6 +69,43 @@ function outcome(grade: 'enhanced' | 'with_limitations' | 'retryable_failure' | 
       stage: 'qa',
       retryable: true,
     }] : [],
+    strict_qa: {
+      decision: limited || failed ? 'block' : 'promote',
+      blocker_codes: limited ? ['ACTIVE_PICTURE_TOO_SMALL'] : [],
+    },
+    delivery: {
+      policy: limited ? 'technical_pass_guaranteed' : 'qa_enforced',
+      decision: limited ? 'publish_with_limitations' : failed ? 'withhold_technical' : 'publish_enhanced',
+      download_available: !failed,
+    },
+    repair: {
+      report_version: limited ? 'repair_report.v1' : '',
+      registry_version: 'defect_registry.v1',
+      mode: limited ? 'enforce' : 'off',
+      stages: limited ? [{ stage: 'plan_repair', status: 'rejected', checkpoint_reused: true }] : [],
+      resolved_codes: limited ? ['CAPTION_WIDTH_EXCEEDED'] : [],
+      remaining_codes: limited ? ['ACTIVE_PICTURE_TOO_SMALL'] : [],
+      introduced_codes: [],
+      fallback_applied_codes: limited ? ['VISUAL_REFRAME_FALLBACK'] : [],
+      not_repairable_codes: [],
+      defects: limited ? [{
+        code: 'ACTIVE_PICTURE_TOO_SMALL',
+        strategy: 'conditional_llm_or_fallback',
+        eligible: true,
+        repair_attempted: true,
+        dispositions: ['remaining', 'fallback_applied'],
+        stage_statuses: [{ stage: 'plan_repair', status: 'rejected', checkpoint_reused: true }],
+        fallbacks: [{ requested: 'crop', executed: 'fit' }],
+        presentation: {
+          raw_code: 'ACTIVE_PICTURE_TOO_SMALL',
+          retry_action: 'retry_defects',
+          es: {
+            title: 'La imagen activa es demasiado pequeña',
+            description: 'El contenido visible quedó por debajo del umbral seguro.',
+          },
+        },
+      }] : [],
+    },
     retry: {
       supported: limited || grade === 'retryable_failure',
       quality_feedback_supported: limited || grade === 'retryable_failure',
@@ -743,8 +781,15 @@ test.describe('reusable video workspace', () => {
     await card.getByRole('button', { name: 'Ver salidas y QA' }).click();
     await expect(card.locator('.outcome-detail')).toContainText('ACTIVE_PICTURE_TOO_SMALL');
     await expect(card.locator('.outcome-detail')).toContainText('Etapas reutilizadas');
+    await expect(card.locator('.outcome-detail')).toContainText('QA estricta: bloqueada');
+    await expect(card.locator('.outcome-detail')).toContainText('Entrega: publicada con limitaciones');
     await card.locator('.limitation-disclosure summary').click();
     await expect(card.locator('.limitation-disclosure')).toContainText('Se ejecutó fit en lugar de crop');
+    await card.locator('.repair-disclosure summary').click();
+    await expect(card.locator('.repair-disclosure')).toContainText('La imagen activa es demasiado pequeña');
+    await expect(card.locator('.repair-disclosure')).toContainText('Reparación LLM intentada');
+    await expect(card.locator('.repair-disclosure')).toContainText('checkpoint reutilizado');
+    await expect(card.locator('.repair-disclosure')).toContainText('no garantiza calidad subjetiva');
 
     await card.getByRole('button', { name: 'Crear versión mejorada' }).click();
     await expect(page.locator('#prompt')).toHaveValue(/ACTIVE_PICTURE_TOO_SMALL/);

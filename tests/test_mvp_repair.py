@@ -7,6 +7,7 @@ import unittest
 
 from open_storyline.mvp.defects import (
     DEFECT_REGISTRY,
+    DEFECT_REGISTRY_SHA256,
     RepairStrategy,
     defect_definition,
 )
@@ -25,11 +26,14 @@ from open_storyline.mvp.repair import (
     RepairStage,
     TranscriptExcerpt,
     build_repair_batch,
+    build_repair_report,
     evaluate_repair_quality_floor,
     predict_plan_findings,
     repair_disposition,
     resolve_repair_mode,
+    validate_repair_report,
 )
+from open_storyline.mvp.structured_outputs import structured_output
 from open_storyline.mvp.shorts import ShortCandidate
 
 
@@ -265,6 +269,74 @@ class RepairContractPrivacyTests(unittest.TestCase):
             sha256(REPAIR_SYSTEM_PROMPT.encode("utf-8")).hexdigest(),
             "f4b2f664902cd53bfad30314e99bad7910437322594cdc292e9a6d0b81ba6f95",
         )
+
+    def test_repair_report_is_bounded_versioned_and_private(self):
+        private_marker = "private prompt transcript provider body /private/video.mp4"
+        request, dispositions = build_batch(
+            finding_for("EDIT_PLAN_INVALID"),
+            mode=RepairMode.ENFORCE,
+        )
+        request_report = compact_repair_observability({
+            **request.to_report_dict(),
+            "provider_body": private_marker,
+        })
+        report = build_repair_report(
+            mode=RepairMode.ENFORCE,
+            stage_records=({
+                "stage": "plan_repair",
+                "status": "failed",
+                "request": request_report,
+                "dispositions": [item.to_dict() for item in dispositions],
+                "resolution": {
+                    "original_codes": ["EDIT_PLAN_INVALID"],
+                    "resolved_codes": [],
+                    "remaining_codes": ["EDIT_PLAN_INVALID"],
+                    "introduced_codes": [],
+                },
+                "quality_floor": {"accepted": False, "violation_codes": []},
+                "attempts": [{
+                    "category": "plan_repair",
+                    "number": 1,
+                    "status_code": 503,
+                    "reason": "provider_unavailable",
+                    "duration_ms": 120,
+                    "input_tokens": 100,
+                    "output_tokens": 20,
+                    "reasoning_tokens": 10,
+                    "total_tokens": 130,
+                    "cost_usd": 0.001,
+                }],
+                "checkpoint_reused": False,
+                "provider_body": private_marker,
+            },),
+        )
+
+        self.assertEqual(report["registry_sha256"], DEFECT_REGISTRY_SHA256)
+        self.assertEqual(
+            report["stages"][0]["request"]["response_schema_sha256"],
+            structured_output("edit_plan_repair.v1").fingerprint,
+        )
+        self.assertEqual(len(report["stages"][0]["request"]["evidence_ids"]), 2)
+        self.assertEqual(
+            report["summary"]["remaining_codes"],
+            ["EDIT_PLAN_INVALID"],
+        )
+        self.assertNotIn(private_marker, json.dumps(report))
+        self.assertEqual(validate_repair_report(report), report)
+
+    def test_malformed_repair_reports_fail_closed(self):
+        report = build_repair_report(mode=RepairMode.REPORT)
+        malformed = deepcopy(report)
+        malformed["registry_sha256"] = "0" * 64
+        with self.assertRaises(RepairContractError) as caught:
+            validate_repair_report(malformed)
+        self.assertEqual(caught.exception.code, "REPAIR_REPORT_INVALID")
+
+        malformed = deepcopy(report)
+        malformed["stages"] = ["private provider response"]
+        with self.assertRaises(RepairContractError) as caught:
+            validate_repair_report(malformed)
+        self.assertEqual(caught.exception.code, "REPAIR_REPORT_INVALID")
 
 
 class RepairQualityFloorTests(unittest.TestCase):

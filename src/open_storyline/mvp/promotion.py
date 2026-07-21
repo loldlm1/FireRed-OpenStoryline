@@ -8,6 +8,7 @@ from open_storyline.mvp.defects import PromotionClass, promotion_class_for_code
 RENDER_PROMOTION_VERSION = "render_promotion.v1"
 PromotionMode = Literal["off", "report", "enforce"]
 CompletionPolicy = Literal["strict", "baseline_guaranteed"]
+DeliveryPolicy = Literal["qa_enforced", "technical_pass_guaranteed"]
 
 TECHNICAL_RENDER_CODES = frozenset({
     "AUDIO_MISSING",
@@ -116,6 +117,29 @@ def limited_output_promotion_enabled() -> bool:
     return value == "true"
 
 
+def delivery_policy(config: Any) -> DeliveryPolicy:
+    configured = os.getenv("OPENSTORYLINE_DELIVERY_POLICY")
+    if configured is None:
+        configured = str(getattr(config, "delivery_policy", "qa_enforced"))
+        if (
+            configured == "qa_enforced"
+            and completion_policy(config) == "baseline_guaranteed"
+            and limited_output_promotion_enabled()
+        ):
+            configured = "technical_pass_guaranteed"
+    value = configured.strip().lower()
+    if value not in {"qa_enforced", "technical_pass_guaranteed"}:
+        raise RenderPromotionError(
+            ["RENDER_PROMOTION_CONFIG_INVALID"],
+            code="RENDER_PROMOTION_CONFIG_INVALID",
+            message=(
+                "OPENSTORYLINE_DELIVERY_POLICY must be qa_enforced or "
+                "technical_pass_guaranteed"
+            ),
+        )
+    return value  # type: ignore[return-value]
+
+
 def _blocker_codes(report: dict[str, Any] | None) -> list[str]:
     if not report:
         return []
@@ -144,6 +168,7 @@ def build_render_promotion_report(
     mode: PromotionMode,
     policy: CompletionPolicy = "strict",
     limited_output_enabled: bool = False,
+    delivery: DeliveryPolicy | None = None,
     frame_quality: dict[str, Any] | None,
     render_qa: dict[str, Any] | None,
     creative_conformance: dict[str, Any] | None,
@@ -206,9 +231,14 @@ def build_render_promotion_report(
     )
     baseline_enforcement = "block" if technical_codes else "promote"
     strict_enforcement = "block" if blockers else "promote"
+    selected_delivery = delivery or (
+        "technical_pass_guaranteed"
+        if policy == "baseline_guaranteed" and limited_output_enabled
+        else "qa_enforced"
+    )
     effective_policy = (
         "baseline_guaranteed"
-        if policy == "baseline_guaranteed" and limited_output_enabled
+        if selected_delivery == "technical_pass_guaranteed"
         else "strict"
     )
     effective_enforcement = (
@@ -224,11 +254,24 @@ def build_render_promotion_report(
         decision = "observe"
     else:
         decision = "promote"
+    delivery_decision = (
+        "withhold_technical"
+        if mode == "enforce" and technical_codes
+        else "withhold_strict"
+        if mode == "enforce" and creative_codes and selected_delivery == "qa_enforced"
+        else "publish_with_limitations"
+        if creative_codes
+        else "publish_enhanced"
+    )
     return {
         "version": RENDER_PROMOTION_VERSION,
         "mode": mode,
         "completion_policy": policy,
         "effective_policy": effective_policy,
+        "delivery_policy": selected_delivery,
+        "delivery_decision": delivery_decision,
+        "download_available": not delivery_decision.startswith("withhold_"),
+        "strict_decision": strict_enforcement,
         "limited_output_promotion_enabled": limited_output_enabled,
         "decision": decision,
         "promotion_decision": promotion_decision,

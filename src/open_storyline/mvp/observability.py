@@ -233,6 +233,7 @@ def compact_repair_observability(report: dict[str, Any]) -> dict[str, Any]:
         key: str(source.get(key) or "").lower()
         for key in (
             "repair_prompt_sha256",
+            "response_schema_sha256",
             "request_fingerprint",
             "editing_prompt_sha256",
             "transcript_sha256",
@@ -241,6 +242,7 @@ def compact_repair_observability(report: dict[str, Any]) -> dict[str, Any]:
     }
     affected_values = source.get("affected_clip_ids")
     evidence_values = source.get("evidence_types")
+    evidence_ids = source.get("evidence_ids")
     objective_codes = [
         code for code in _codes(source.get("objective_codes")) if code in DEFECT_REGISTRY
     ]
@@ -290,6 +292,15 @@ def compact_repair_observability(report: dict[str, Any]) -> dict[str, Any]:
             )
             if isinstance(value, str) and value in REPAIR_EVIDENCE_TYPES
         })[:32],
+        "evidence_ids": sorted({
+            value
+            for value in (
+                evidence_ids
+                if isinstance(evidence_ids, (list, tuple, set))
+                else ()
+            )
+            if isinstance(value, str) and SAFE_ID.fullmatch(value)
+        })[:64],
         "evidence_count": _integer(source.get("evidence_count"), maximum=64),
         "would_call": source.get("would_call") is True,
         "call_allowed": source.get("call_allowed") is True,

@@ -200,6 +200,10 @@ class KamalConfigTests(unittest.TestCase):
             config["env"]["clear"]["OPENSTORYLINE_LIMITED_OUTPUT_PROMOTION_ENABLED"],
             False,
         )
+        self.assertEqual(
+            config["env"]["clear"]["OPENSTORYLINE_DELIVERY_POLICY"],
+            "qa_enforced",
+        )
         self.assertIs(
             config["env"]["clear"]["OPENSTORYLINE_RETRY_UX_ENABLED"],
             False,
@@ -257,6 +261,8 @@ class KamalConfigTests(unittest.TestCase):
             "OPENSTORYLINE_LIMITED_OUTPUT_PROMOTION_ENABLED=false",
             kamal_env,
         )
+        self.assertIn("OPENSTORYLINE_DELIVERY_POLICY=qa_enforced", kamal_env)
+        self.assertIn("OPENSTORYLINE_DELIVERY_POLICY=qa_enforced", local_env)
         self.assertIn("OPENSTORYLINE_RETRY_UX_ENABLED=false", kamal_env)
         self.assertIn(
             "OPENSTORYLINE_CREATIVE_CATALOG_PATH=/app/creative_catalog/manifest.json",
@@ -412,6 +418,14 @@ class KamalConfigTests(unittest.TestCase):
         self.assertIn("app exec --primary --reuse", wrapper)
         self.assertIn('open_storyline.mvp.admin "$admin_command"', wrapper)
         self.assertIn('"${1:-}" == "workspace"', wrapper)
+
+    def test_delivery_policy_is_validated_before_release_commands(self):
+        wrapper = (ROOT / "bin" / "kamal-mvp").read_text(encoding="utf-8")
+        validation = wrapper.index('OPENSTORYLINE_DELIVERY_POLICY:-qa_enforced')
+        release_scan = wrapper.index('for arg in "$@"')
+
+        self.assertLess(validation, release_scan)
+        self.assertIn("qa_enforced|technical_pass_guaranteed", wrapper)
 
 
 if __name__ == "__main__":

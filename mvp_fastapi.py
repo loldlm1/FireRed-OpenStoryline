@@ -39,6 +39,7 @@ from open_storyline.mvp.pipeline import MVPJobProcessor
 from open_storyline.mvp.prompt_versions import PromptVersionService
 from open_storyline.mvp.promotion import (
     completion_policy,
+    delivery_policy,
     limited_output_promotion_enabled,
     render_promotion_mode,
 )
@@ -97,6 +98,7 @@ def create_app() -> FastAPI:
         config = load_settings(default_config_path())
         render_promotion_mode(config.agentic_editing)
         completion_policy(config.agentic_editing)
+        delivery_policy(config.agentic_editing)
         limited_output_promotion_enabled()
         retry_ux_enabled()
         creative_catalog = load_creative_catalog()

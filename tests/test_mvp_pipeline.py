@@ -22,6 +22,7 @@ from open_storyline.mvp.edit_plan import (
 )
 from open_storyline.mvp.frame_sampling import FrameManifest, SampledFrame
 from open_storyline.mvp.creative_qa import CreativeQAArtifacts
+from open_storyline.mvp.ffmpega import FFMPEGAError
 from open_storyline.mvp.ninerouter import NineRouterAttempt
 from open_storyline.mvp.pipeline import MVPJobProcessor
 from open_storyline.mvp.promotion import RenderPromotionError
@@ -354,6 +355,14 @@ class FakeRemoteClient:
     last_attempts = ()
 
 
+class FakeFailingEffectsPlanner:
+    def __init__(self, _client):
+        pass
+
+    async def plan(self, *_args, **_kwargs):
+        raise FFMPEGAError("FFMPEGA_PLAN_INVALID", "synthetic optional failure")
+
+
 class FakePredictiveRepairEditPlanner:
     def __init__(self, client):
         self.client = client
@@ -546,6 +555,8 @@ def config(mode: str, *, generated_assets: bool = False, pexels_assets: bool = F
             creative_qa_enabled=False,
             creative_qa_strict=True,
             render_promotion_mode="report",
+            completion_policy="strict",
+            delivery_policy="qa_enforced",
             semantic_qa_enabled=False,
             semantic_qa_max_frames=4,
             scene_threshold=0.35,
@@ -1183,6 +1194,129 @@ class MVPAgenticPipelineTests(unittest.IsolatedAsyncioTestCase):
             )
             self.assertEqual(promotion["decision"], "block")
             self.assertEqual(promotion["candidate_cleanup"]["video_candidates_removed"], 1)
+
+    async def test_technical_pass_delivery_publishes_creative_only_strict_block(self):
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            store = FakeStore(
+                root,
+                server_request={"max_clips": 1, "edit_mode": "agentic", "asset_policy": "off"},
+            )
+            processor = object.__new__(MVPJobProcessor)
+            processor.config = config("render")
+            processor.config.agentic_editing.creative_qa_enabled = True
+            processor.config.agentic_editing.render_promotion_mode = "enforce"
+            processor.config.agentic_editing.delivery_policy = "technical_pass_guaranteed"
+            processor.stt = FakeSTT()
+            scene_report = build_scene_boundaries(
+                [], source_duration_ms=30_000, threshold=0.35
+            )
+            frame_manifest = FrameManifest(
+                source_duration_ms=30_000,
+                source_width=1920,
+                source_height=1080,
+                frames=(SampledFrame(
+                    id="frame-001",
+                    timestamp_ms=250,
+                    scene_id="scene-001",
+                    width=512,
+                    height=288,
+                    extraction_reason="scene_opening",
+                    encoded_bytes=4,
+                    data_url="data:image/jpeg;base64,ZmFrZQ==",
+                ),),
+            )
+
+            with (
+                patch("open_storyline.mvp.pipeline.probe_media", return_value=MediaInfo(30_000, 1920, 1080, True)),
+                patch("open_storyline.mvp.pipeline.extract_audio_for_stt", side_effect=lambda _source, target: target),
+                patch("open_storyline.mvp.pipeline.detect_scene_boundaries", return_value=scene_report),
+                patch("open_storyline.mvp.pipeline.sample_frames", return_value=frame_manifest),
+                patch("open_storyline.mvp.pipeline.VisualUnderstandingPlanner", FakeVisualPlanner),
+                patch("open_storyline.mvp.pipeline.AgenticEditPlanner", FakeEditPlanner),
+                patch("open_storyline.mvp.pipeline.NineRouterClient.from_config", return_value=FakeRemoteClient()),
+                patch("open_storyline.mvp.pipeline.ShortsPlanner", FakePlanner),
+                patch("open_storyline.mvp.pipeline.AgenticShortRenderer", FakeAgenticRenderer),
+                patch(
+                    "open_storyline.mvp.pipeline.generate_creative_qa_artifacts",
+                    side_effect=fake_creative_qa_artifacts,
+                ),
+                patch(
+                    "open_storyline.mvp.pipeline.build_frame_quality_report",
+                    return_value={
+                        "version": "frame_quality_qa.v1",
+                        "status": "blocker",
+                        "findings": [{
+                            "code": "ACTIVE_PICTURE_TOO_SMALL",
+                            "severity": "blocker",
+                        }],
+                    },
+                ),
+            ):
+                result = await processor("1" * 32, store)
+
+            registered = {name for name, _kind in store.registered}
+            self.assertIn("short-01.mp4", registered)
+            self.assertEqual(result["outcome"]["strict_qa"]["decision"], "block")
+            self.assertEqual(
+                result["outcome"]["delivery"]["decision"],
+                "publish_with_limitations",
+            )
+            self.assertTrue(result["outcome"]["delivery"]["download_available"])
+
+    async def test_optional_ffmpega_failure_keeps_native_candidate_without_baseline_flag(self):
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            store = FakeStore(
+                root,
+                server_request={"max_clips": 1, "edit_mode": "agentic", "asset_policy": "off"},
+            )
+            processor = object.__new__(MVPJobProcessor)
+            processor.config = config("render")
+            processor.config.ffmpega.enabled = True
+            processor.config.agentic_editing.render_promotion_mode = "off"
+            processor.stt = FakeSTT()
+            scene_report = build_scene_boundaries(
+                [], source_duration_ms=30_000, threshold=0.35
+            )
+            frame_manifest = FrameManifest(
+                source_duration_ms=30_000,
+                source_width=1920,
+                source_height=1080,
+                frames=(SampledFrame(
+                    id="frame-001",
+                    timestamp_ms=250,
+                    scene_id="scene-001",
+                    width=512,
+                    height=288,
+                    extraction_reason="scene_opening",
+                    encoded_bytes=4,
+                    data_url="data:image/jpeg;base64,ZmFrZQ==",
+                ),),
+            )
+
+            with (
+                patch("open_storyline.mvp.pipeline.probe_media", return_value=MediaInfo(30_000, 1920, 1080, True)),
+                patch("open_storyline.mvp.pipeline.extract_audio_for_stt", side_effect=lambda _source, target: target),
+                patch("open_storyline.mvp.pipeline.detect_scene_boundaries", return_value=scene_report),
+                patch("open_storyline.mvp.pipeline.sample_frames", return_value=frame_manifest),
+                patch("open_storyline.mvp.pipeline.VisualUnderstandingPlanner", FakeVisualPlanner),
+                patch("open_storyline.mvp.pipeline.AgenticEditPlanner", FakeEditPlanner),
+                patch("open_storyline.mvp.pipeline.NineRouterClient.from_config", return_value=FakeRemoteClient()),
+                patch("open_storyline.mvp.pipeline.ShortsPlanner", FakePlanner),
+                patch("open_storyline.mvp.pipeline.AgenticShortRenderer", FakeAgenticRenderer),
+                patch("open_storyline.mvp.pipeline.EffectsPlanner", FakeFailingEffectsPlanner),
+            ):
+                result = await processor("2" * 32, store)
+
+            registered = {name for name, _kind in store.registered}
+            self.assertIn("short-01.mp4", registered)
+            self.assertIn("repair_report.json", registered)
+            self.assertFalse(processor.config.agentic_editing.baseline_fallbacks_enabled)
+            limitations = result["outcome"]["limitations"]
+            effect = next(item for item in limitations if item["code"] == "EFFECT_OMITTED")
+            self.assertEqual(effect["requested"], "ffmpega_effect_plan")
+            self.assertEqual(effect["executed"], "native_ffmpeg_render")
 
     async def test_render_mode_generates_only_requested_assets_and_inserts_them(self):
         with TemporaryDirectory() as directory:

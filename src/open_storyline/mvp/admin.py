@@ -37,7 +37,23 @@ def _format_value(value: Any, output_format: str) -> None:
     if isinstance(value, dict) and isinstance(value.get("items"), list):
         items = value["items"]
         if not items:
-            print("No matching jobs.")
+            print(
+                "No matching defect records."
+                if value.get("kind") == "defect_records"
+                else "No matching jobs."
+            )
+            return
+        if value.get("kind") == "defect_records":
+            print("JOB_ID                           CODE                           STAGE                  DISPOSITION")
+            for item in items:
+                print(
+                    f"{item['job_id']:<32} "
+                    f"{str(item.get('code') or '-'):<30} "
+                    f"{str(item.get('stage') or '-'):<22} "
+                    f"{str(item.get('disposition') or '-')}"
+                )
+            if value.get("truncated"):
+                print("Results truncated; narrow the filters or increase --limit.")
             return
         print("JOB_ID                           STATE      STAGE                 VERDICT       MEDIA")
         for item in items:
@@ -148,6 +164,15 @@ async def _audit_command(
     if arguments.audit_command == "outcomes":
         return await audit.outcome_slo_summary(
             since=parse_since(arguments.since),
+            limit=arguments.limit,
+        )
+    if arguments.audit_command == "defects":
+        return await audit.defect_records(
+            since=parse_since(arguments.since),
+            code=arguments.code,
+            strategy=arguments.strategy,
+            disposition=arguments.disposition,
+            stage=arguments.stage,
             limit=arguments.limit,
         )
     if arguments.audit_command == "events":
@@ -449,6 +474,18 @@ def main() -> int:
     outcomes.add_argument("--since")
     outcomes.add_argument("--limit", type=int, default=5000)
     _add_format(outcomes, default="json")
+
+    defects = audit_commands.add_parser(
+        "defects",
+        help="query bounded defect, repair, fallback, and delivery records",
+    )
+    defects.add_argument("--since")
+    defects.add_argument("--code")
+    defects.add_argument("--strategy")
+    defects.add_argument("--disposition")
+    defects.add_argument("--stage")
+    defects.add_argument("--limit", type=int, default=100)
+    defects.add_argument("--format", choices=("table", "json"), default="table")
 
     verify = audit_commands.add_parser("verify")
     verify.add_argument("job_id")

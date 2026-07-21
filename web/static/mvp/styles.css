@@ -1655,20 +1655,23 @@ fieldset.field {
 }
 
 .outcome-detail p,
-.limitation-disclosure {
+.limitation-disclosure,
+.repair-disclosure {
   color: var(--ui-text-soft);
   font-size: .72rem;
   line-height: 1.5;
 }
 
-.limitation-disclosure summary {
+.limitation-disclosure summary,
+.repair-disclosure summary {
   min-height: 36px;
   cursor: pointer;
   color: var(--ui-text);
   font-weight: 850;
 }
 
-.limitation-disclosure ul {
+.limitation-disclosure ul,
+.repair-disclosure ul {
   display: grid;
   gap: 8px;
   margin: 4px 0 0;
@@ -1676,14 +1679,31 @@ fieldset.field {
 }
 
 .limitation-disclosure strong,
-.limitation-disclosure span {
+.limitation-disclosure span,
+.repair-disclosure strong,
+.repair-disclosure span {
   display: block;
 }
 
-.limitation-disclosure strong {
+.limitation-disclosure strong,
+.repair-disclosure strong {
   color: var(--ui-text);
   font-family: var(--ui-mono);
   font-size: .66rem;
+}
+
+.outcome-decisions {
+  color: var(--ui-text) !important;
+  font-weight: 800;
+}
+
+.repair-disclosure {
+  padding-top: 8px;
+  border-top: 1px solid var(--ui-border);
+}
+
+.repair-disclosure li span + span {
+  margin-top: 3px;
 }
 
 .outcome-comparison {

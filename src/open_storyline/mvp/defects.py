@@ -1,9 +1,11 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
 from enum import StrEnum
+from hashlib import sha256
 from types import MappingProxyType
 from typing import Any, Iterable
+import json
 import re
 
 
@@ -246,8 +248,8 @@ _REGISTERED_CODES = _code_set(
     REPAIR_CLIP_LIMIT_EXCEEDED REPAIR_CODE_LIMIT_EXCEEDED
     REPAIR_CONTEXT_INVALID REPAIR_CONTEXT_PRIVATE REPAIR_EVIDENCE_INVALID
     REPAIR_EVIDENCE_LIMIT_EXCEEDED REPAIR_MODE_INVALID REPAIR_NOT_ELIGIBLE
-    REPAIR_PROMPT_INVALID REPAIR_REQUEST_TOO_LARGE REPAIR_TRANSCRIPT_INVALID
-    REPAIR_TRANSCRIPT_TOO_LARGE
+    REPAIR_PROMPT_INVALID REPAIR_REPORT_INVALID REPAIR_REPORT_TOO_LARGE
+    REPAIR_REQUEST_TOO_LARGE REPAIR_TRANSCRIPT_INVALID REPAIR_TRANSCRIPT_TOO_LARGE
     """
 )
 
@@ -880,6 +882,15 @@ _POLICY_CODES = (
 _registry, _aliases = _build_registry(_REGISTERED_CODES | _POLICY_CODES)
 DEFECT_REGISTRY = MappingProxyType(_registry)
 DEFECT_ALIASES = MappingProxyType(_aliases)
+DEFECT_REGISTRY_SHA256 = sha256(json.dumps(
+    {
+        code: asdict(definition)
+        for code, definition in sorted(DEFECT_REGISTRY.items())
+    },
+    ensure_ascii=True,
+    sort_keys=True,
+    separators=(",", ":"),
+).encode("utf-8")).hexdigest()
 
 UNKNOWN_DEFECT = DefectDefinition(
     code="UNKNOWN_DEFECT",

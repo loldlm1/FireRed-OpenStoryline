@@ -152,8 +152,9 @@ versioned `job.json` snapshots, every registered JSON/SRT document up to
 deterministic structural reviews, and optional agent/human reviews. Video,
 audio, frame, thumbnail, and ZIP bytes never enter PostgreSQL.
 
-Agentic render candidates also produce bounded `frame_quality_qa.json` and
-`render_promotion.json` documents. Frame quality records cropdetect active-area
+Agentic render candidates also produce bounded `frame_quality_qa.json`,
+`render_promotion.json`, `repair_report.json`, and `outcome_report.json`
+documents. Frame quality records cropdetect active-area
 ratios, decoded frame counts, bounded blur/blockiness signal summaries, and
 caption-masked aligned SSIM/PSNR samples without retaining sampled frames or
 private paths. `OPENSTORYLINE_RENDER_PROMOTION_MODE=report` preserves completion
@@ -161,8 +162,20 @@ while exposing blocker codes. In `enforce`, the default `strict` completion
 policy removes a candidate for any blocker. `baseline_guaranteed` may publish
 creative-only limitations only when
 `OPENSTORYLINE_LIMITED_OUTPUT_PROMOTION_ENABLED=true`; missing or invalid core
-media/QA evidence still blocks. Every report preserves strict and baseline
+media/QA evidence still blocks. The explicit
+`OPENSTORYLINE_DELIVERY_POLICY=technical_pass_guaranteed` target supersedes that
+compatibility pair and publishes creative-only strict failures with limitations
+without rewriting the strict verdict. `qa_enforced` remains the default and
+rollback value. Every report preserves strict, technical, and delivery
 decisions for comparison. `off` is a rollback-only mode.
+
+Operators and review agents can query the bounded projection with
+`./bin/kamal-mvp audit defects --since 24h --format json`, optionally filtering
+by `--code`, `--strategy`, `--disposition`, or `--stage`. The query reads only
+sanitized PostgreSQL evidence and returns no prompts, transcripts, provider
+bodies, media, frames, credentials, or filesystem paths. This projection stays
+document-backed for now; normalize or backfill it only after measured query
+volume proves a dedicated table is necessary.
 Optional offline VMAF/XPSNR analysis remains a read-only operator action in the
 separate [quality sidecar](quality-sidecar.md). Its metrics do not change job
 state or promotion decisions. A later run can explicitly reuse only the

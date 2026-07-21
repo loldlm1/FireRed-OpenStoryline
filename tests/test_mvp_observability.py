@@ -134,6 +134,7 @@ class PriorAttemptQualityFeedbackTests(unittest.TestCase):
             "response_schema": "edit_plan_repair.v1",
             "repair_prompt_version": "mvp-defect-repair.v1",
             "repair_prompt_sha256": "a" * 64,
+            "response_schema_sha256": "f" * 64,
             "request_fingerprint": "b" * 64,
             "editing_prompt_sha256": "c" * 64,
             "transcript_sha256": "d" * 64,
@@ -144,6 +145,7 @@ class PriorAttemptQualityFeedbackTests(unittest.TestCase):
             "objective_codes": ["EDIT_PLAN_INVALID"],
             "advisory_codes": ["PREDICTIVE_RHYTHM_RISK"],
             "evidence_types": ["edit_plan"],
+            "evidence_ids": ["evidence-1"],
             "evidence_count": 1,
             "would_call": True,
             "call_allowed": False,
@@ -154,6 +156,8 @@ class PriorAttemptQualityFeedbackTests(unittest.TestCase):
 
         self.assertEqual(compact["version"], REPAIR_OBSERVABILITY_VERSION)
         self.assertEqual(compact["objective_codes"], ["EDIT_PLAN_INVALID"])
+        self.assertEqual(compact["response_schema_sha256"], "f" * 64)
+        self.assertEqual(compact["evidence_ids"], ["evidence-1"])
         self.assertTrue(compact["would_call"])
         self.assertFalse(compact["call_allowed"])
         self.assertNotIn(private_marker, json.dumps(compact))

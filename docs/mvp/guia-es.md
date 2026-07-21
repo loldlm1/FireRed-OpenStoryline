@@ -371,6 +371,7 @@ OPENSTORYLINE_RENDER_FPS_CAP=60
 OPENSTORYLINE_RENDER_PROMOTION_MODE=report
 OPENSTORYLINE_COMPLETION_POLICY=strict
 OPENSTORYLINE_LIMITED_OUTPUT_PROMOTION_ENABLED=false
+OPENSTORYLINE_DELIVERY_POLICY=qa_enforced
 OPENSTORYLINE_RETRY_UX_ENABLED=false
 OPENSTORYLINE_CHECKPOINTS_ENABLED=false
 OPENSTORYLINE_BASELINE_FALLBACKS_ENABLED=false
@@ -385,19 +386,22 @@ orden: render agentivo source-only, imágenes generadas y, finalmente, Pexels.
 Verifica `/up`, `/health`, recuperación de cola, descargas, auditoría, retención,
 visibilidad del objetivo, sincronía, latencia y errores de proveedor después de
 cada cambio. `report` conserva la finalización mientras calibra los bloqueadores;
-`enforce` se activa sólo para el canary aprobado. Conserva `strict` durante la
-comparación inicial. Después, `baseline_guaranteed` junto con
-`OPENSTORYLINE_LIMITED_OUTPUT_PROMOTION_ENABLED=true` permite descargar salidas
-técnicamente válidas con limitaciones creativas declaradas; estructura, codec,
-audio, duración o evidencia técnica inválida siguen bloqueando. Activa
+`enforce` se activa sólo para el canary aprobado. Conserva `qa_enforced` durante
+la comparación inicial. Después,
+`OPENSTORYLINE_DELIVERY_POLICY=technical_pass_guaranteed` permite descargar
+salidas técnicamente válidas con limitaciones creativas declaradas, sin cambiar
+el veredicto bloqueado de la QA estricta; estructura, codec, audio, duración o
+evidencia técnica inválida siguen bloqueando. La combinación histórica
+`baseline_guaranteed` más promoción limitada se conserva sólo como
+compatibilidad. Activa
 `OPENSTORYLINE_RETRY_UX_ENABLED=true` por separado para mostrar reintento de
 defectos y prellenado de una versión mejorada.
 
 La capa de fiabilidad también se activa por etapas: primero checkpoints,
 después fallbacks deterministas y por último planificación con catálogo. Tras
 cada cambio, reinicia con la misma imagen, ejecuta un intento de la misma
-versión inmutable y revisa `audit outcomes`, `audit show` y `audit verify`.
-Activa `baseline_guaranteed` con promoción limitada sólo cuando el artefacto,
+versión inmutable y revisa `audit outcomes`, `audit defects`, `audit show` y
+`audit verify`. Activa `technical_pass_guaranteed` sólo cuando el artefacto,
 los subtítulos, la evidencia de frames y la decisión de promoción pasen; activa
 la UX de reintento en un reinicio separado. Este orden mantiene un kill switch
 independiente para catálogo, promoción, checkpoints y UI.
@@ -406,7 +410,8 @@ Sin autorización para desplegar o llamar proveedores, todos los flags permanece
 apagados. El rollback normal no requiere restaurar PostgreSQL: vuelve la UI a
 legacy, fija `OPENSTORYLINE_AGENTIC_EDITING_MODE=off`, desactiva assets/QA
 semántica, catálogo, promoción limitada, UX de reintento y lectura de
-checkpoints; luego usa `OPENSTORYLINE_COMPLETION_POLICY=strict`,
+checkpoints; luego usa `OPENSTORYLINE_DELIVERY_POLICY=qa_enforced`,
+`OPENSTORYLINE_COMPLETION_POLICY=strict`,
 `OPENSTORYLINE_RENDER_PROMOTION_MODE=off` y el perfil `legacy`, y
 ejecuta `./bin/kamal-mvp rollback VERSION_EXPLICITA` al release previo. Restaura la base
 sólo ante una migración incompatible revisada por separado; esta entrega no añade

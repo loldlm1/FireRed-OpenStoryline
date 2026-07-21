@@ -17,6 +17,7 @@ from open_storyline.mvp.promotion import (
     RenderPromotionError,
     build_render_promotion_report,
     completion_policy,
+    delivery_policy,
     enforce_render_promotion,
     limited_output_promotion_enabled,
     render_promotion_mode,
@@ -145,6 +146,58 @@ class RenderPromotionTests(unittest.TestCase):
         self.assertEqual(technical["decision"], "block")
         self.assertEqual(technical["technical_blocker_codes"], ["AUDIO_MISSING"])
 
+    def test_delivery_policy_publishes_only_creative_only_blocks(self):
+        creative = build_render_promotion_report(
+            mode="enforce",
+            delivery="technical_pass_guaranteed",
+            frame_quality={
+                "status": "blocker",
+                "findings": [{
+                    "code": "ACTIVE_PICTURE_TOO_SMALL",
+                    "severity": "blocker",
+                }],
+            },
+            render_qa={"status": "pass", "findings": []},
+            creative_conformance={"status": "pass", "findings": []},
+            caption_footprints=[],
+        )
+        technical = build_render_promotion_report(
+            mode="enforce",
+            delivery="technical_pass_guaranteed",
+            frame_quality={"status": "pass", "findings": []},
+            render_qa={
+                "status": "blocker",
+                "findings": [{"code": "AUDIO_MISSING", "severity": "blocker"}],
+            },
+            creative_conformance={"status": "pass", "findings": []},
+            caption_footprints=[],
+        )
+        mixed = build_render_promotion_report(
+            mode="enforce",
+            delivery="technical_pass_guaranteed",
+            frame_quality={
+                "status": "blocker",
+                "findings": [{
+                    "code": "ACTIVE_PICTURE_TOO_SMALL",
+                    "severity": "blocker",
+                }],
+            },
+            render_qa={
+                "status": "blocker",
+                "findings": [{"code": "AUDIO_MISSING", "severity": "blocker"}],
+            },
+            creative_conformance={"status": "pass", "findings": []},
+            caption_footprints=[],
+        )
+
+        self.assertEqual(creative["strict_decision"], "block")
+        self.assertEqual(creative["delivery_decision"], "publish_with_limitations")
+        self.assertTrue(creative["download_available"])
+        self.assertEqual(technical["delivery_decision"], "withhold_technical")
+        self.assertFalse(technical["download_available"])
+        self.assertEqual(mixed["delivery_decision"], "withhold_technical")
+        self.assertFalse(mixed["download_available"])
+
     def test_baseline_policy_blocks_missing_frame_evidence_and_structural_defects(self):
         report = build_render_promotion_report(
             mode="enforce",
@@ -195,6 +248,35 @@ class RenderPromotionTests(unittest.TestCase):
         }):
             with self.assertRaises(RenderPromotionError):
                 limited_output_promotion_enabled()
+
+    def test_delivery_policy_defaults_safe_and_supports_compatibility_flags(self):
+        config = SimpleNamespace(
+            delivery_policy="qa_enforced",
+            completion_policy="strict",
+        )
+        with patch.dict(os.environ, {}, clear=True):
+            self.assertEqual(delivery_policy(config), "qa_enforced")
+        with patch.dict(os.environ, {
+            "OPENSTORYLINE_DELIVERY_POLICY": "technical_pass_guaranteed",
+        }):
+            self.assertEqual(delivery_policy(config), "technical_pass_guaranteed")
+        with patch.dict(os.environ, {
+            "OPENSTORYLINE_DELIVERY_POLICY": "publish_everything",
+        }):
+            with self.assertRaises(RenderPromotionError):
+                delivery_policy(config)
+
+        compatibility = SimpleNamespace(
+            delivery_policy="qa_enforced",
+            completion_policy="baseline_guaranteed",
+        )
+        with patch.dict(os.environ, {
+            "OPENSTORYLINE_LIMITED_OUTPUT_PROMOTION_ENABLED": "true",
+        }, clear=True):
+            self.assertEqual(
+                delivery_policy(compatibility),
+                "technical_pass_guaranteed",
+            )
 
 
 @unittest.skipUnless(shutil.which("ffmpeg") and shutil.which("ffprobe"), "FFmpeg is required")

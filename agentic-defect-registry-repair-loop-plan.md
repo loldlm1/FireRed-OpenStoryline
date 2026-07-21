@@ -1,7 +1,7 @@
 # Plan: Centralized Agentic Defect Registry And Bounded Repair Loop
 
 **Generated**: 2026-07-21
-**Status**: Implementation in progress; Sprints 1-4 complete
+**Status**: Implementation in progress; Sprints 1-5 complete
 **Estimated Complexity**: High
 
 ## Overview
@@ -1131,12 +1131,33 @@ continue to display `outcome_report.v1` and ignore additive repair artifacts.
 
 ### Sprint 5 Gate
 
-- [ ] All Sprint 5 tasks complete.
-- [ ] Sprint 5 validation passes and evidence is recorded.
-- [ ] Residual risks are documented.
-- [ ] Exactly one Sprint 5 commit is created with the proposed sprint message.
-- [ ] The rollback point is recorded.
-- [ ] Sprint 6 has not started before this gate completes.
+- [x] All Sprint 5 tasks complete.
+- [x] Sprint 5 validation passes and evidence is recorded.
+- [x] Residual risks are documented.
+- [x] Exactly one Sprint 5 commit is created with the proposed sprint message.
+- [x] The rollback point is recorded.
+- [x] Sprint 6 has not started before this gate completes.
+
+**Recorded evidence**: 92 focused repair, outcome, observability, audit, job,
+promotion, deployment-config, and FFMPEGA tests passed with 28 expected
+PostgreSQL skips. The full local suite passed 434 tests with 76 expected
+environment-dependent skips. Configuration loading, repository shell syntax,
+and diff checks passed. Console-strict Chromium smoke and the focused
+retry/comparison lifecycle scenario each passed with one worker; compact
+results are stored under `.qa/web/artifacts/`. Outcome v2 remains compatible
+with v1 readers, strict QA and delivery decisions remain separate, creative-only
+technical-pass candidates remain downloadable only under the explicit target
+policy, technical and mixed blockers remain withheld, optional FFMPEGA failure
+preserves the native candidate with registered fallback evidence, and repair
+artifacts contain bounded hashes/identifiers rather than prompts, transcripts,
+frames, provider bodies, credentials, or paths. The defect audit projection is
+bounded to at most 5,000 recent jobs and remains document-backed; normalization
+or backfill is deferred until measured query volume justifies it. Connected
+PostgreSQL query evidence remains a Sprint 6 operational gate because
+`TEST_DATABASE_URL` is unset. No live provider call or deployment occurred.
+Roll back by setting `OPENSTORYLINE_LLM_DEFECT_REPAIR_MODE=off`, restoring
+`OPENSTORYLINE_DELIVERY_POLICY=qa_enforced`, and hiding repair/retry UX; v1
+outcome readers and existing deterministic rendering remain available.
 
 ## Sprint 6: Run Evals, Operational Gates, And Staged Rollout
 

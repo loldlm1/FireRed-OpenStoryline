@@ -56,6 +56,82 @@ class OutcomeTests(unittest.TestCase):
             "Audio is missing",
         )
 
+    def test_v2_preserves_strict_delivery_and_per_code_repair_lifecycle(self):
+        report = build_completed_outcome_report(
+            outputs=[{"video": "short-01.mp4", "subtitles": None}],
+            promotion_report={
+                "promotion_decision": "promote_with_limitations",
+                "technical_blocker_codes": [],
+                "creative_limitation_codes": ["ACTIVE_PICTURE_TOO_SMALL"],
+                "strict_decision": "block",
+                "delivery_policy": "technical_pass_guaranteed",
+                "delivery_decision": "publish_with_limitations",
+                "download_available": True,
+            },
+            repair_report={
+                "version": "repair_report.v1",
+                "registry_version": "defect_registry.v1",
+                "mode": "enforce",
+                "stages": [{
+                    "stage": "plan_repair",
+                    "status": "rejected",
+                    "dispositions": [{
+                        "code": "ACTIVE_PICTURE_TOO_SMALL",
+                        "eligible": True,
+                    }],
+                    "attempts": [{"category": "plan_repair"}],
+                    "checkpoint_reused": True,
+                }],
+                "fallbacks": [{
+                    "code": "ACTIVE_PICTURE_TOO_SMALL",
+                    "requested": "crop",
+                    "executed": "fit",
+                }],
+                "summary": {
+                    "resolved_codes": [],
+                    "remaining_codes": ["ACTIVE_PICTURE_TOO_SMALL"],
+                    "introduced_codes": [],
+                    "fallback_applied_codes": ["ACTIVE_PICTURE_TOO_SMALL"],
+                    "not_repairable_codes": [],
+                },
+            },
+        )
+
+        self.assertEqual(report["version"], "outcome_report.v2")
+        self.assertEqual(report["strict_qa"]["decision"], "block")
+        self.assertEqual(
+            report["delivery"]["decision"],
+            "publish_with_limitations",
+        )
+        self.assertTrue(report["delivery"]["download_available"])
+        defect = report["repair"]["defects"][0]
+        self.assertTrue(defect["repair_attempted"])
+        self.assertEqual(
+            defect["dispositions"],
+            ["fallback_applied", "remaining"],
+        )
+        self.assertTrue(defect["stage_statuses"][0]["checkpoint_reused"])
+
+    def test_v1_unknown_codes_remain_safe_and_non_repairable(self):
+        summary = outcome_summary({
+            "version": "outcome_report.v1",
+            "grade": "with_limitations",
+            "outputs": [{"video": "short-01.mp4"}],
+            "limitations": [{
+                "code": "HISTORICAL_UNKNOWN_CODE",
+                "stage": "qa",
+                "description": "untrusted provider text",
+            }],
+            "fatal_errors": [],
+            "retry": {},
+        })
+
+        self.assertEqual(summary["version"], "outcome_report.v1")
+        presentation = summary["limitations"][0]["presentation"]
+        self.assertEqual(presentation["raw_code"], "HISTORICAL_UNKNOWN_CODE")
+        self.assertFalse(presentation["registered"])
+        self.assertEqual(presentation["repair_strategy"], "terminal")
+
     def test_failed_outcome_keeps_strict_creative_block_retryable(self):
         report = build_failed_outcome_report(
             code="RENDER_PROMOTION_BLOCKED",

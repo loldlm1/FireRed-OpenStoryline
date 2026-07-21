@@ -113,7 +113,13 @@ isolated so upstream behavior can continue to be merged into this fork.
 - `OPENSTORYLINE_COMPLETION_POLICY` defaults to `strict`.
   `baseline_guaranteed` takes effect only when
   `OPENSTORYLINE_LIMITED_OUTPUT_PROMOTION_ENABLED=true`; otherwise strict
-  remains authoritative. `render_promotion.json` records both decisions for
+  remains authoritative as a compatibility path.
+- `OPENSTORYLINE_DELIVERY_POLICY` is the explicit delivery control and defaults
+  to `qa_enforced`. `technical_pass_guaranteed` publishes a technically valid
+  candidate with truthful creative limitations while preserving the separate
+  strict QA block verdict. Technical blockers remain unavailable.
+- `render_promotion.json`, `repair_report.json`, and `outcome_report.json`
+  preserve strict, technical, repair, fallback, and delivery evidence for
   canary comparison and rollback.
 - `OPENSTORYLINE_RETRY_UX_ENABLED` independently controls the browser actions;
   disabling it does not remove outcome, lineage, or audit evidence.
