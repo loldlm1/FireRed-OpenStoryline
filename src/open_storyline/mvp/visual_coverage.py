@@ -6,7 +6,6 @@ from typing import Any
 from open_storyline.mvp.edit_plan import EditPlan, EditSegment
 from open_storyline.mvp.frame_sampling import FrameManifest
 from open_storyline.mvp.visual_understanding import (
-    RegionObservation,
     VisualUnderstanding,
     select_target_regions,
 )
@@ -16,6 +15,7 @@ CLIP_VISUAL_COVERAGE_VERSION = "clip_visual_coverage.v1"
 TRACK_CONTINUITY_MIN_CONFIDENCE = 0.8
 TRACK_CONTINUITY_MAX_CENTER_SPAN_RATIO = 0.12
 TRACK_CONTINUITY_MAX_SIZE_SPAN_RATIO = 0.18
+TRACK_CONTINUITY_MAX_BRACKET_GAP_MS = 12_000
 
 
 @dataclass(frozen=True)
@@ -34,6 +34,9 @@ class SegmentVisualCoverage:
     track_confidence: float | None
     geometry_center_span_ratio: float
     geometry_size_span_ratio: float
+    track_brackets_segment: bool
+    track_bracket_gap_ms: int | None
+    continuity_override_applied: bool
     gap_override_applied: bool
     fallback: str
     full_frame_fallback_allowed: bool
@@ -109,6 +112,9 @@ class ClipVisualCoverageReport:
                 "track_continuity_max_size_span_ratio": (
                     TRACK_CONTINUITY_MAX_SIZE_SPAN_RATIO
                 ),
+                "track_continuity_max_bracket_gap_ms": (
+                    TRACK_CONTINUITY_MAX_BRACKET_GAP_MS
+                ),
             },
             "repair": {
                 "attempted": self.repair_attempted,
@@ -128,10 +134,10 @@ class ClipVisualCoverageReport:
 def _target_timestamps(
     segment: EditSegment,
     visual: VisualUnderstanding,
-) -> tuple[str, str, tuple[int, ...], tuple[RegionObservation, ...]]:
+) -> tuple[str, str, tuple[int, ...]]:
     target = segment.layout.focal_target
     if target is None:
-        return "center", "", (), ()
+        return "center", "", ()
     frames = {
         str(frame.get("id")): int(frame.get("timestamp_ms"))
         for frame in visual.frame_manifest.get("frames") or []
@@ -157,14 +163,13 @@ def _target_timestamps(
         for region in regions
         if region.frame_id in frames
     }
-    return target_kind, target_id, tuple(sorted(timestamps)), regions
+    return target_kind, target_id, tuple(sorted(timestamps))
 
 
 def _track_continuity(
     segment: EditSegment,
     visual: VisualUnderstanding,
-    regions: tuple[RegionObservation, ...],
-) -> tuple[bool, float | None, float, float, bool]:
+) -> tuple[bool, float | None, float, float, bool, int | None, bool]:
     target = segment.layout.focal_target
     track = next(
         (
@@ -174,12 +179,27 @@ def _track_continuity(
         ),
         None,
     )
-    if track is None or not regions:
-        return False, None, 0.0, 0.0, False
-    center_x = [region.bbox.x + region.bbox.width / 2 for region in regions]
-    center_y = [region.bbox.y + region.bbox.height / 2 for region in regions]
-    widths = [region.bbox.width for region in regions]
-    heights = [region.bbox.height for region in regions]
+    if track is None:
+        return False, None, 0.0, 0.0, False, None, False
+    frame_times = {
+        str(frame.get("id")): int(frame.get("timestamp_ms"))
+        for frame in visual.frame_manifest.get("frames") or []
+        if isinstance(frame, dict)
+        and frame.get("id") is not None
+        and frame.get("timestamp_ms") is not None
+    }
+    track_ids = set(track.region_ids)
+    track_regions = tuple(
+        region
+        for region in visual.regions
+        if region.id in track_ids and region.frame_id in frame_times
+    )
+    if not track_regions:
+        return False, round(track.confidence, 6), 0.0, 0.0, False, None, False
+    center_x = [region.bbox.x + region.bbox.width / 2 for region in track_regions]
+    center_y = [region.bbox.y + region.bbox.height / 2 for region in track_regions]
+    widths = [region.bbox.width for region in track_regions]
+    heights = [region.bbox.height for region in track_regions]
     center_span = max(max(center_x) - min(center_x), max(center_y) - min(center_y))
     size_span = max(max(widths) - min(widths), max(heights) - min(heights))
     covers_segment = (
@@ -190,16 +210,31 @@ def _track_continuity(
         center_span <= TRACK_CONTINUITY_MAX_CENTER_SPAN_RATIO
         and size_span <= TRACK_CONTINUITY_MAX_SIZE_SPAN_RATIO
     )
+    timestamps = sorted(frame_times[region.frame_id] for region in track_regions)
+    before = [value for value in timestamps if value <= segment.source_window.start_ms]
+    after = [value for value in timestamps if value >= segment.source_window.end_ms]
+    if not before and timestamps[0] <= segment.source_window.start_ms + 250:
+        before = [track.start_ms]
+    if not after and timestamps[-1] >= segment.source_window.end_ms - 250:
+        after = [track.end_ms]
+    bracket_gap_ms = min(after) - max(before) if before and after else None
+    brackets_segment = (
+        bracket_gap_ms is not None
+        and 0 <= bracket_gap_ms <= TRACK_CONTINUITY_MAX_BRACKET_GAP_MS
+    )
     supported = (
         covers_segment
         and track.confidence >= TRACK_CONTINUITY_MIN_CONFIDENCE
         and stable_geometry
+        and brackets_segment
     )
     return (
         covers_segment,
         round(track.confidence, 6),
         round(center_span, 6),
         round(size_span, 6),
+        brackets_segment,
+        bracket_gap_ms,
         supported,
     )
 
@@ -234,7 +269,7 @@ def build_clip_visual_coverage(
         for segment in clip.segments:
             if segment.layout.mode != "crop":
                 continue
-            target_kind, target_id, timestamps, regions = _target_timestamps(
+            target_kind, target_id, timestamps = _target_timestamps(
                 segment,
                 visual,
             )
@@ -258,27 +293,45 @@ def build_clip_visual_coverage(
                 track_confidence,
                 geometry_center_span_ratio,
                 geometry_size_span_ratio,
+                track_brackets_segment,
+                track_bracket_gap_ms,
                 track_continuity_supported,
-            ) = _track_continuity(segment, visual, regions)
+            ) = _track_continuity(segment, visual)
             gap_override_applied = (
-                target_kind == "track"
+                target_kind in {"track", "semantic_role_fallback"}
                 and len(timestamps) >= min_observations
                 and coverage_ratio >= min_temporal_coverage_ratio
                 and max_gap_ms > max_observation_gap_ms
                 and track_continuity_supported
             )
+            continuity_override_applied = (
+                target_kind in {"track", "semantic_role_fallback"}
+                and track_continuity_supported
+                and (
+                    len(timestamps) < min_observations
+                    or coverage_ratio < min_temporal_coverage_ratio
+                    or max_gap_ms > max_observation_gap_ms
+                )
+            )
             blockers: list[str] = []
             if target_kind != "center" and not full_frame_allowed:
-                if not timestamps:
+                if not timestamps and not continuity_override_applied:
                     blockers.append("CROP_VISUAL_OBSERVATION_MISSING")
-                elif len(timestamps) < min_observations:
+                elif (
+                    len(timestamps) < min_observations
+                    and not continuity_override_applied
+                ):
                     blockers.append("CROP_VISUAL_OBSERVATIONS_INSUFFICIENT")
-                if timestamps and coverage_ratio < min_temporal_coverage_ratio:
+                if (
+                    timestamps
+                    and coverage_ratio < min_temporal_coverage_ratio
+                    and not continuity_override_applied
+                ):
                     blockers.append("CROP_VISUAL_TEMPORAL_COVERAGE_LOW")
                 if (
                     timestamps
                     and max_gap_ms > max_observation_gap_ms
-                    and not gap_override_applied
+                    and not continuity_override_applied
                 ):
                     blockers.append("CROP_VISUAL_GAP_TOO_LARGE")
             segment_reports.append(SegmentVisualCoverage(
@@ -296,6 +349,9 @@ def build_clip_visual_coverage(
                 track_confidence=track_confidence,
                 geometry_center_span_ratio=geometry_center_span_ratio,
                 geometry_size_span_ratio=geometry_size_span_ratio,
+                track_brackets_segment=track_brackets_segment,
+                track_bracket_gap_ms=track_bracket_gap_ms,
+                continuity_override_applied=continuity_override_applied,
                 gap_override_applied=gap_override_applied,
                 fallback=segment.layout.fallback,
                 full_frame_fallback_allowed=full_frame_allowed,

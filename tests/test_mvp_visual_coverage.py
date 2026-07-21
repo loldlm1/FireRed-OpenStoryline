@@ -142,6 +142,8 @@ class ClipVisualCoverageTests(unittest.TestCase):
 
         self.assertEqual(report.blocking, 0)
         self.assertTrue(report.segments[0].track_window_covers_segment)
+        self.assertTrue(report.segments[0].track_brackets_segment)
+        self.assertTrue(report.segments[0].continuity_override_applied)
         self.assertTrue(report.segments[0].gap_override_applied)
         self.assertGreater(report.segments[0].maximum_gap_ms, 8_000)
 
@@ -178,6 +180,75 @@ class ClipVisualCoverageTests(unittest.TestCase):
 
         self.assertIn("CROP_VISUAL_GAP_TOO_LARGE", report.blocker_codes)
         self.assertFalse(report.segments[0].gap_override_applied)
+
+    def test_stable_bracketed_track_can_bridge_a_short_segment_without_inner_samples(self):
+        timestamps = (20_000, 26_000)
+        manifest = FrameManifest(
+            source_duration_ms=30_000,
+            source_width=1920,
+            source_height=1080,
+            frames=tuple(
+                sampled_frame(f"clip-01-frame-{index:03d}", timestamp)
+                for index, timestamp in enumerate(timestamps, start=1)
+            ),
+        )
+        visual = visual_for(timestamps)
+        segment = crop_plan().clips[0].segments[0].model_copy(update={
+            "source_window": TimeWindow(start_ms=21_000, end_ms=25_000),
+            "timeline_window": TimeWindow(start_ms=0, end_ms=4_000),
+        })
+        plan = crop_plan().model_copy(update={
+            "clips": (crop_plan().clips[0].model_copy(update={
+                "source_window": TimeWindow(start_ms=21_000, end_ms=25_000),
+                "segments": (segment,),
+            }),),
+        })
+
+        report = build_clip_visual_coverage(
+            plan,
+            visual=visual,
+            clip_frame_manifests={1: manifest},
+        )
+
+        self.assertEqual(report.blocking, 0)
+        self.assertEqual(report.segments[0].observation_count, 0)
+        self.assertTrue(report.segments[0].track_brackets_segment)
+        self.assertTrue(report.segments[0].continuity_override_applied)
+        self.assertFalse(report.segments[0].gap_override_applied)
+
+    def test_stable_track_does_not_bridge_an_unbounded_sampling_gap(self):
+        timestamps = (10_000, 29_000)
+        manifest = FrameManifest(
+            source_duration_ms=30_000,
+            source_width=1920,
+            source_height=1080,
+            frames=tuple(
+                sampled_frame(f"clip-01-frame-{index:03d}", timestamp)
+                for index, timestamp in enumerate(timestamps, start=1)
+            ),
+        )
+        visual = visual_for(timestamps)
+        segment = crop_plan().clips[0].segments[0].model_copy(update={
+            "source_window": TimeWindow(start_ms=15_000, end_ms=25_000),
+            "timeline_window": TimeWindow(start_ms=0, end_ms=10_000),
+        })
+        plan = crop_plan().model_copy(update={
+            "clips": (crop_plan().clips[0].model_copy(update={
+                "source_window": TimeWindow(start_ms=15_000, end_ms=25_000),
+                "segments": (segment,),
+            }),),
+        })
+
+        report = build_clip_visual_coverage(
+            plan,
+            visual=visual,
+            clip_frame_manifests={1: manifest},
+        )
+
+        self.assertIn("CROP_VISUAL_OBSERVATION_MISSING", report.blocker_codes)
+        self.assertFalse(report.segments[0].track_brackets_segment)
+        self.assertFalse(report.segments[0].continuity_override_applied)
+        self.assertGreater(report.segments[0].track_bracket_gap_ms, 12_000)
 
     def test_explicit_semantic_role_fills_sparse_track_coverage(self):
         timestamps = (20_250, 22_500, 24_500, 26_500, 28_750)
