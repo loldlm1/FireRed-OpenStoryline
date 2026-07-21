@@ -147,6 +147,26 @@ class EditPlanContractTests(unittest.TestCase):
                     "source",
                 )
 
+    def test_normalizes_asset_failure_fallback_aliases(self):
+        for alias in (
+            "error",
+            "Error if unavailable",
+            "fail",
+            "Fail if unavailable",
+            "fail_job",
+            "hard-fail",
+            "raise error",
+        ):
+            with self.subTest(alias=alias):
+                normalized = _normalize_edit_plan_response({
+                    "clips": [{"asset_requests": [{"fallback": alias}]}],
+                })
+
+                self.assertEqual(
+                    normalized["clips"][0]["asset_requests"][0]["fallback"],
+                    "omit",
+                )
+
     def test_derives_only_unambiguous_missing_asset_overlays(self):
         normalized = _normalize_edit_plan_response({
             "clips": [{
