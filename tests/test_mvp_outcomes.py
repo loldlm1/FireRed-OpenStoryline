@@ -73,6 +73,17 @@ class OutcomeTests(unittest.TestCase):
         self.assertEqual(report["grade"], "terminal_failure")
         self.assertEqual(report["technical_status"], "blocked")
 
+    def test_visual_coverage_failure_supports_evidence_backed_retry(self):
+        report = build_failed_outcome_report(
+            code="EDIT_PLAN_VISUAL_COVERAGE_INSUFFICIENT",
+            stage="planning_agentic_edit",
+            retryable=True,
+        )
+
+        self.assertEqual(report["grade"], "retryable_failure")
+        self.assertTrue(report["retry"]["supported"])
+        self.assertTrue(report["retry"]["quality_feedback_supported"])
+
     def test_summary_is_bounded_and_slo_reports_confidence(self):
         enhanced = build_completed_outcome_report(
             outputs=[{"video": "short-01.mp4", "subtitles": None}],

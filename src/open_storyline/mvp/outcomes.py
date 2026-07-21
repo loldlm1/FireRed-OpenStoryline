@@ -17,6 +17,9 @@ OUTCOME_GRADES = frozenset({
     "retryable_failure",
     "terminal_failure",
 })
+QUALITY_FEEDBACK_ERROR_CODES = frozenset({
+    "EDIT_PLAN_VISUAL_COVERAGE_INSUFFICIENT",
+})
 
 
 def retry_ux_enabled() -> bool:
@@ -158,6 +161,11 @@ def build_failed_outcome_report(
         technical_codes = evidence_codes
     failure_codes = technical_codes or ([normalized_code] if not creative_codes else [])
     current_codes = _codes([*technical_codes, *creative_codes, *failure_codes])
+    quality_feedback_supported = bool(
+        technical_codes
+        or creative_codes
+        or normalized_code in QUALITY_FEEDBACK_ERROR_CODES
+    )
     return {
         "version": OUTCOME_REPORT_VERSION,
         "grade": "retryable_failure" if retryable else "terminal_failure",
@@ -187,7 +195,7 @@ def build_failed_outcome_report(
         },
         "retry": {
             "supported": retryable,
-            "quality_feedback_supported": bool(technical_codes or creative_codes),
+            "quality_feedback_supported": quality_feedback_supported,
             "recommended_action": "retry_defects" if retryable else "none",
             "reused_stage_names": [],
             "recomputed_stage_names": [],
