@@ -27,6 +27,7 @@ REFRAME_RENDER_CAPABILITIES = frozenset({
     "subtitles",
 })
 RENDER_EXECUTION_VERSION = "render_execution.v1"
+CROP_TARGET_MAX_OVERFLOW_RATIO = 1.10
 
 
 class CompositionError(RuntimeError):
@@ -376,7 +377,10 @@ def _resolve_segment(
         base_crop_height,
         resolved_zoom,
     )
-    if target_width > crop_width * 1.05 or target_height > crop_height * 1.05:
+    if (
+        target_width > crop_width * CROP_TARGET_MAX_OVERFLOW_RATIO
+        or target_height > crop_height * CROP_TARGET_MAX_OVERFLOW_RATIO
+    ):
         fallback = _fallback_strategy(segment)
         if fallback == "crop":
             raise CompositionError(

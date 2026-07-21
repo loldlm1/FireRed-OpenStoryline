@@ -346,6 +346,42 @@ class CompositorTests(unittest.TestCase):
                 (observation.bbox.x + observation.bbox.width) * source.width,
             )
 
+    def test_crop_tolerates_small_detector_box_overflow_around_speaker(self):
+        source = MediaInfo(4000, 1920, 1080, True)
+        segment = EditSegment(
+            id="speaker-overflow",
+            source_window=TimeWindow(start_ms=0, end_ms=4000),
+            timeline_window=TimeWindow(start_ms=0, end_ms=4000),
+            layout=LayoutSpec(
+                mode="crop",
+                focal_target=FocalTarget(region_id="speaker"),
+                fallback="crop",
+                max_zoom=2.4,
+                safe_margin_ratio=0.08,
+            ),
+            reason="keep the speaker centered in the portrait crop",
+        )
+        observation = region("speaker", "frame-001", x=0.006, width=0.34)
+
+        composition = resolve_clip_composition(
+            clip_plan([segment]),
+            visual=visual(
+                [{"id": "frame-001", "timestamp_ms": 2000}],
+                [observation],
+            ),
+            source_media=source,
+            output_width=1080,
+            output_height=1920,
+        )
+
+        resolved = composition.segments[0]
+        target_center = (observation.bbox.x + observation.bbox.width / 2) * source.width
+        self.assertEqual(resolved.strategy, "crop")
+        self.assertEqual(resolved.resolved_zoom, 1.0)
+        self.assertFalse(resolved.fallback_used)
+        self.assertLessEqual(resolved.crop.x, target_center)
+        self.assertGreaterEqual(resolved.crop.x + resolved.crop.width, target_center)
+
     def test_crop_uses_explicit_semantic_role_when_track_is_temporally_sparse(self):
         source = MediaInfo(4000, 640, 360, True)
         segment = EditSegment(
