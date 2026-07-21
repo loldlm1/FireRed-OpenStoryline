@@ -7,6 +7,7 @@ from statistics import median
 from typing import Any, Iterable, Sequence
 import os
 
+from open_storyline.mvp.defects import defect_public_metadata
 from open_storyline.mvp.fallbacks import FallbackEntry
 
 
@@ -38,14 +39,16 @@ def _tokens(values: Iterable[Any]) -> list[str]:
 
 
 def _limitation(code: str) -> dict[str, Any]:
+    presentation = defect_public_metadata(code)
     return {
         "code": code,
         "stage": "qa",
         "severity": "limitation",
-        "description": f"Strict creative QA reported {code}.",
+        "description": presentation["en"]["description"],
         "evidence_code": code,
-        "retryable": True,
-        "recommended_retry_action": "retry_defects",
+        "retryable": presentation["retryable"],
+        "recommended_retry_action": presentation["retry_action"],
+        "presentation": presentation,
     }
 
 
@@ -78,6 +81,7 @@ def build_completed_outcome_report(
             "description": entry.reason,
             "retryable": entry.retryable,
             "recommended_retry_action": entry.retry_action,
+            "presentation": defect_public_metadata(entry.code),
         }
         for entry in fallbacks
     ]
@@ -88,6 +92,7 @@ def build_completed_outcome_report(
             "stage": "qa",
             "retryable": True,
             "recommended_retry_action": "retry_defects",
+            "presentation": defect_public_metadata(code),
         }
         for code in technical_codes
     ]
@@ -178,6 +183,7 @@ def build_failed_outcome_report(
                 "stage": str(stage or "unknown")[:64],
                 "retryable": retryable,
                 "recommended_retry_action": "retry_defects" if retryable else "none",
+                "presentation": defect_public_metadata(item),
             }
             for item in failure_codes
         ],
@@ -225,6 +231,7 @@ def outcome_summary(value: Any) -> dict[str, Any] | None:
             "recommended_retry_action": str(
                 item.get("recommended_retry_action") or ""
             )[:40],
+            "presentation": defect_public_metadata(item.get("code")),
         }
         for item in (value.get("limitations") or [])[:24]
         if isinstance(item, dict) and item.get("code")
@@ -234,6 +241,7 @@ def outcome_summary(value: Any) -> dict[str, Any] | None:
             "code": str(item.get("code") or "")[:80],
             "stage": str(item.get("stage") or "")[:64],
             "retryable": bool(item.get("retryable")),
+            "presentation": defect_public_metadata(item.get("code")),
         }
         for item in (value.get("fatal_errors") or [])[:24]
         if isinstance(item, dict) and item.get("code")

@@ -3,6 +3,7 @@ from __future__ import annotations
 from typing import Any, Literal, Sequence
 import os
 
+from open_storyline.mvp.defects import PromotionClass, promotion_class_for_code
 
 RENDER_PROMOTION_VERSION = "render_promotion.v1"
 PromotionMode = Literal["off", "report", "enforce"]
@@ -129,6 +130,15 @@ def _normalized_codes(values: Sequence[str]) -> list[str]:
     return sorted({str(code).strip().upper()[:80] for code in values if code})
 
 
+def _is_technical(code: str, detector_codes: frozenset[str]) -> bool:
+    if code in detector_codes:
+        return True
+    return promotion_class_for_code(code) in {
+        PromotionClass.TECHNICAL_BLOCKER,
+        PromotionClass.TERMINAL,
+    }
+
+
 def build_render_promotion_report(
     *,
     mode: PromotionMode,
@@ -142,10 +152,10 @@ def build_render_promotion_report(
     frame_blockers = _normalized_codes(_blocker_codes(frame_quality))
     render_blockers = _normalized_codes(_blocker_codes(render_qa))
     technical_blockers = {
-        code for code in frame_blockers if code in TECHNICAL_FRAME_CODES
+        code for code in frame_blockers if _is_technical(code, TECHNICAL_FRAME_CODES)
     }
     technical_blockers.update(
-        code for code in render_blockers if code in TECHNICAL_RENDER_CODES
+        code for code in render_blockers if _is_technical(code, TECHNICAL_RENDER_CODES)
     )
     creative_limitations = set(frame_blockers) - technical_blockers
     creative_limitations.update(set(render_blockers) - technical_blockers)

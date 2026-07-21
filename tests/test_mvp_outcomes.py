@@ -44,9 +44,17 @@ class OutcomeTests(unittest.TestCase):
         self.assertEqual(limited["grade"], "with_limitations")
         self.assertEqual(limited["technical_status"], "pass")
         self.assertEqual(limited["limitations"][0]["code"], "ACTIVE_PICTURE_TOO_SMALL")
+        self.assertEqual(
+            limited["limitations"][0]["presentation"]["es"]["title"],
+            "La imagen activa es demasiado pequena",
+        )
         self.assertEqual(technical["grade"], "retryable_failure")
         self.assertEqual(technical["technical_status"], "blocked")
         self.assertEqual(technical["fatal_errors"][0]["code"], "AUDIO_MISSING")
+        self.assertEqual(
+            technical["fatal_errors"][0]["presentation"]["en"]["title"],
+            "Audio is missing",
+        )
 
     def test_failed_outcome_keeps_strict_creative_block_retryable(self):
         report = build_failed_outcome_report(
@@ -61,6 +69,11 @@ class OutcomeTests(unittest.TestCase):
         self.assertEqual(report["technical_status"], "pass")
         self.assertEqual(report["promotion"]["decision"], "block_strict")
         self.assertEqual(report["limitations"][0]["code"], "ACTIVE_PICTURE_TOO_SMALL")
+        summary = outcome_summary(report)
+        self.assertEqual(
+            summary["limitations"][0]["presentation"]["canonical_code"],
+            "ACTIVE_PICTURE_TOO_SMALL",
+        )
         self.assertEqual(report["fatal_errors"], [])
 
     def test_non_retryable_failure_uses_terminal_grade(self):
@@ -72,6 +85,22 @@ class OutcomeTests(unittest.TestCase):
 
         self.assertEqual(report["grade"], "terminal_failure")
         self.assertEqual(report["technical_status"], "blocked")
+
+    def test_summary_ignores_untrusted_stored_presentation(self):
+        report = build_completed_outcome_report(
+            outputs=[{"video": "clip-01.mp4", "subtitles": None}],
+            qa_blocker_codes=["ACTIVE_PICTURE_TOO_SMALL"],
+        )
+        report["limitations"][0]["presentation"] = {
+            "es": {"title": "provider response", "description": "private payload"}
+        }
+
+        summary = outcome_summary(report)
+
+        self.assertEqual(
+            summary["limitations"][0]["presentation"]["es"]["title"],
+            "La imagen activa es demasiado pequena",
+        )
 
     def test_visual_coverage_failure_supports_evidence_backed_retry(self):
         report = build_failed_outcome_report(
@@ -116,6 +145,7 @@ class OutcomeTests(unittest.TestCase):
         slo = build_outcome_slo_summary(rows)
 
         self.assertEqual(compact["output_count"], 1)
+        self.assertTrue(compact["limitations"][0]["retryable"])
         self.assertEqual(compact["retry"]["reused_stage_names"], [
             "global_analysis",
             "transcript",

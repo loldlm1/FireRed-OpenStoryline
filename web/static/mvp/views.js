@@ -1,4 +1,11 @@
-import { activityMessage, activityMeta, errorMessage, stateLabel } from './messages.js';
+import {
+  activityMessage,
+  activityMeta,
+  defectDescription,
+  defectTitle,
+  errorMessage,
+  stateLabel,
+} from './messages.js';
 
 const byId = (id) => document.getElementById(id);
 
@@ -558,11 +565,14 @@ function createRunDetail(run) {
       for (const limitation of limitations) {
         const item = document.createElement('li');
         const title = document.createElement('strong');
-        title.textContent = limitation.code;
+        title.textContent = `${defectTitle(limitation)} · ${limitation.code}`;
         const copy = document.createElement('span');
         const execution = limitation.executed
           ? `Se ejecutó ${codeLabel(limitation.executed)}${limitation.requested ? ` en lugar de ${codeLabel(limitation.requested)}` : ''}.`
-          : limitation.description || `Hallazgo en ${codeLabel(limitation.stage || 'qa')}.`;
+          : defectDescription(
+            limitation,
+            `Hallazgo en ${codeLabel(limitation.stage || 'qa')}.`,
+          );
         copy.textContent = execution;
         item.append(title, copy);
         list.append(item);

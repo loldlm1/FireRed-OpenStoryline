@@ -115,7 +115,19 @@ export function activityMessage(event) {
 
 export function errorMessage(error, fallback = 'No pudimos completar la solicitud. Intenta de nuevo.') {
   const code = typeof error === 'string' ? error : error?.code;
+  const registryDescription = typeof error === 'object'
+    ? error?.presentation?.es?.description
+    : null;
+  if (registryDescription) return registryDescription;
   return ERROR_MESSAGES[code] || fallback;
+}
+
+export function defectTitle(defect) {
+  return defect?.presentation?.es?.title || 'Hallazgo verificable';
+}
+
+export function defectDescription(defect, fallback = '') {
+  return defect?.presentation?.es?.description || defect?.description || fallback;
 }
 
 export function stateLabel(state) {
