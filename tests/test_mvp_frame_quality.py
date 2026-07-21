@@ -54,7 +54,10 @@ class RenderPromotionTests(unittest.TestCase):
         }
         conformance = {
             "status": "blocker",
-            "findings": [{"code": "requested_assets_missing", "severity": "warning"}],
+            "findings": [
+                {"code": "requested_assets_missing", "severity": "warning"},
+                {"code": "asset_overlay_not_visible", "severity": "warning"},
+            ],
         }
         footprint = {
             "status": "blocked",
@@ -80,6 +83,7 @@ class RenderPromotionTests(unittest.TestCase):
         self.assertEqual(report["decision"], "observe")
         self.assertEqual(enforce["decision"], "block")
         self.assertEqual(report["blocker_codes"], enforce["blocker_codes"])
+        self.assertIn("ASSET_OVERLAY_NOT_VISIBLE", report["blocker_codes"])
         with self.assertRaises(RenderPromotionError) as caught:
             enforce_render_promotion(enforce)
         self.assertEqual(caught.exception.code, "RENDER_PROMOTION_BLOCKED")

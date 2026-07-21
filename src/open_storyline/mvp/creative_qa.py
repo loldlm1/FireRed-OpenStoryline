@@ -20,6 +20,7 @@ RENDER_QA_VERSION = "render_qa.v1"
 RETENTION_RHYTHM_QA_VERSION = "retention_rhythm_qa.v1"
 CREATIVE_CONFORMANCE_VERSION = "creative_conformance.v1"
 SEMANTIC_QA_VERSION = "semantic_output_review.v1"
+ASSET_VISIBILITY_VERSION = "asset_visibility.v1"
 QA_NOTICE = (
     "These deterministic rhythm heuristics identify editing risks; they do not "
     "predict retention, engagement, or virality."
@@ -28,7 +29,10 @@ QA_NOTICE = (
 _MAX_QA_CLIPS = 8
 _MAX_COMMAND_OUTPUT = 1_000_000
 _MAX_FINDINGS = 128
+_MAX_ASSET_VISIBILITY_OVERLAYS = 16
 _SEVERITY_ORDER = {"blocker": 0, "warning": 1, "review": 2}
+_ASSET_VISIBILITY_MIN_OPACITY = 0.75
+_ASSET_VISIBILITY_MIN_SSIM = 0.6
 
 
 class CreativeQAError(RuntimeError):
@@ -281,6 +285,302 @@ def _probe(path: Path, *, timeout: float) -> dict[str, Any]:
         "video_codec": _clean_text(video.get("codec_name"), limit=40),
         "audio_codec": _clean_text(audio.get("codec_name"), limit=40) if audio else "",
         "has_audio": audio is not None,
+    }
+
+
+def _probe_visual_asset(path: Path, *, timeout: float) -> dict[str, Any]:
+    completed = _run([
+        "ffprobe",
+        "-v",
+        "error",
+        "-select_streams",
+        "v:0",
+        "-show_entries",
+        "stream=width,height:format=duration",
+        "-of",
+        "json",
+        str(path),
+    ], timeout=timeout)
+    if completed.returncode != 0:
+        raise CreativeQAError("asset_visibility_asset_invalid", "asset is not decodable")
+    try:
+        payload = json.loads(completed.stdout)
+        stream = (payload.get("streams") or [])[0]
+        width = int(stream.get("width"))
+        height = int(stream.get("height"))
+        duration = _finite_float((payload.get("format") or {}).get("duration")) or 0.0
+    except (IndexError, TypeError, ValueError, json.JSONDecodeError) as exc:
+        raise CreativeQAError(
+            "asset_visibility_asset_invalid",
+            "asset media metadata is incomplete",
+        ) from exc
+    if width <= 0 or height <= 0:
+        raise CreativeQAError("asset_visibility_asset_invalid", "asset dimensions are invalid")
+    return {"width": width, "height": height, "duration_seconds": duration}
+
+
+def _overlay_geometry(
+    overlay: dict[str, Any],
+    *,
+    asset_width: int,
+    asset_height: int,
+    output_width: int,
+    output_height: int,
+) -> tuple[int, int, int, int]:
+    width = max(2, int(round(output_width * float(overlay.get("width_ratio") or 0.35))))
+    width -= width % 2
+    height = max(2, int(round((asset_height * width / asset_width) / 2)) * 2)
+    margin_ratio = float(overlay.get("margin_ratio") or 0.035)
+    position = str(overlay.get("position") or "center")
+    if position in {"top_left", "bottom_left"}:
+        x = int(round(output_width * margin_ratio))
+    elif position in {"top_right", "bottom_right"}:
+        x = int(round(output_width - width - output_width * margin_ratio))
+    else:
+        x = int(round((output_width - width) / 2))
+    if position in {"top_left", "top_right", "top"}:
+        y = int(round(output_height * margin_ratio))
+    elif position in {"bottom_left", "bottom_right", "bottom"}:
+        y = int(round(output_height - height - output_height * margin_ratio))
+    else:
+        y = int(round((output_height - height) / 2))
+    if x < 0 or y < 0 or x + width > output_width or y + height > output_height:
+        raise CreativeQAError(
+            "asset_visibility_geometry_invalid",
+            "asset overlay extends outside the rendered frame",
+        )
+    return x, y, width, height
+
+
+def _measure_asset_visibility(
+    *,
+    video_path: Path,
+    asset_path: Path,
+    midpoint_seconds: float,
+    asset_offset_seconds: float,
+    geometry: tuple[int, int, int, int],
+    timeout: float,
+) -> float:
+    x, y, width, height = geometry
+    command = [
+        "ffmpeg",
+        "-hide_banner",
+        "-nostats",
+        "-v",
+        "info",
+        "-ss",
+        f"{midpoint_seconds:.3f}",
+        "-i",
+        str(video_path),
+    ]
+    if asset_path.suffix.lower() in {".png", ".jpg", ".jpeg", ".webp", ".avif"}:
+        command.extend(["-loop", "1", "-i", str(asset_path)])
+    else:
+        command.extend([
+            "-ss",
+            f"{asset_offset_seconds:.3f}",
+            "-i",
+            str(asset_path),
+        ])
+    command.extend([
+        "-filter_complex",
+        (
+            f"[0:v]crop={width}:{height}:{x}:{y},format=yuv420p[roi];"
+            f"[1:v]scale={width}:{height},format=yuv420p[asset];"
+            "[roi][asset]ssim"
+        ),
+        "-frames:v",
+        "1",
+        "-f",
+        "null",
+        "-",
+    ])
+    completed = _run(command, timeout=timeout)
+    matches = re.findall(r"All:([0-9]+(?:\.[0-9]+)?)", completed.stderr or completed.stdout)
+    if completed.returncode != 0 or not matches:
+        raise CreativeQAError(
+            "asset_visibility_analysis_unavailable",
+            "rendered asset visibility could not be measured",
+        )
+    return round(float(matches[-1]), 6)
+
+
+def build_asset_visibility_report(
+    inputs: Sequence[QAInput],
+    *,
+    render_execution: dict[str, Any],
+    resolved_assets: dict[str, Path],
+    expected_width: int,
+    expected_height: int,
+    strict: bool = True,
+    timeout: float = 90.0,
+) -> dict[str, Any]:
+    input_by_clip = {item.clip_index: item for item in inputs[:_MAX_QA_CLIPS]}
+    asset_paths = {str(key): Path(value) for key, value in resolved_assets.items()}
+    overlays: list[dict[str, Any]] = []
+    for clip in render_execution.get("clips") or []:
+        clip_index = int(clip.get("clip_index") or 0)
+        for segment in clip.get("segments") or []:
+            for overlay in segment.get("overlays") or []:
+                asset_id = str(overlay.get("asset_id") or "")
+                if asset_id:
+                    overlays.append({**overlay, "clip_index": clip_index, "asset_id": asset_id})
+
+    findings: list[dict[str, Any]] = []
+    observations: list[dict[str, Any]] = []
+    for index, left in enumerate(overlays):
+        left_window = left.get("timeline_window") or {}
+        for right in overlays[index + 1:]:
+            if left["clip_index"] != right["clip_index"] or left["asset_id"] != right["asset_id"]:
+                continue
+            right_window = right.get("timeline_window") or {}
+            overlap = min(
+                int(left_window.get("end_ms") or 0),
+                int(right_window.get("end_ms") or 0),
+            ) - max(
+                int(left_window.get("start_ms") or 0),
+                int(right_window.get("start_ms") or 0),
+            )
+            if overlap > 0:
+                findings.append(_finding(
+                    "asset_overlay_duplicated",
+                    "blocker" if strict else "warning",
+                    "The same resolved asset is executed in overlapping overlays.",
+                    clip_index=left["clip_index"],
+                    asset_id=left["asset_id"],
+                    overlap_ms=overlap,
+                ))
+                break
+
+    for overlay in overlays[:_MAX_ASSET_VISIBILITY_OVERLAYS]:
+        clip_index = int(overlay["clip_index"])
+        source = input_by_clip.get(clip_index)
+        window = overlay.get("timeline_window") or {}
+        start_ms = int(window.get("start_ms") or 0)
+        end_ms = int(window.get("end_ms") or 0)
+        opacity = float(overlay.get("opacity") if overlay.get("opacity") is not None else 1.0)
+        observation = {
+            "clip_index": clip_index,
+            "asset_id": overlay["asset_id"],
+            "overlay_kind": str(overlay.get("kind") or ""),
+            "start_ms": start_ms,
+            "end_ms": end_ms,
+            "opacity": round(opacity, 6),
+            "status": "blocker",
+            "ssim": None,
+            "error_code": None,
+        }
+        if source is None or end_ms <= start_ms:
+            observation["error_code"] = "asset_visibility_timing_invalid"
+            findings.append(_finding(
+                "asset_visibility_timing_invalid",
+                "blocker" if strict else "warning",
+                "Asset visibility timing could not be mapped to a rendered clip.",
+                clip_index=clip_index,
+                asset_id=overlay["asset_id"],
+            ))
+            observations.append(observation)
+            continue
+        if opacity < _ASSET_VISIBILITY_MIN_OPACITY:
+            observation["error_code"] = "asset_overlay_opacity_too_low"
+            findings.append(_finding(
+                "asset_overlay_opacity_too_low",
+                "blocker" if strict else "warning",
+                "Asset overlay opacity is below the deterministic visibility threshold.",
+                clip_index=clip_index,
+                asset_id=overlay["asset_id"],
+                opacity=round(opacity, 6),
+            ))
+            observations.append(observation)
+            continue
+        asset_path = asset_paths.get(overlay["asset_id"])
+        if asset_path is None or not asset_path.is_file():
+            observation["error_code"] = "asset_visibility_asset_unresolved"
+            findings.append(_finding(
+                "asset_visibility_asset_unresolved",
+                "blocker" if strict else "warning",
+                "A rendered asset reference has no resolved media available for visibility analysis.",
+                clip_index=clip_index,
+                asset_id=overlay["asset_id"],
+            ))
+            observations.append(observation)
+            continue
+        try:
+            asset_media = _probe_visual_asset(asset_path, timeout=timeout)
+            geometry = _overlay_geometry(
+                overlay,
+                asset_width=asset_media["width"],
+                asset_height=asset_media["height"],
+                output_width=expected_width,
+                output_height=expected_height,
+            )
+            elapsed_seconds = (end_ms - start_ms) / 2000
+            duration_seconds = float(asset_media["duration_seconds"] or 0)
+            asset_offset = (
+                elapsed_seconds % duration_seconds
+                if duration_seconds > 0
+                else 0.0
+            )
+            score = _measure_asset_visibility(
+                video_path=source.video_path,
+                asset_path=asset_path,
+                midpoint_seconds=(start_ms + end_ms) / 2000,
+                asset_offset_seconds=asset_offset,
+                geometry=geometry,
+                timeout=timeout,
+            )
+            observation["ssim"] = score
+            observation["status"] = "pass" if score >= _ASSET_VISIBILITY_MIN_SSIM else "blocker"
+            if score < _ASSET_VISIBILITY_MIN_SSIM:
+                findings.append(_finding(
+                    "asset_overlay_not_visible",
+                    "blocker" if strict else "warning",
+                    "Rendered pixels do not match the resolved asset inside its declared overlay window.",
+                    clip_index=clip_index,
+                    asset_id=overlay["asset_id"],
+                    ssim=score,
+                ))
+        except CreativeQAError as exc:
+            observation["error_code"] = exc.code
+            finding_code = (
+                exc.code
+                if exc.code.startswith("asset_visibility_")
+                else "asset_visibility_analysis_unavailable"
+            )
+            findings.append(_finding(
+                finding_code,
+                "blocker" if strict else "review",
+                "Asset visibility analysis was unavailable for a declared overlay.",
+                clip_index=clip_index,
+                asset_id=overlay["asset_id"],
+                error_code=exc.code,
+            ))
+        observations.append(observation)
+
+    if len(overlays) > _MAX_ASSET_VISIBILITY_OVERLAYS:
+        findings.append(_finding(
+            "asset_visibility_limit_reached",
+            "blocker" if strict else "review",
+            "The rendered asset overlay count exceeds the bounded visibility audit limit.",
+            overlay_count=len(overlays),
+            analyzed=_MAX_ASSET_VISIBILITY_OVERLAYS,
+        ))
+    return {
+        "version": ASSET_VISIBILITY_VERSION,
+        "status": _status(findings),
+        "strict_thresholds": strict,
+        "thresholds": {
+            "minimum_opacity": _ASSET_VISIBILITY_MIN_OPACITY,
+            "minimum_ssim": _ASSET_VISIBILITY_MIN_SSIM,
+            "max_overlays": _MAX_ASSET_VISIBILITY_OVERLAYS,
+        },
+        "summary": {
+            "overlays_analyzed": len(observations),
+            "visible": sum(item["status"] == "pass" for item in observations),
+            **_summary(findings),
+        },
+        "observations": observations,
+        "findings": findings[:_MAX_FINDINGS],
     }
 
 
@@ -742,6 +1042,7 @@ def build_creative_conformance_report(
     render_execution: dict[str, Any],
     strict: bool = True,
     semantic_review: dict[str, Any] | None = None,
+    asset_visibility: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     planned_operations, requested_assets = _planned_operations(edit_plan)
     executed_operations, used_assets, fallback_count, unexplained_fallbacks = _executed_operations(
@@ -802,6 +1103,21 @@ def build_creative_conformance_report(
         "attempts": [],
         "observations": [],
     }
+    visibility = asset_visibility or {
+        "version": ASSET_VISIBILITY_VERSION,
+        "status": "disabled",
+        "strict_thresholds": strict,
+        "summary": {
+            "overlays_analyzed": 0,
+            "visible": 0,
+            "blockers": 0,
+            "warnings": 0,
+            "review_notes": 0,
+        },
+        "observations": [],
+        "findings": [],
+    }
+    findings.extend(list(visibility.get("findings") or [])[:_MAX_FINDINGS])
     if semantic.get("status") == "unavailable":
         findings.append(_finding(
             "semantic_review_unavailable",
@@ -845,6 +1161,7 @@ def build_creative_conformance_report(
             "missing": missing_assets,
             "unrequested": unrequested_assets,
         },
+        "asset_visibility": visibility,
         "semantic_review": semantic,
         "findings": findings[:_MAX_FINDINGS],
     }
@@ -999,6 +1316,20 @@ def _unavailable_reports(code: str, *, strict: bool) -> tuple[dict[str, Any], di
         "summary": {"blockers": 0, "warnings": 0, "review_notes": 1},
         "operations": {"planned": [], "executed": [], "missing": [], "extra": []},
         "assets": {"requested": [], "used": [], "missing": [], "unrequested": []},
+        "asset_visibility": {
+            "version": ASSET_VISIBILITY_VERSION,
+            "status": "unavailable",
+            "strict_thresholds": strict,
+            "summary": {
+                "overlays_analyzed": 0,
+                "visible": 0,
+                "blockers": 0,
+                "warnings": 0,
+                "review_notes": 1,
+            },
+            "observations": [],
+            "findings": [finding],
+        },
         "semantic_review": {
             "version": SEMANTIC_QA_VERSION,
             "status": "unavailable",
@@ -1025,6 +1356,7 @@ async def generate_creative_qa_artifacts(
     inputs: Sequence[QAInput],
     edit_plan: dict[str, Any],
     render_execution: dict[str, Any],
+    resolved_assets: dict[str, Path] | None = None,
     expected_width: int,
     expected_height: int,
     strict: bool,
@@ -1037,7 +1369,7 @@ async def generate_creative_qa_artifacts(
     rhythm_path = root / "retention_rhythm_qa.json"
     conformance_path = root / "creative_conformance.json"
     try:
-        render_qa, rhythm_qa = await asyncio.gather(
+        render_qa, rhythm_qa, asset_visibility = await asyncio.gather(
             asyncio.to_thread(
                 build_render_qa_report,
                 inputs,
@@ -1049,6 +1381,15 @@ async def generate_creative_qa_artifacts(
                 build_retention_rhythm_report,
                 inputs,
                 render_execution=render_execution,
+                strict=strict,
+            ),
+            asyncio.to_thread(
+                build_asset_visibility_report,
+                inputs,
+                render_execution=render_execution,
+                resolved_assets=resolved_assets or {},
+                expected_width=expected_width,
+                expected_height=expected_height,
                 strict=strict,
             ),
         )
@@ -1073,6 +1414,7 @@ async def generate_creative_qa_artifacts(
             render_execution=render_execution,
             strict=strict,
             semantic_review=semantic,
+            asset_visibility=asset_visibility,
         )
     except asyncio.CancelledError:
         raise

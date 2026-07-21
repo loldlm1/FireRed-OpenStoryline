@@ -258,8 +258,8 @@ def build_reframe_filtergraph(
                     overlay_end = overlay.source_window.end_ms / 1000
                     graph.append(
                         f"[{source_label}]trim=start={overlay_start:.3f}:end={overlay_end:.3f},"
-                        f"setpts=PTS-STARTPTS+{local_start:.3f}/TB,"
-                        f"scale={overlay_width}:-2,{alpha}[ov{index}_{overlay_index}]"
+                        f"setpts=PTS-STARTPTS,scale={overlay_width}:-2,{alpha},"
+                        f"setpts=PTS+{local_start:.3f}/TB[ov{index}_{overlay_index}]"
                     )
                 else:
                     input_index = assets.get(overlay.asset_id)
@@ -276,8 +276,8 @@ def build_reframe_filtergraph(
                         )
                     graph.append(
                         f"[{input_index}:v]trim=duration={duration:.3f},"
-                        f"setpts=PTS-STARTPTS+{local_start:.3f}/TB,"
-                        f"scale={overlay_width}:-2,{alpha}[ov{index}_{overlay_index}]"
+                        f"setpts=PTS-STARTPTS,scale={overlay_width}:-2,{alpha},"
+                        f"setpts=PTS+{local_start:.3f}/TB[ov{index}_{overlay_index}]"
                     )
                 x, y = _overlay_position(overlay.position, margin_ratio=overlay.margin_ratio)
                 graph.append(

@@ -1025,6 +1025,7 @@ class MVPJobProcessor:
                         inputs=qa_inputs,
                         edit_plan=edit_plan.to_dict(),
                         render_execution=agentic_result.execution,
+                        resolved_assets=asset_result.paths,
                         expected_width=render_settings.width,
                         expected_height=render_settings.height,
                         strict=strict_qa,

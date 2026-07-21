@@ -248,6 +248,33 @@ class EditPlanContractTests(unittest.TestCase):
             for segment in ambiguous["clips"][0]["segments"]
         ))
 
+    def test_normalizes_asset_backed_pip_without_deriving_a_duplicate(self):
+        normalized = _normalize_edit_plan_response({
+            "clips": [{
+                "asset_requests": [{
+                    "id": "stock-1",
+                    "kind": "stock_video",
+                    "timeline_window": {"start_ms": 1000, "end_ms": 5000},
+                }],
+                "segments": [{
+                    "timeline_window": {"start_ms": 0, "end_ms": 8000},
+                    "overlays": [{
+                        "id": "stock-pip",
+                        "kind": "pip",
+                        "asset_id": "stock-1",
+                        "source_window": {"start_ms": 1000, "end_ms": 5000},
+                        "timeline_window": {"start_ms": 1000, "end_ms": 5000},
+                    }],
+                }],
+            }],
+        })
+
+        overlays = normalized["clips"][0]["segments"][0]["overlays"]
+        self.assertEqual(len(overlays), 1)
+        self.assertEqual(overlays[0]["kind"], "image")
+        self.assertEqual(overlays[0]["asset_id"], "stock-1")
+        self.assertNotIn("source_window", overlays[0])
+
     def test_accepts_explicit_empty_optional_identifiers(self):
         target = FocalTarget(region_id="", track_id="", semantic_role="speaker")
         overlay = OverlaySpec(
