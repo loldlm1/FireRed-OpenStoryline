@@ -1,7 +1,7 @@
 # Plan: Centralized Agentic Defect Registry And Bounded Repair Loop
 
 **Generated**: 2026-07-21
-**Status**: Planning only; implementation not started
+**Status**: Planning only; clarified and awaiting user approval of sprint titles
 **Estimated Complexity**: High
 
 ## Overview
@@ -21,12 +21,14 @@ outcomes. That makes it difficult to answer consistently whether a code is
 LLM-repairable, deterministically repairable, transient, advisory, or terminal.
 
 This plan establishes one version-controlled defect registry, upgrades every
-remote-MVP JSON-producing 9Router boundary to a proven strict JSON Schema
-contract, and adds one bounded evidence-driven repair round before final render.
-The backend, not the model, decides whether defects were resolved. If repair
-does not validate, the original real defect codes remain auditable and the
-smallest deterministic fallback is applied. A technically valid video is never
-discarded merely because an optional creative improvement could not be repaired.
+remote-MVP JSON-producing 9Router boundary, including the runtime-optional FFMPEGA
+effects planner, to a proven strict JSON Schema contract, and introduces two
+causally separate bounded repair stages before final render: at most one visual
+evidence repair and at most one job-level edit-plan repair. The backend, not the
+model, decides whether defects were resolved. If repair does not validate, the
+original real defect codes remain auditable and the smallest deterministic
+fallback is applied. A technically valid video is always published with
+truthful limitations even when strict creative QA remains blocked.
 
 The quality guarantee is intentionally precise: a fallback may omit or simplify
 the defective operation, but it must preserve the quality of unaffected clips,
@@ -65,8 +67,10 @@ mutation was performed while closing PR #11 and preparing this branch.
 - **In scope**:
   - Build on the merged PR #11 reliability, checkpoint, fallback, catalog, and
     retry contracts without reopening or relabeling its historical evidence.
-  - Create a central registry for every public outcome, limitation, QA,
-    preflight, fallback, retry, and failure code used by the remote MVP.
+  - Create a central registry for every code that can enter a job outcome,
+    promotion decision, fallback ledger, retry decision, repair decision, audit
+    summary, public activity failure, or workspace presentation. Unrelated
+    admin/config/API validation codes remain explicitly outside Registry v1.
   - Record category, severity, repair strategy, repair stage, evidence
     requirements, safe fallback, retryability, promotion behavior, and Spanish
     and English user-safe presentation for each registered code.
@@ -74,12 +78,22 @@ mutation was performed while closing PR #11 and preparing this branch.
     `response_format.type=json_schema` with `strict=true` before enabling it.
   - Use stable Pydantic-backed wire schemas at every remote-MVP JSON-producing
     9Router boundary: short selection, visual understanding, agentic edit
-    planning, repair planning, and optional semantic QA.
+    planning, repair planning, optional semantic QA, and FFMPEGA effect planning.
+  - Replace FFMPEGA's open-ended `params` object with stable effect-specific
+    contracts derived from an authoritative, pinned parameter inventory.
   - Keep application-side Pydantic and deterministic semantic validation
     authoritative after provider schema validation.
-  - Replace multiple uncoordinated semantic repairs with at most one additional
-    pre-render repair round per job, batching all currently known repairable
-    defects and affected clips into one bounded request.
+  - Replace multiple uncoordinated semantic repairs with at most one visual
+    evidence repair plus at most one job-level pre-render edit-plan repair. The
+    plan repair batches all currently known eligible defects and affected clips
+    into one bounded request; FFMPEGA receives no independent repair attempt.
+  - Let the edit-plan repair model make context-aware corrections for eligible
+    numeric, timing, geometry, capability, budget, catalog, reference, and
+    creative-intent defects before deterministic fallback is applied.
+  - Add objective pre-render predictive QA and bounded heuristic creative-risk
+    signals. Objective defects may trigger repair; advisory-only signals may
+    accompany an already-triggered repair but never trigger a provider call by
+    themselves or become technical blockers.
   - Preserve the exact original defect codes if repair fails; add repair metadata
     without replacing the real cause with only a generic exhaustion code.
   - Apply the smallest safe deterministic fallback to remaining creative defects
@@ -88,10 +102,13 @@ mutation was performed while closing PR #11 and preparing this branch.
     failures, and infrastructure failures outside LLM repair.
   - Add audit artifacts, metrics, API/UI presentation, tests, evals, feature
     flags, canary gates, and rollback controls.
+  - Add a bounded agent-friendly `audit defects` command with code, strategy,
+    disposition, stage, and time filters without introducing a migration.
 - **Out of scope**:
   - The full local LangChain/MCP profile and `.storyline/skills/` behavior.
-  - Multi-agent repair, open-ended autonomous loops, or more than one semantic
-    repair round in the baseline workflow.
+  - Multi-agent repair, open-ended autonomous loops, more than one semantic
+    repair call per eligible repair stage, or any same-job post-render repair and
+    rerender loop.
   - Asking the LLM to repair encoded pixels, audio streams, codecs, FFmpeg tool
     availability, source corruption, authentication, authorization, or storage.
   - Paid assets, runtime catalog downloads, new languages beyond Spanish and
@@ -108,25 +125,45 @@ mutation was performed while closing PR #11 and preparing this branch.
     explicit nullable type. Every object forbids additional properties.
   - Schemas are stable and contain no prompt text, transcript text, media data,
     frame bytes, credentials, user identifiers, or per-job private data.
+    Repair requests may transiently include the already-authorized immutable
+    editing prompt and bounded clip-local transcript excerpts sent to the same
+    configured 9Router route; those values are never stored in repair reports,
+    checkpoints, audit summaries, logs, or schema definitions.
   - Dynamic catalog IDs and evidence IDs remain prompt/context data validated by
     the backend, not dynamically injected into per-job JSON schemas.
-  - One semantic repair round may contain multiple registered defect codes and
-    multiple affected clips. HTTP transport retries remain separately bounded
-    and do not count as additional semantic repair rounds.
+  - Visual understanding may receive one semantic repair while the referenced
+    images and evidence are available. Edit planning may separately receive one
+    job-level semantic repair containing multiple registered codes and affected
+    clips. HTTP transport retries remain separately bounded and do not count as
+    semantic repair rounds.
+  - FFMPEGA uses strict effect-specific schemas and deterministic validation but
+    receives no semantic repair call. Invalid or failed optional finishing work
+    publishes the native FFmpeg render with `EFFECT_OMITTED`.
   - The model returns only a corrected candidate plan. It does not return a
     trusted `resolved=true` decision or authorize fallback/promotion.
   - Deterministic revalidation computes resolved, remaining, and newly introduced
     codes after repair.
+  - For registry-driven repair, `off` bypasses eligibility and makes no repair
+    call, `report` evaluates and records the bounded call that would have been
+    made without calling the model, and `enforce` makes the allowed stage-bounded
+    call when an objective repairable defect is eligible. Advisory-only
+    predictive findings never trigger a model call; they are secondary
+    suggestions only when an objective defect has already triggered the
+    plan-repair batch.
   - Post-render creative defects do not trigger another same-job LLM/render loop
     in the baseline path. A technically valid candidate is published with typed
     limitations and can be improved through the existing retry/version workflow.
   - Technical blockers continue to fail closed and cannot be reclassified as
-    creative limitations by the model.
+    creative limitations by the model. Strict creative QA remains an immutable
+    evaluation verdict, but delivery is independently technical-pass guaranteed:
+    every candidate without a technical blocker is registered and downloadable
+    with truthful limitations.
   - Historical `outcome_report.v1` and `quality_feedback.v1` remain readable.
   - No database migration is expected: the repair report can use existing
     registered JSON artifacts, audit ingestion, outcome JSON, and flexible
-    checkpoint stage names. A migration requires separate justification if
-    implementation discovery disproves this assumption.
+    checkpoint stage names. The bounded `audit defects` command is the initial
+    agentic query surface. A migration requires separate justification only if
+    measured query volume or correctness cannot be served by these contracts.
   - Feature flags default to the current behavior until schema capability,
     regression, and canary gates pass.
 - **Assumptions**:
@@ -134,6 +171,9 @@ mutation was performed while closing PR #11 and preparing this branch.
     forwarding is unknown until the repository's safe capability probe passes.
   - The current provider and model limits can accept a stable per-job repair
     schema covering no more than the existing eight output clips.
+  - Authoritative FFMPEGA parameter definitions can be located, pinned, and
+    represented within the provider-supported strict JSON Schema subset. If not,
+    Sprint 2 stops before inventing parameter contracts.
   - The existing immutable prompt-version, checkpoint, audit, promotion, and
     retry contracts remain authoritative.
   - The user will authorize production canary/deployment separately after the PR
@@ -146,12 +186,13 @@ Eligibility is conditional on authoritative evidence and available capabilities.
 
 | Strategy | Initial code families | Required behavior |
 | --- | --- | --- |
-| `llm_plan_repair` | `EDIT_PLAN_INVALID`, intent mismatch, plan capability/budget violations, unknown or mismatched catalog selections, invalid clip/evidence/region/track references, equivalent preflight plan findings, and clip-local crop coverage defects after evidence refresh | Include all affected codes in one pre-render repair batch; revalidate deterministically; fall back only for remaining codes. |
-| `deterministic_plan_repair` | Duplicate/low-opacity/out-of-zone overlays, exact timing/geometry conflicts, unsupported transition/effect, caption safe-zone/style problems, simple over-budget operations, and unavailable optional assets | Correct exact numeric or capability facts in code without spending an LLM call; record the executed fallback. |
+| `llm_visual_repair` | Schema-valid visual-understanding responses with invalid frame/region/track/scene references, timing, role consistency, or evidence relationships | Make at most one complete replacement call while the original bounded images are available; revalidate locally; fail or use an already-proven deterministic evidence fallback if still invalid. |
+| `llm_plan_repair` | `EDIT_PLAN_INVALID`, intent mismatch, plan capability/budget violations, unknown or mismatched catalog selections, invalid clip/evidence/region/track references, exact timing/geometry conflicts, unsupported optional transitions/effects, caption safe-zone problems, duplicate/low-opacity/out-of-zone overlays, equivalent preflight findings, and clip-local crop coverage defects after evidence refresh | Include all affected codes in one pre-render repair batch so the model may choose context-aware valid values or substitutions; revalidate deterministically; apply the smallest registered fallback only for remaining codes. |
+| `deterministic_fallback` | Any eligible creative defect that remains after the single plan-repair round, lacks required evidence, cannot be achieved with installed capabilities, or arises from optional FFMPEGA planning/execution | Preserve unaffected work and apply the smallest exact safe correction, omission, or baseline operation; record requested and executed values without another model call. |
 | `conditional_llm_or_fallback` | `CREATIVE_INTENT_UNMET`, `ACTIVE_PICTURE_TOO_SMALL`, `PLANNED_OPERATIONS_MISSING`, `REQUESTED_ASSETS_MISSING`, `UNREQUESTED_ASSETS_USED`, and `UNEXPLAINED_FALLBACK` | Use LLM repair only when the missing intent is achievable with installed capabilities and evidence before render; otherwise use a typed fallback. Post-render occurrence remains a limitation. |
 | `provider_retry` | 9Router/Mistral/Pexels/image request failures, rate limits, timeouts, and unavailable dependencies | Use existing bounded transport/provider retry and checkpoints; never ask an LLM to explain or repair another provider's failure. |
 | `renderer_retry_or_fail` | Missing audio, bad codec/dimensions/duration, black/frozen/collapsed frames, catastrophic reference quality, FFmpeg/FFprobe failures, and unavailable technical QA | Use deterministic re-render or minimal baseline only where already proven safe; otherwise fail closed. No LLM repair. |
-| `advisory` | Blur/blockiness review, inactive hook, long visual hold, attention gap, subtitle cadence review, semantic review unavailable/requested, and bounded-analysis review notes | Preserve as audit evidence. Promote to pre-render LLM repair only when a deterministic timeline linter can prove the plan controls the defect. |
+| `advisory` | Blur/blockiness review, inactive hook, long visual hold, attention gap, subtitle cadence review, semantic review unavailable/requested, and bounded-analysis review notes | Preserve as audit evidence. A deterministic pre-render predictor may attach an advisory to an already-triggered plan-repair request, but an advisory alone never triggers a call or blocks technical-pass delivery. |
 | `terminal` | Invalid/changed/expired source, path/integrity/security violations, invalid deployment configuration, and unrecoverable authoritative-state corruption | Fail closed with the exact registered code and no model call. |
 
 ### Initial LLM-Repairable Code Set
@@ -229,10 +270,15 @@ technical promotion blockers, and any unknown code.
     compatibility normalization, and presentation metadata.
   - `src/open_storyline/mvp/structured_outputs.py` - stable wire schemas,
     schema names/versions/hashes, and provider-safe schema validation.
+  - `src/open_storyline/mvp/ffmpega_contracts.py` - pinned effect parameter
+    inventory, effect-specific Pydantic models, agentic/full allowlists, and
+    shared local/provider validation.
   - `src/open_storyline/mvp/repair.py` - eligibility, evidence compaction,
-    repair batching, deterministic resolution comparison, and repair report.
+    stage-bounded repair budgets, batching, deterministic resolution comparison,
+    and repair report.
   - `tests/test_mvp_defects.py`
   - `tests/test_mvp_structured_outputs.py`
+  - `tests/test_mvp_ffmpega_contracts.py`
   - `tests/test_mvp_repair.py`
   - `docs/mvp/defect-repair.md`
 - **Existing implementation files expected to change**:
@@ -256,7 +302,10 @@ technical promotion blockers, and any unknown code.
   - `src/open_storyline/mvp/jobs.py`
   - `src/open_storyline/mvp/prompt_versions.py`
   - `src/open_storyline/mvp/prompts.py`
+  - `src/open_storyline/mvp/admin.py`
+  - `src/open_storyline/mvp/ffmpega.py`
   - `scripts/qa_ninerouter.py`
+  - `bin/kamal-mvp`
   - `web/static/mvp/messages.js`
   - `web/static/mvp/views.js`
   - `config.toml`
@@ -280,6 +329,8 @@ technical promotion blockers, and any unknown code.
   - `tests/test_mvp_observability.py`
   - `tests/test_mvp_prompt_versions.py`
   - `tests/test_mvp_activity.py`
+  - `tests/test_ffmpega.py`
+  - `tests/test_mvp_audit.py`
   - `tests/test_kamal_config.py`
   - `.qa/web/tests/mvp-workspace.spec.ts`
 - **External documentation**:
@@ -298,10 +349,14 @@ technical promotion blockers, and any unknown code.
     without schema changes because checkpoint stages are bounded strings.
   - Existing JSON artifact registration and audit ingestion.
   - Proposed flags:
-    `OPENSTORYLINE_STRUCTURED_OUTPUT_MODE=json_object|json_schema` and
-    `OPENSTORYLINE_LLM_DEFECT_REPAIR_ENABLED=false|true`.
+    `OPENSTORYLINE_STRUCTURED_OUTPUT_MODE=json_object|json_schema`,
+    `OPENSTORYLINE_STRUCTURED_OUTPUT_BOUNDARIES=<allowlisted names>`,
+    `OPENSTORYLINE_LLM_DEFECT_REPAIR_MODE=off|report|enforce`, and
+    `OPENSTORYLINE_DELIVERY_POLICY=qa_enforced|technical_pass_guaranteed`.
   - Existing kill switches for checkpoints, baseline fallbacks, catalog
     planning, completion policy, limited promotion, and retry UX.
+  - Existing bounded audit CLI extended with `audit defects`; no new database
+    table or migration in the initial implementation.
 
 ## Completed Prerequisites And PR #11 Closure
 
@@ -330,16 +385,37 @@ A new Codex session executing this plan should read, in order:
 2. `agentic-defect-registry-repair-loop-plan.md` in full.
 3. `docs/agent-engineering.md` and `docs/mvp/architecture.md`.
 4. `src/open_storyline/mvp/ninerouter.py`, `edit_plan.py`, `preflight.py`,
-   `visual_coverage.py`, `fallbacks.py`, `promotion.py`, `outcomes.py`,
-   `observability.py`, and `pipeline.py`.
+   `visual_understanding.py`, `visual_coverage.py`, `fallbacks.py`, `ffmpega.py`,
+   `promotion.py`, `outcomes.py`, `observability.py`, and `pipeline.py`.
 5. The focused tests named under each sprint.
-6. `/home/loldlm/.codex/skills/planner/references/execution-state.md`, when the
+6. Present the complete ordered sprint-title list from the pre-execution gate to
+   the user and obtain explicit approval before initializing execution state or
+   editing implementation files.
+7. `/home/loldlm/.codex/skills/planner/references/execution-state.md`, when the
    `$planner` skill is exposed in that session, then initialize active-plan
    execution state before Sprint 1.
-7. Current Git status, branch tracking, merge-base, and remote routing; verify
+8. Current Git status, branch tracking, merge-base, and remote routing; verify
    the branch still descends from `dae7366` before making edits.
 
-## Sprint 1: Centralize Defect Policy And Presentation
+## Pre-Execution User Review Gate
+
+Before any sprint execution, implementation edit, execution-state initialization,
+provider probe, or sprint commit, the implementer must present this exact ordered
+title list to the user:
+
+1. Sprint 1: Centralize Outcome-Facing Defect Policy And Presentation.
+2. Sprint 2: Enforce Progressive Strict Structured Outputs And Typed Effects.
+3. Sprint 3: Define Stage-Bounded Evidence-Driven Repair Policy And Contracts.
+4. Sprint 4: Execute Visual And Plan Repair With Predictive QA And Safe Fallback.
+5. Sprint 5: Audit Repair Outcomes And Publish Technical-Pass Candidates.
+6. Sprint 6: Run Evals, Operational Gates, And Staged Rollout.
+
+The user must explicitly approve the ordered titles before Sprint 1 starts. If a
+sprint title, goal, dependency boundary, or commit scope changes later, stop and
+present the complete revised list again before continuing. This gate is separate
+from production/provider authorization and does not authorize deployment.
+
+## Sprint 1: Centralize Outcome-Facing Defect Policy And Presentation
 
 **Goal**: Every remote-MVP code that can affect a user-visible attempt or repair
 decision resolves through one typed, versioned registry with no change to
@@ -356,8 +432,9 @@ presentation, focused tests, and `docs/mvp/defect-repair.md`.
 **Demo/Validation**:
 
 - `PYTHONPATH=src .venv/bin/python -m unittest tests/test_mvp_defects.py tests/test_mvp_outcomes.py tests/test_mvp_activity.py -v`
-- Run a registry inventory check that reports every public code as registered and
-  distinguishes intentionally internal/configuration constants.
+- Run a registry inventory check that reports every outcome/promotion/fallback/
+  retry/repair/audit/activity/workspace code as registered and lists intentionally
+  excluded admin/config/API validation codes with a stable exclusion reason.
 - Confirm historical `outcome_report.v1` fixtures still summarize identically.
 
 **Rollback point**: Revert the Sprint 1 commit. No database or provider behavior
@@ -380,8 +457,11 @@ changes are introduced in this sprint.
     LLM-repairable.
 - **Dependencies**: Current code inventory.
 - **Acceptance criteria**:
-- Every current public limitation, QA blocker, fallback, preflight blocker,
-    retryable failure, and terminal failure category has a registered definition.
+  - Every current code that can affect a job outcome, promotion, fallback,
+    retry, repair, audit summary, public activity failure, or workspace state has
+    a registered definition.
+  - Excluded administrative, configuration, and request-validation codes are
+    inventoried but do not require bilingual presentation or repair metadata.
   - Definitions contain no secrets, prompts, provider bodies, or private data.
   - Duplicate codes and aliases fail at import/test time.
 - **Validation**:
@@ -400,8 +480,8 @@ Sprint 1 commit must contain only Sprint 1 implementation and supporting tests.
     retryability, and presentation decisions with registry lookups.
   - Keep technical promotion allowlists fail-closed; registry metadata must not
     allow a creative code to override an explicitly technical detector.
-  - Preserve existing `retryable_error()` suffix compatibility until every
-    historical runtime code has an explicit policy.
+  - Preserve existing `retryable_error()` suffix compatibility for codes outside
+    Registry v1 and historical records until a later explicitly scoped expansion.
 - **Dependencies**: Task 1.1.
 - **Acceptance criteria**:
   - Existing completed, limited, retryable, and terminal fixtures keep their
@@ -423,7 +503,7 @@ Sprint 1 commit must contain only Sprint 1 implementation and supporting tests.
     are not reclassified in storage.
 - **Dependencies**: Tasks 1.1-1.2.
 - **Acceptance criteria**:
-  - Spanish and English labels exist for every public code.
+  - Spanish and English labels exist for every Registry v1 user-visible code.
   - Missing presentation metadata fails focused tests.
   - Browser output remains safe when encountering an unknown historical code.
 - **Validation**:
@@ -439,22 +519,23 @@ Sprint 1 commit must contain only Sprint 1 implementation and supporting tests.
 - [ ] The rollback point is recorded.
 - [ ] Sprint 2 has not started before this gate completes.
 
-## Sprint 2: Enforce Proven Strict Structured Outputs
+## Sprint 2: Enforce Progressive Strict Structured Outputs And Typed Effects
 
 **Goal**: All remote-MVP 9Router JSON boundaries can use stable provider-enforced
-strict schemas, with deterministic local validation and a deploy-time capability
-gate.
+strict schemas, with deterministic local validation, progressive per-boundary
+activation, typed FFMPEGA effects, and a deploy-time capability gate.
 
 **Dependencies**: Sprint 1 gate complete.
 
-**Tracked scope**: `structured_outputs.py`, `ninerouter.py`, all remote JSON model
-callers, provider QA script, configuration, documentation, and tests.
+**Tracked scope**: `structured_outputs.py`, `ffmpega_contracts.py`, `ninerouter.py`,
+all remote JSON model callers, provider QA script, configuration, documentation,
+and tests.
 
-**Commit**: `feat: enforce strict agentic output schemas`
+**Commit**: `feat: enforce strict agentic and effect schemas`
 
 **Demo/Validation**:
 
-- `PYTHONPATH=src .venv/bin/python -m unittest tests/test_mvp_structured_outputs.py tests/test_ninerouter.py tests/test_qa_ninerouter.py tests/test_shorts.py tests/test_mvp_visual_understanding.py tests/test_mvp_edit_plan.py -v`
+- `PYTHONPATH=src .venv/bin/python -m unittest tests/test_mvp_structured_outputs.py tests/test_mvp_ffmpega_contracts.py tests/test_ninerouter.py tests/test_qa_ninerouter.py tests/test_shorts.py tests/test_mvp_visual_understanding.py tests/test_mvp_edit_plan.py tests/test_ffmpega.py -v`
 - Run the safe local/mock strict-schema capability cases for success, refusal,
   incomplete output, unsupported schema, additional properties, and invalid
   business semantics.
@@ -469,8 +550,9 @@ if necessary. Domain validators remain unchanged.
 - **Location**: `src/open_storyline/mvp/structured_outputs.py` and existing
   Pydantic domain models.
 - **Description**:
-  - Define dedicated wire models for shorts, visual understanding, per-clip edit
-    planning, batch repair, and semantic QA.
+  - Define dedicated provider-response wire models for shorts, visual
+    understanding, per-clip edit planning, edit-plan repair, semantic QA,
+    agentic FFMPEGA finishing, and the full deterministic FFMPEGA effects path.
   - Keep wire schemas separate from domain models where defaults, custom
     validators, or cross-field rules cannot be represented by the provider's
     supported JSON Schema subset.
@@ -478,6 +560,8 @@ if necessary. Domain validators remain unchanged.
   - Set `additionalProperties=false` recursively and reject unsupported schema
     constructs in a startup/test validator.
   - Assign stable schema names, versions, and SHA-256 fingerprints.
+  - Validate the configured boundary allowlist against registered stable names;
+    unknown names fail startup and never silently enable permissive parsing.
 - **Dependencies**: Sprint 1 registry categories.
 - **Acceptance criteria**:
   - Schema generation is deterministic across runs.
@@ -504,17 +588,18 @@ if necessary. Domain validators remain unchanged.
 - **Dependencies**: Task 2.1.
 - **Acceptance criteria**:
   - `json_object` and `json_schema` modes are explicit and testable.
+  - `OPENSTORYLINE_STRUCTURED_OUTPUT_BOUNDARIES` activates only registered
+    boundaries and supports the staged order defined by Sprint 6.
   - Strict mode never silently downgrades to permissive parsing.
   - Error details remain secret-safe and provider bodies are not persisted.
 - **Validation**:
   - `PYTHONPATH=src .venv/bin/python -m unittest tests/test_ninerouter.py -v`
 - **Rollback**: Disable strict mode with the configuration flag.
 
-### Task 2.3: Convert Remote MVP JSON Callers
+### Task 2.3: Convert Core Remote MVP JSON Callers
 
 - **Location**: `shorts.py`, `visual_understanding.py`, `edit_plan.py`,
-  `creative_qa.py`, and optional `ffmpega.py` only if its existing contract can be
-  converted without coupling it to the baseline renderer.
+  and `creative_qa.py`.
 - **Description**:
   - Move each caller to its registered wire schema.
   - Preserve current prompt meaning, model, reasoning effort, provider route,
@@ -522,13 +607,47 @@ if necessary. Domain validators remain unchanged.
   - Bump prompt/schema versions only where output contracts actually change.
 - **Dependencies**: Tasks 2.1-2.2.
 - **Acceptance criteria**:
-  - Every baseline 9Router JSON call names a strict schema in strict mode.
+  - Every core 9Router JSON call names a strict schema when its boundary is
+    allowlisted in strict mode.
   - No caller assumes provider schema adherence is sufficient for business rules.
 - **Validation**:
   - Focused caller tests listed in Sprint 2 validation.
-- **Rollback**: Per-caller fallback to `json_object` under the global kill switch.
+- **Rollback**: Remove the affected boundary from the allowlist or restore global
+  `json_object` mode; never perform an implicit runtime downgrade.
 
-### Task 2.4: Add The 9Router Strict-Schema Capability Gate
+### Task 2.4: Pin And Type FFMPEGA Effect Contracts
+
+- **Location**: `src/open_storyline/mvp/ffmpega_contracts.py`,
+  `src/open_storyline/mvp/ffmpega.py`, `tests/test_mvp_ffmpega_contracts.py`, and
+  `tests/test_ffmpega.py`.
+- **Description**:
+  - Locate and record the authoritative parameter names, types, required values,
+    ranges, enums, and incompatible combinations for all 26 currently allowed
+    deterministic skills. Stop rather than inventing contracts if the installed
+    FFMPEGA boundary cannot provide authoritative definitions.
+  - Define two stable schemas: `ffmpega_agentic_finishing.v1` for the 21 current
+    `AGENTIC_FINISHING_SKILLS`, and `ffmpega_deterministic_effects.v1` for the
+    complete `DETERMINISTIC_SKILLS` set.
+  - Replace arbitrary `params: dict[str, Any]` model output with effect-specific
+    typed variants or an equivalent provider-supported strict representation.
+    Forbid unknown parameters and keep the existing maximum of five effects.
+  - Use the same Pydantic contracts for provider schema generation and local
+    runtime validation so schema/runtime drift fails tests.
+  - Preserve the agentic subset boundary. Strict schema must not authorize
+    `deshake`, `fade`, `letterbox`, `mirror`, or `rotate` in agentic finishing.
+- **Dependencies**: Tasks 2.1-2.2 and authoritative FFMPEGA parameter evidence.
+- **Acceptance criteria**:
+  - Every allowed effect has success, unknown-field, missing-field, type, bound,
+    and allowlist tests appropriate to its contract.
+  - Agentic and full schemas are deterministic, private-free, versioned, and do
+    not expose raw FFmpeg, paths, URLs, model names, devices, or commands.
+  - Schema-valid but incompatible effect combinations are rejected locally.
+- **Validation**:
+  - `PYTHONPATH=src .venv/bin/python -m unittest tests/test_mvp_ffmpega_contracts.py tests/test_ffmpega.py -v`
+- **Rollback**: Remove `ffmpega` from the strict boundary allowlist and retain the
+  existing local validator and native-render fallback behavior.
+
+### Task 2.5: Add The 9Router Strict-Schema Capability Gate
 
 - **Location**: `scripts/qa_ninerouter.py`, `tests/test_qa_ninerouter.py`,
   `bin/kamal-mvp`, env/config/deploy documentation.
@@ -539,10 +658,12 @@ if necessary. Domain validators remain unchanged.
   - Make `json_schema` production enablement fail closed when the probe has not
     passed for the configured route/model.
   - Keep OpenRouter-specific behavior out of the implementation.
-- **Dependencies**: Task 2.2.
+- **Dependencies**: Tasks 2.2-2.4.
 - **Acceptance criteria**:
   - Mock tests cover supported and unsupported providers.
   - Live probe is opt-in and never includes production prompts/media.
+  - Sprint 2 may complete with production mode still `json_object`; live proof is
+    a Sprint 6 production-enablement gate and requires separate authorization.
 - **Validation**:
   - `PYTHONPATH=src .venv/bin/python -m unittest tests/test_qa_ninerouter.py tests/test_kamal_config.py -v`
 - **Rollback**: Set mode to `json_object`; deploy wrapper no longer requires the
@@ -557,43 +678,53 @@ if necessary. Domain validators remain unchanged.
 - [ ] The rollback point is recorded.
 - [ ] Sprint 3 has not started before this gate completes.
 
-## Sprint 3: Define Evidence-Driven Repair Policy And Contracts
+## Sprint 3: Define Stage-Bounded Evidence-Driven Repair Policy And Contracts
 
 **Goal**: Every registered defect has an explicit repair disposition, and the
-model receives a bounded machine-generated repair task only for eligible codes.
+visual and plan models receive bounded machine-generated repair tasks only for
+eligible codes under their separate stage budgets.
 
 **Dependencies**: Sprint 2 gate complete.
 
 **Tracked scope**: `repair.py`, registry metadata, prompt/schema versions,
 observability compaction, fixtures, and focused tests.
 
-**Commit**: `feat: classify bounded defect repair strategies`
+**Commit**: `feat: define stage-bounded defect repair policy`
 
 **Demo/Validation**:
 
 - `PYTHONPATH=src .venv/bin/python -m unittest tests/test_mvp_repair.py tests/test_mvp_observability.py tests/test_mvp_prompt_versions.py tests/test_mvp_edit_plan.py -v`
-- Generate a private-free repair request for every LLM-repairable registry entry
-  and prove that non-repairable codes cannot enter the request.
+- Generate synthetic bounded visual and plan-repair requests for every
+  LLM-repairable registry entry, prove non-repairable codes cannot enter them,
+  and prove transient prompt/transcript context never enters persisted evidence.
 
-**Rollback point**: Keep the registry and strict schemas, disable the repair
-feature flag, and revert Sprint 3 policy wiring.
+**Rollback point**: Keep the registry and strict schemas, set
+`OPENSTORYLINE_LLM_DEFECT_REPAIR_MODE=off`, and revert Sprint 3 policy wiring.
 
 ### Task 3.1: Implement Conditional Repair Eligibility
 
 - **Location**: `src/open_storyline/mvp/repair.py` and `defects.py`.
 - **Description**:
   - Evaluate repair eligibility using code, stage, available capabilities,
-    evidence completeness, whether rendering has started, and whether a safe
-    deterministic correction is more reliable.
-  - Group all eligible codes for the same job into one repair round.
+    evidence completeness, whether rendering has started, and whether the
+    finding is objective or advisory.
+  - Enforce mode semantics explicitly: `off` bypasses registry-driven repair,
+    `report` computes and records a redacted would-repair disposition without a
+    provider call, and only `enforce` may consume a semantic repair budget.
+  - Permit at most one visual-understanding repair and separately group all
+    eligible edit-plan codes for the same job into one plan-repair round.
+  - Include exact numeric, timing, geometry, capability, budget, and subtitle
+    safe-zone defects in plan repair so the model may choose a better bounded
+    correction before deterministic fallback.
   - Reject unknown, technical, transient-provider, source, security, and
-    post-render-only codes.
-  - Enforce hard bounds for clips, codes, evidence records, prompt bytes, and one
-    semantic repair round.
+    post-render-only codes. Reject FFMPEGA defects from semantic repair.
+  - Enforce hard bounds for clips, codes, evidence records, prompt bytes, one
+    visual repair, and one plan repair.
 - **Dependencies**: Sprint 1 registry and Sprint 2 schema.
 - **Acceptance criteria**:
   - Eligibility decisions are deterministic and independently testable.
   - A code cannot become LLM-repairable through model output.
+  - Advisory-only findings never trigger a semantic call.
   - A missing required evidence type forces deterministic fallback or failure.
 - **Validation**:
   - `PYTHONPATH=src .venv/bin/python -m unittest tests/test_mvp_repair.py -v`
@@ -604,19 +735,23 @@ feature flag, and revert Sprint 3 policy wiring.
 - **Location**: `repair.py`, `structured_outputs.py`, `prompts.py`, and
   `prompt_versions.py`.
 - **Description**:
-  - Create a stable `repair_batch.v1` wire schema containing affected clip IDs,
-    original candidate subtrees, registered code descriptions, bounded objective
-    evidence, available capabilities, catalog context, and immutable constraints.
-  - The response contains corrected candidate clip plans only.
+  - Create a stable `repair_batch_request.v1` application contract containing
+    affected clip IDs, original candidate subtrees, registered code descriptions,
+    bounded objective evidence, available capabilities, catalog context,
+    immutable constraints, the already-authorized editing prompt, and only the
+    affected clip-local transcript excerpts required for editorial context.
+  - Use the stable `edit_plan_repair.v1` provider-response schema registered in
+    Sprint 2; the response contains corrected candidate clip plans only.
   - The system prompt explicitly requires preserving usable editorial decisions,
     source windows, unaffected operations, and catalog consistency.
-  - Exclude free-form error prose, raw provider bodies, credentials, paths, and
-    unnecessary full-job context.
+  - Exclude free-form error prose, raw provider bodies, credentials, paths,
+    unrelated transcript segments, and unnecessary full-job context.
 - **Dependencies**: Task 3.1.
 - **Acceptance criteria**:
   - The request is fully JSON-serializable, bounded, and private-data reviewed.
   - The response cannot claim that a code was resolved or authorize promotion.
-  - Prompt/schema versions and hashes are recorded without storing prompt text.
+  - Prompt/schema versions and hashes are recorded without storing prompt or
+    transcript text in checkpoints, reports, events, audit summaries, or logs.
 - **Validation**:
   - `PYTHONPATH=src .venv/bin/python -m unittest tests/test_mvp_repair.py tests/test_mvp_prompt_versions.py -v`
 - **Rollback**: Remove the repair prompt/schema while retaining the registry.
@@ -641,6 +776,34 @@ feature flag, and revert Sprint 3 policy wiring.
     removed clips, removed captions, and unsupported catalog IDs.
 - **Rollback**: Disable repair; existing validation/fallback remains authoritative.
 
+### Task 3.4: Define Objective And Advisory Predictive QA Policy
+
+- **Location**: `defects.py`, `repair.py`, `preflight.py`, `creative_qa.py`, and
+  focused fixtures.
+- **Description**:
+  - Define objective pre-render findings for mechanically provable plan defects,
+    including duplicate overlays, invalid opacity, impossible timing/geometry,
+    unsafe subtitle-zone occupancy, unsupported combinations, and bounded static
+    active-picture risks when the plan alone provides sufficient evidence.
+  - Define heuristic findings for inactive hooks, attention gaps, long visual
+    holds, rhythm risks, and similar creative predictions.
+  - Give predictive pre-render findings distinct codes from measured post-render
+    QA findings so a forecast cannot overwrite or impersonate observed evidence.
+  - Allow objective repairable findings to trigger the plan-repair batch. Allow
+    heuristic findings only as secondary suggestions when an objective finding
+    has already triggered that batch.
+- **Dependencies**: Tasks 3.1-3.3.
+- **Acceptance criteria**:
+  - Every predictive code declares detector, evidence, confidence/threshold,
+    phase, trigger eligibility, fallback, and promotion behavior.
+  - Advisory-only fixtures make zero semantic repair calls and never become
+    technical blockers.
+  - Post-render measurements retain their existing authoritative codes.
+- **Validation**:
+  - `PYTHONPATH=src .venv/bin/python -m unittest tests/test_mvp_repair.py tests/test_mvp_creative_qa.py tests/test_mvp_frame_quality.py -v`
+- **Rollback**: Disable predictive findings while retaining the core repair
+  contracts and existing post-render QA.
+
 ### Sprint 3 Gate
 
 - [ ] All Sprint 3 tasks complete.
@@ -650,47 +813,57 @@ feature flag, and revert Sprint 3 policy wiring.
 - [ ] The rollback point is recorded.
 - [ ] Sprint 4 has not started before this gate completes.
 
-## Sprint 4: Execute One Pre-Render Repair Round And Safe Fallback
+## Sprint 4: Execute Visual And Plan Repair With Predictive QA And Safe Fallback
 
-**Goal**: The pipeline collects all repairable planning defects, performs one
-strict-schema repair round, deterministically validates it, and falls back only
-where repair remains invalid.
+**Goal**: The pipeline may perform one strict-schema visual-evidence repair and
+one later job-level strict-schema plan repair, deterministically validates both,
+uses predictive QA under the registry policy, and falls back only where repair
+remains invalid.
 
 **Dependencies**: Sprint 3 gate complete.
 
 **Tracked scope**: `edit_plan.py`, `visual_understanding.py`,
 `visual_coverage.py`, `preflight.py`, `pipeline.py`, `checkpoints.py`,
-`fallbacks.py`, render preparation, and integration tests.
+`fallbacks.py`, `creative_qa.py`, render preparation, and integration tests.
 
-**Commit**: `feat: run one evidence-driven plan repair round`
+**Commit**: `feat: run stage-bounded agentic repair`
 
 **Demo/Validation**:
 
 - `PYTHONPATH=src .venv/bin/python -m unittest tests/test_mvp_edit_plan.py tests/test_mvp_visual_understanding.py tests/test_mvp_pipeline.py tests/test_mvp_fallbacks.py -v`
-- Demonstrate: initial semantic defects -> evidence refresh -> one repair call ->
-  corrected preflight -> render-ready plan.
+- Demonstrate: invalid visual relationships -> at most one visual repair ->
+  validated evidence or fail-closed evidence handling.
+- Demonstrate: initial plan defects -> evidence refresh -> one batched plan repair
+  call -> corrected preflight -> render-ready plan.
 - Demonstrate: failed repair -> exact remaining labels -> localized fallback ->
   technically valid render-ready plan.
 
-**Rollback point**: Disable `OPENSTORYLINE_LLM_DEFECT_REPAIR_ENABLED`; retain
+**Rollback point**: Set `OPENSTORYLINE_LLM_DEFECT_REPAIR_MODE=off`; retain
 strict schemas and restore the existing deterministic baseline behavior.
 
 ### Task 4.1: Refactor The Current Repair Sequence
 
 - **Location**: `edit_plan.py`, `visual_understanding.py`, and `pipeline.py`.
 - **Description**:
-  - Stop making independent semantic repair calls immediately for each invalid
-    clip when repair mode is enabled.
+  - In `enforce`, perform at most one bounded visual-understanding replacement
+    call for invalid visual relationships and remove independent immediate repair
+    calls for each invalid edit-plan clip in favor of one job-level plan repair.
+  - In `report`, build the same bounded eligibility/request summary and persist
+    only redacted metadata without calling the model; in `off`, bypass the new
+    registry-driven repair path entirely.
   - Preserve enough bounded invalid-candidate evidence to assemble a job-level
     repair batch.
   - Keep current behavior behind the kill switch until the new path is proven.
-  - Separate transport attempts, visual evidence refresh, and semantic repair in
-    attempt accounting.
+  - Separate transport attempts, visual repair, visual evidence refresh, plan
+    repair, and deterministic fallback in attempt accounting.
 - **Dependencies**: Sprint 3 contracts.
 - **Acceptance criteria**:
-  - At most one additional semantic repair request is made per job.
+  - At most one visual repair and one plan repair are made per job.
+  - `off` and `report` make zero registry-driven semantic repair calls; `report`
+    records the same bounded eligibility disposition that `enforce` would use.
   - Multiple clips/codes are represented in the same bounded repair round.
-  - Cancellation and worker recovery do not duplicate a completed repair call.
+  - Cancellation and worker recovery do not duplicate either completed repair
+    stage.
 - **Validation**:
   - Integration tests assert provider call counts and attempt categories.
 - **Rollback**: Disable the new repair path and use current per-clip behavior.
@@ -701,15 +874,20 @@ strict schemas and restore the existing deterministic baseline behavior.
   `creative_qa.py`, and `pipeline.py`.
 - **Description**:
   - Keep the existing one bounded clip-local higher-density visual analysis.
-  - Add pre-render static plan checks for currently post-render-only issues that
-    can be predicted reliably, such as duplicate overlays, invalid opacity,
-    timeline attention gaps, or unsafe subtitle-zone occupancy.
-  - Only include deterministic findings and evidence in the repair request.
+  - Add objective pre-render static plan checks for issues that can be proven
+    from the plan and evidence, such as duplicate overlays, invalid opacity,
+    impossible timing/geometry, unsupported combinations, and unsafe
+    subtitle-zone occupancy.
+  - Add bounded heuristic signals for attention gaps, inactive hooks, long visual
+    holds, and rhythm risks. These signals may accompany an objective repair
+    request but never trigger one alone.
+  - Include only sanitized evidence identifiers, bounded measurements, affected
+    prompt context, and affected clip-local transcript excerpts.
 - **Dependencies**: Task 4.1.
 - **Acceptance criteria**:
   - Crop repair never uses global/out-of-window evidence.
-  - Advisory heuristics do not become blockers without an explicit registry
-    policy and deterministic threshold.
+  - Objective predictors and advisory heuristics use distinct registered codes.
+  - Advisory-only jobs make no repair call and remain non-blocking.
 - **Validation**:
   - Focused visual coverage and creative QA tests with cross-niche fixtures.
 - **Rollback**: Remove new static checks; retain existing visual repair evidence.
@@ -719,6 +897,9 @@ strict schemas and restore the existing deterministic baseline behavior.
 - **Location**: `fallbacks.py`, `preflight.py`, `pipeline.py`, and renderer inputs.
 - **Description**:
   - Map every remaining creative defect to the smallest registered fallback.
+  - Apply fallback only after the model has had the single bounded opportunity to
+    choose context-aware valid timing, geometry, capability substitution, budget,
+    catalog, reference, or safe-zone values.
   - Preserve valid segments and operations instead of replacing an entire clip
     with the minimal baseline unless FFmpeg preflight proves that necessary.
   - Never remove a technically valid candidate solely for a creative limitation.
@@ -738,16 +919,17 @@ strict schemas and restore the existing deterministic baseline behavior.
 
 - **Location**: `checkpoints.py`, `pipeline.py`, and checkpoint tests.
 - **Description**:
-  - Store the validated repair decision and fingerprints under a `plan_repair`
-    checkpoint stage without raw private prompts/provider bodies.
+  - Store validated repair decisions and fingerprints under `visual_repair` and
+    `plan_repair` checkpoint stages without raw private prompts, transcript text,
+    frame bytes, or provider bodies.
   - Fingerprint source, prompt version, initial plan, defect registry, schema,
     catalog, renderer capabilities, and objective evidence.
   - Reuse only when every fingerprint matches; corruption fails closed and is
     recomputed within existing bounds.
 - **Dependencies**: Tasks 4.1-4.3.
 - **Acceptance criteria**:
-  - Worker recovery does not spend another semantic repair call after a valid
-    repair checkpoint exists.
+  - Worker recovery does not spend another semantic call for either stage after
+    its valid repair checkpoint exists.
   - Schema/registry/catalog changes invalidate repair checkpoints.
 - **Validation**:
   - `PYTHONPATH=src .venv/bin/python -m unittest tests/test_mvp_checkpoints.py tests/test_mvp_pipeline.py -v`
@@ -762,22 +944,24 @@ strict schemas and restore the existing deterministic baseline behavior.
 - [ ] The rollback point is recorded.
 - [ ] Sprint 5 has not started before this gate completes.
 
-## Sprint 5: Audit Repair Outcomes And Preserve Playable Candidates
+## Sprint 5: Audit Repair Outcomes And Publish Technical-Pass Candidates
 
 **Goal**: Attempts expose exactly what repair tried, what deterministic checks
 resolved, what remained, and which fallback was used, while preserving safe
-playable outputs and clear retry UX.
+playable outputs, publishing every technical-pass candidate with truthful
+limitations, and providing clear retry UX and agentic audit queries.
 
 **Dependencies**: Sprint 4 gate complete.
 
-**Tracked scope**: outcome/audit/reporting, promotion, job persistence, UI,
-browser tests, and compatibility readers.
+**Tracked scope**: outcome/audit/reporting, promotion, delivery policy, FFMPEGA
+fallback evidence, job persistence, admin CLI, UI, browser tests, and
+compatibility readers.
 
-**Commit**: `feat: expose repair outcomes and preserve safe candidates`
+**Commit**: `feat: publish and audit technical-pass outcomes`
 
 **Demo/Validation**:
 
-- `PYTHONPATH=src .venv/bin/python -m unittest tests/test_mvp_outcomes.py tests/test_mvp_observability.py tests/test_mvp_audit.py tests/test_mvp_jobs.py tests/test_mvp_frame_quality.py -v`
+- `PYTHONPATH=src .venv/bin/python -m unittest tests/test_mvp_outcomes.py tests/test_mvp_observability.py tests/test_mvp_audit.py tests/test_mvp_jobs.py tests/test_mvp_frame_quality.py tests/test_ffmpega.py -v`
 - `cd .qa/web && QA_FAIL_ON_CONSOLE=1 npm run test:smoke`
 - Run the focused retry/comparison Chromium scenario with one worker.
 
@@ -790,9 +974,9 @@ continue to display `outcome_report.v1` and ignore additive repair artifacts.
   and `observability.py`.
 - **Description**:
   - Record registry/schema/prompt versions and hashes, trigger codes, eligible and
-    ineligible dispositions, evidence identifiers, semantic/transport attempts,
-    tokens/cost/latency, deterministic resolution results, fallback actions, and
-    checkpoint reuse.
+    ineligible dispositions, evidence identifiers, visual-repair, plan-repair,
+    semantic/transport attempts, tokens/cost/latency, deterministic resolution
+    results, predictive findings, fallback actions, and checkpoint reuse.
   - Store no prompt text, transcript text, frame bytes, media bytes, provider
     body, credentials, or unsafe paths.
 - **Dependencies**: Sprint 4 execution evidence.
@@ -812,6 +996,9 @@ continue to display `outcome_report.v1` and ignore additive repair artifacts.
   - Preserve readers for v1 data and never rewrite historical attempts.
   - Track `resolved`, `remaining`, `new`, `fallback_applied`, and
     `not_repairable` dispositions per code.
+  - Keep strict creative QA verdict, technical status, delivery policy, delivery
+    decision, and download availability as separate fields so publication never
+    rewrites strict evidence.
 - **Dependencies**: Task 5.1.
 - **Acceptance criteria**:
   - Historical and new attempts can be compared safely.
@@ -820,19 +1007,35 @@ continue to display `outcome_report.v1` and ignore additive repair artifacts.
   - Outcome and prompt-version compatibility tests.
 - **Rollback**: Continue writing v1 while retaining v2 reader code if required.
 
-### Task 5.3: Preserve Candidates And Clarify Promotion
+### Task 5.3: Separate Strict QA From Technical-Pass Delivery
 
 - **Location**: `promotion.py`, `pipeline.py`, artifact registration.
 - **Description**:
-  - Never delete a technically valid candidate because a creative repair failed.
+  - Add `OPENSTORYLINE_DELIVERY_POLICY=qa_enforced|technical_pass_guaranteed`,
+    defaulting to current `qa_enforced` behavior until the staged rollout gate.
+  - Under the approved target `technical_pass_guaranteed` policy, never delete or
+    withhold a candidate because a creative repair or strict creative QA failed.
+    Register and publish it with truthful limitations whenever technical status
+    passes.
+  - Preserve `strict_decision=block` when strict creative checks fail. Record a
+    separate `delivery_decision=publish_with_limitations`; do not relabel strict
+    evidence as pass.
   - Delete or withhold only candidates with technical blockers.
+  - If optional FFMPEGA planning, strict validation, service execution, or effect
+    execution fails, publish the native FFmpeg candidate with `EFFECT_OMITTED`
+    and no additional semantic repair call.
   - If future optional enhanced re-rendering is added, keep the first valid
     candidate until the replacement independently passes promotion; this plan
     does not enable such a loop.
 - **Dependencies**: Task 5.2.
 - **Acceptance criteria**:
-  - Baseline-guaranteed output remains downloadable with truthful limitations.
+  - Every creative-only blocked candidate remains downloadable with truthful
+    limitations under `technical_pass_guaranteed`, including when strict QA is
+    blocked.
   - Strict decision evidence remains available and is never rewritten as pass.
+  - Technical-only and mixed technical/creative blockers remain unpublished.
+  - FFMPEGA failures preserve the native render and emit registered requested/
+    executed fallback evidence.
 - **Validation**:
   - Promotion tests cover creative-only, technical-only, and mixed blockers.
 - **Rollback**: Restore current promotion behavior under existing policy flags.
@@ -845,6 +1048,8 @@ continue to display `outcome_report.v1` and ignore additive repair artifacts.
   - Show Spanish registry title, raw code, repair attempted/not eligible,
     resolved/remaining/new state, executed fallback, reused stages, and next
     action.
+  - Display strict QA verdict separately from the delivery result so a published
+    limited output is not presented as strict-approved.
   - Preserve the existing same-version retry and improved-version distinction.
   - Do not imply that a repaired label guarantees subjective quality or virality.
 - **Dependencies**: Tasks 5.1-5.3.
@@ -855,6 +1060,34 @@ continue to display `outcome_report.v1` and ignore additive repair artifacts.
   - Smoke plus the one affected retry/comparison Playwright test.
 - **Rollback**: Hide additive repair details and show current outcome chips.
 
+### Task 5.5: Add Bounded Agentic Defect Audit Queries
+
+- **Location**: `src/open_storyline/mvp/audit.py`,
+  `src/open_storyline/mvp/admin.py`, `bin/kamal-mvp`, and
+  `tests/test_mvp_audit.py`.
+- **Description**:
+  - Add `audit defects` with bounded `--since`, `--code`, `--strategy`,
+    `--disposition`, `--stage`, `--limit`, and `--format table|json` filters.
+  - Read sanitized `outcome_report.v1/v2`, `repair_report.v1`, fallback, and
+    promotion evidence through existing PostgreSQL/audit contracts without raw
+    prompts, transcripts, provider bodies, media, frames, credentials, or paths.
+  - Return stable records suitable for agent review: job/attempt identifiers,
+    registry version, code, stage, strategy, disposition, repair/fallback state,
+    technical status, delivery decision, and timestamps.
+  - Keep queries bounded and add an explicit future normalization/backfill note;
+    do not add a table or migration unless measured evidence proves this surface
+    insufficient.
+- **Dependencies**: Tasks 5.1-5.3.
+- **Acceptance criteria**:
+  - Agents can answer recent defect, repair-success, fallback, and delivery
+    questions without loading raw audit documents or scanning filesystem media.
+  - Limits, invalid filters, v1 compatibility, unknown codes, and secret/private
+    data absence have deterministic tests.
+- **Validation**:
+  - `PYTHONPATH=src .venv/bin/python -m unittest tests/test_mvp_audit.py tests/test_mvp_outcomes.py -v`
+- **Rollback**: Remove the additive CLI subcommand; retained artifacts and
+  outcomes remain readable through existing audit commands.
+
 ### Sprint 5 Gate
 
 - [ ] All Sprint 5 tasks complete.
@@ -864,7 +1097,7 @@ continue to display `outcome_report.v1` and ignore additive repair artifacts.
 - [ ] The rollback point is recorded.
 - [ ] Sprint 6 has not started before this gate completes.
 
-## Sprint 6: Evals, Operational Gates, And Staged Rollout
+## Sprint 6: Run Evals, Operational Gates, And Staged Rollout
 
 **Goal**: Prove strict-schema and repair behavior across synthetic niches and
 failure modes, then provide a reversible production rollout without claiming
@@ -889,9 +1122,10 @@ implementation history, and rollback runbook.
 - Strict 9Router live probe and private production canary only after explicit
   authorization.
 
-**Rollback point**: Disable repair first, restore `json_object` second, disable
-repair UI third, and roll back the image only after schema compatibility review.
-No additive evidence is deleted.
+**Rollback point**: Set repair mode to `off`, restore delivery policy to
+`qa_enforced`, remove strict boundaries in reverse activation order, restore
+global `json_object`, disable repair UI, and roll back the image only after
+schema compatibility review. No additive evidence is deleted.
 
 ### Task 6.1: Build The Repair Eval Matrix
 
@@ -900,16 +1134,26 @@ No additive evidence is deleted.
 - **Description**:
   - Cover interview, product presentation, tutorial, cooking, trading/screen,
     multi-speaker, sparse-visual, and no-asset cases.
-  - Inject every LLM-repairable code family, deterministic-only defect family,
-    provider retry, technical blocker, unknown code, refusal, incomplete output,
-    invalid strict schema, schema-valid semantic invalidity, and repair regression.
+  - Inject every LLM-repairable code family, deterministic-fallback family,
+    objective predictive finding, advisory-only finding, provider retry,
+    technical blocker, unknown code, refusal, incomplete output, invalid strict
+    schema, schema-valid semantic invalidity, FFMPEGA plan/execution failure, and
+    repair regression.
   - Compare baseline current behavior, strict schema only, and strict schema plus
-    repair using identical synthetic fixtures.
+    repair in `off`, `report`, and `enforce` using identical synthetic fixtures.
 - **Dependencies**: Complete implementation.
 - **Acceptance criteria**:
   - Every registered LLM-repairable code has at least one success and one failed
     repair/fallback test.
   - Every non-LLM code has a test proving no semantic repair call occurs.
+  - Advisory-only cases make zero semantic repair calls; advisory signals
+    accompany an objectively triggered request without changing call count.
+  - Call-count tests prove at most one visual repair, one plan repair, and zero
+    FFMPEGA repair calls per job.
+  - `off` and `report` cases make zero registry-driven semantic repair calls;
+    report/enforce eligibility dispositions match before provider execution.
+  - Creative-only strict blockers publish under technical-pass delivery while
+    technical and mixed blockers remain unpublished.
   - Fixtures contain no private production data.
 - **Validation**:
   - Focused eval suite plus full local suite.
@@ -920,9 +1164,11 @@ No additive evidence is deleted.
 - **Location**: outcome SLO summaries, audit CLI/reporting, and docs.
 - **Description**:
   - Measure strict-schema validity, semantic-validity rate, repair trigger rate,
-    repair success by original code, fallback rate, new-defect rate, provider
-    calls, semantic versus transport attempts, tokens, cost, latency, checkpoint
-    reuse, playable output rate, and enhanced/limited outcome rates.
+    visual- and plan-repair success by original code, predictive advisory
+    attachment rate, fallback rate, FFMPEGA omission rate, new-defect rate,
+    provider calls, semantic versus transport attempts, tokens, cost, latency,
+    checkpoint reuse, technical-pass publication rate, playable output rate, and
+    enhanced/limited outcome rates.
   - Keep the existing confidence/sample gate for a 99% claim.
   - Add alerts/review thresholds for repair increasing latency/cost, introducing
     new defects, or reducing playable output.
@@ -941,9 +1187,11 @@ No additive evidence is deleted.
   `bin/kamal-mvp`, `scripts/qa_ninerouter.py`, Kamal tests, architecture docs.
 - **Description**:
   - Roll out in this order: registry/read-only presentation, strict schema probe,
-    strict schema runtime, repair in report/shadow evidence, repair execution,
-    then UI details.
-  - Keep repair and strict schema independently reversible.
+    strict boundaries progressively (`shorts`, `visual_understanding`,
+    `edit_plan`, `semantic_qa`, then `ffmpega`), repair `report`, repair
+    `enforce`, technical-pass delivery, then UI details.
+  - Keep repair mode, strict mode, strict boundary allowlist, delivery policy,
+    and UI independently reversible.
   - Require healthy `/up` and `/health`, database compatibility, backup/restore
     readiness, provider probe, and canary evidence before production enablement.
 - **Dependencies**: Tasks 6.1-6.2.
@@ -964,19 +1212,25 @@ No additive evidence is deleted.
   - After explicit authorization, use the same private immutable session/version
     pattern without exposing prompt, transcript, media, frames, provider bodies,
     or credentials.
-  - Run one strict-schema-only canary, one repair-trigger canary if a safely
-    reproducible defect exists, and one baseline-guaranteed fallback canary.
+  - Run one progressively enabled strict-schema canary, one repair-trigger canary
+    if a safely reproducible objective defect exists, and one technical-pass
+    delivery canary with a truthful creative limitation.
+  - When production FFMPEGA is enabled and separately approved for the canary,
+    verify one typed effect plan and one native-render fallback without adding a
+    semantic repair call.
   - Verify output playback, promotion, frame evidence, subtitle structure,
     fallback truthfulness, repair checkpoint reuse, tokens/cost/latency, and
     rollback switches.
 - **Dependencies**: All prior tasks and production authorization.
 - **Acceptance criteria**:
-  - Technically valid outputs are retained.
+  - Technically valid outputs are registered and downloadable even when strict
+    creative QA remains blocked.
   - Real remaining defect codes are visible and auditable.
   - No 99% claim is made until the configured statistical gate passes.
 - **Validation**:
   - Private audit CLI and artifact checks; report only sanitized summaries.
-- **Rollback**: Disable repair, restore JSON object mode, and retain evidence.
+- **Rollback**: Disable repair, restore `qa_enforced` delivery, remove strict
+  boundaries in reverse order, restore JSON object mode, and retain evidence.
 
 ### Sprint 6 Gate
 
@@ -995,38 +1249,52 @@ No additive evidence is deleted.
   - Strict schema snapshots, schema subset validation, stable hashes, nullable
     optional fields, recursive `additionalProperties=false`, refusal/incomplete
     responses, and secret-safe errors.
-  - Repair request bounds, eligibility, quality floors, resolution comparison,
-    and fallback mapping.
+  - Effect-specific FFMPEGA fields, bounds, enums, agentic/full allowlists,
+    incompatible combinations, schema/runtime drift, and native-render fallback.
+  - Visual- and plan-repair request bounds, eligibility, objective/advisory
+    policy, quality floors, resolution comparison, and fallback mapping.
 - **Integration**:
   - Strict 9Router mock transport through shorts, vision, edit planning, repair,
-    and semantic QA.
-  - Pipeline call counts, one semantic repair round, evidence refresh,
-    checkpoints, fallback compilation, promotion, outcome v1/v2 compatibility,
-    audit ingestion, retention, and retry feedback.
+    semantic QA, and FFMPEGA effect planning.
+  - Progressive strict-boundary activation and explicit no-downgrade behavior.
+  - Pipeline call counts for at most one visual repair, one plan repair, and zero
+    FFMPEGA repairs; zero registry-driven calls in `off` and `report`; evidence
+    refresh, both repair checkpoints, fallback
+    compilation, strict QA versus delivery decisions, outcome v1/v2
+    compatibility, audit ingestion, `audit defects`, retention, and retry
+    feedback.
   - Disposable PostgreSQL coverage for outcome/audit/checkpoint persistence.
 - **End-to-end/manual**:
   - Browser outcome/repair comparison, Spanish labels, raw code visibility,
-    retry actions, mobile layout, keyboard navigation, and console cleanliness.
+    strict-verdict versus delivery status, retry actions, mobile layout, keyboard
+    navigation, and console cleanliness.
   - Optional authorized live 9Router strict-schema probe using no private data.
   - Optional authorized private production canary with sanitized reporting.
 - **Security/privacy**:
-  - No schema, repair report, event, log, fixture, screenshot, or artifact exposes
-    credentials, raw prompts, transcripts, media/frame bytes, provider bodies, or
-    unsafe paths.
+  - Stable schemas contain no job-private values. Repair reports, checkpoints,
+    events, logs, screenshots, audit summaries, and persisted fixtures expose no
+    credentials, raw prompts, transcript text, media/frame bytes, provider
+    bodies, or unsafe paths.
+  - Transient repair input contains only the already-authorized prompt and
+    affected bounded clip-local transcript excerpts sent to the same provider;
+    tests prove persistence and logging redact them.
   - Unknown and technical codes cannot be promoted to LLM repair through input.
   - Provider response cannot authorize fallback, promotion, or code resolution.
 - **Performance/cost**:
-  - At most one additional semantic repair request per job.
-  - Bounded repair payload and response sizes.
+  - At most one visual repair and one plan repair per job; FFMPEGA adds no repair
+    call.
+  - Bounded visual/plan repair payload and response sizes.
   - Separate token/cost/latency metrics for initial generation, transport retry,
-    evidence refresh, and semantic repair.
-  - Repair checkpoint prevents duplicate spending after worker recovery.
+    visual repair, evidence refresh, and plan repair.
+  - Stage-specific checkpoints prevent duplicate spending after worker recovery.
 - **Accessibility**:
   - Outcome and repair status are not color-only; raw code and explanatory text
     remain available to assistive technology.
 - **Migration/compatibility**:
-  - No migration expected. If one is introduced, add connected-database,
-    backup/restore, compatibility-set, and rollback review before proceeding.
+  - No migration expected. `audit defects` must remain bounded against existing
+    outcome/audit JSON. If measured evidence requires a table, stop and add a
+    separately justified connected-database, backfill, backup/restore,
+    compatibility-set, and rollback plan before proceeding.
   - Historical v1 outcome/feedback documents remain readable and immutable.
 - **Release**:
   - Project-native Python tests precede browser QA.
@@ -1040,62 +1308,86 @@ No additive evidence is deleted.
 | 9Router does not forward strict JSON Schema | Runtime 4xx or invalid compatibility assumption | Safe capability probe, explicit mode flag, fail closed before enablement | Probe passes for exact route/model; unsupported mock fails safely |
 | Strict schema is mistaken for semantic correctness | Valid JSON still violates timing, evidence, catalog, or quality rules | Keep Pydantic/domain/preflight/QA validation authoritative | Schema-valid semantic-invalid fixtures are rejected |
 | Dynamic schemas leak data or increase latency | Privacy and first-request schema-processing cost | Stable private-free schemas; keep job/catalog evidence in bounded prompt data | Schema snapshots contain no job data and remain stable |
-| One repair round is too broad | Large payload or model removes good edits | Per-clip bounded subtrees, quality-floor diff, hard clip/code/byte caps | Adversarial collapse fixtures fail and localized fallback runs |
+| Transient repair context leaks into persistence | Prompt or transcript privacy regression | Send only bounded affected context to the same provider; redact reports/checkpoints/logs; secret/private fixtures | Persistence tests find no prompt/transcript text or provider bodies |
+| Stage-bounded repair payload is too broad | Large payload or model removes good edits | Per-clip bounded subtrees, quality-floor diff, hard clip/code/byte caps | Adversarial collapse fixtures fail and localized fallback runs |
 | Current per-clip repair behavior regresses | More fallbacks or lower quality | Feature flag, A/B fixture matrix, preserve current path during rollout | Baseline vs new repair success/output comparison |
 | Repair creates new defects | Worse plan despite fixing original code | Re-run every validator and reject on new blocker/quality-floor failure | `new_codes` empty for accepted repairs |
+| Predictive QA overreaches | False positives spend tokens or weaken edits | Objective/advisory code separation; advisory-only findings never trigger or block | Advisory-only fixtures make zero calls and preserve delivery |
 | Post-render defect triggers expensive loop | Higher latency/tokens and possible loss of first playable output | No baseline same-job post-render LLM rerender; publish limited output | Provider/render call-count tests |
-| Registry misses an emitted code | Unknown behavior or incorrect retry policy | Inventory test plus runtime unknown fail-closed definition | Registry coverage check reports zero public omissions |
+| Registry scope accidentally expands to hundreds of unrelated errors | Sprint 1 becomes risky and bilingual metadata becomes low-value | Inventory only outcome/promotion/fallback/retry/repair/audit/activity/workspace codes; record stable exclusions | Registry coverage reports zero in-scope omissions and explicit exclusions |
 | Registry centralization changes historical meaning | Audit inconsistency | Preserve raw codes/versioned reports; no stored reclassification | v1 fixture compatibility tests |
-| Creative limitation is mislabeled technical or vice versa | Unsafe promotion or unnecessary failure | Detector-owned technical classification plus registry review | Mixed-blocker promotion tests |
+| Creative limitation is mislabeled technical or vice versa | A technical defect could be published or a valid output withheld | Detector-owned technical classification plus registry review | Creative-only publishes; technical and mixed blockers remain withheld |
+| Strict QA and delivery are conflated | UI or operators interpret published limited output as strict-approved | Store and present strict verdict and delivery decision independently | API/browser tests show strict block plus published limitation truthfully |
+| FFMPEGA parameter contracts drift | Strict output passes but runtime rejects, or valid effects are blocked | Pin authoritative contracts; share Pydantic models between schema and runtime; stop if authority is missing | Contract drift and every-effect focused tests pass |
+| FFMPEGA strict schema exceeds provider subset or size | Provider rejects the effect schema | Two stable schemas, provider-subset validator, progressive boundary activation | Mock rejection is fail-closed; live gate passes before enablement |
 | Fallback reduces unaffected quality | User receives unnecessarily generic output | Operation-local fallback and quality-floor comparison | Plan diff tests preserve unaffected operations |
-| Repair duplicates after worker interruption | Additional cost and latency | Fingerprinted `plan_repair` checkpoint and idempotent resume | Recovery test shows no second semantic call |
+| Repair duplicates after worker interruption | Additional cost and latency | Fingerprinted `visual_repair` and `plan_repair` checkpoints and idempotent resume | Recovery tests show no repeated stage call |
+| JSON-backed agentic audit becomes too slow | Agents cannot query defect trends within bounded latency | Bounded indexed job selection, compact outcome/repair documents, measured thresholds, future normalized backfill gate | `audit defects` limit/latency tests remain within documented bounds |
 | PR #11 merged without formal GitHub checks | Baseline confidence depends on recorded manual evidence | Preserve the PR validation record and rerun focused regressions in every sprint | New sprint gates pass from merge SHA `dae7366` |
 
 ## Rollback Plan
 
-1. **Before implementation**: If the branch no longer descends from verified
-   merge SHA `dae7366`, stop and reconcile the base without rewriting history.
+1. **Before implementation**: Present all six sprint titles and obtain explicit
+   user approval. If the branch no longer descends from verified merge SHA
+   `dae7366`, stop and reconcile the base without rewriting history.
 2. **Sprint 1**: Revert registry routing; stored outcomes remain unchanged.
-3. **Sprint 2**: Set structured output mode to `json_object`; strict schemas and
-   tests can remain dormant.
-4. **Sprint 3**: Disable LLM defect repair; registry and strict transport remain.
-5. **Sprint 4**: Disable new repair orchestration and repair checkpoint reads;
-   retain evidence for diagnosis.
-6. **Sprint 5**: Hide repair UI and stop writing additive repair reports; keep
-   v1/v2 readers and historical evidence.
-7. **Sprint 6/production**: Disable repair first, restore JSON object mode second,
-   disable UI third, and roll back the image only after confirming database and
-   artifact compatibility.
+3. **Sprint 2**: Remove strict boundaries in reverse order or set global mode to
+   `json_object`; typed schemas and tests can remain dormant.
+4. **Sprint 3**: Set repair mode to `off`; registry and strict transport remain.
+5. **Sprint 4**: Disable predictive QA, repair orchestration, and both repair
+   checkpoint reads; retain evidence for diagnosis.
+6. **Sprint 5**: Restore delivery policy to `qa_enforced`, hide repair UI, remove
+   the additive audit command, and stop writing repair reports; keep v1/v2
+   readers and historical evidence.
+7. **Sprint 6/production**: Disable repair first, restore `qa_enforced` delivery,
+   remove strict boundaries in reverse order, restore JSON object mode, disable
+   UI, and roll back the image only after confirming database and artifact
+   compatibility.
 8. Never delete checkpoint, registry-version, outcome, repair, or audit evidence
    as part of normal rollback.
 
 ## Execution Order
 
-1. Commit and push this planning artifact as branch bootstrap.
-2. Read planner execution-state instructions and initialize active-plan state.
-3. Implement Sprint 1 only.
-4. Run and record all Sprint 1 validation.
-5. Create exactly one Sprint 1 commit and record its rollback point.
-6. Start Sprint 2 only after the Sprint 1 gate passes.
-7. Repeat the validate/one-commit/rollback gate for every remaining sprint.
-8. Push and create a new fork PR only after all six sprint gates pass.
-9. Production canary/deployment requires separate explicit authorization.
+1. Present the complete six-title list from the pre-execution user review gate.
+2. Wait for the user's explicit approval; do not initialize execution state or
+   edit implementation files before approval.
+3. Commit and push this planning artifact as branch bootstrap only within the
+   separately authorized implementation workflow.
+4. Read planner execution-state instructions and initialize active-plan state.
+5. Implement Sprint 1 only.
+6. Run and record all Sprint 1 validation.
+7. Create exactly one Sprint 1 commit and record its rollback point.
+8. Start Sprint 2 only after the Sprint 1 gate passes.
+9. Repeat the validate/one-commit/rollback gate for every remaining sprint.
+10. If any sprint title, goal, dependency boundary, or commit scope changes,
+    stop and re-present the complete list for user approval.
+11. Push and create a new fork PR only after all six sprint gates pass.
+12. Production canary/deployment requires separate explicit authorization.
 
 ## Completion Checklist
 
 - [x] PR #11 is cleaned, pushed, merged, and verified against the expected refs.
 - [x] The new implementation branch starts from merged fork `main`.
-- [ ] Every public remote-MVP defect code is registered and bilingual.
+- [ ] Every Registry v1 outcome/promotion/fallback/retry/repair/audit/activity/
+  workspace code is registered and bilingual; exclusions are inventoried.
 - [ ] Unknown codes fail closed and cannot trigger LLM repair.
 - [ ] Strict schema support is proven for the exact 9Router route/model.
-- [ ] Every baseline 9Router JSON boundary uses a stable strict schema when
-  enabled.
+- [ ] Every core and FFMPEGA 9Router JSON boundary uses a stable strict schema
+  when progressively enabled.
+- [ ] FFMPEGA has authoritative effect-specific schemas for both agentic and full
+  deterministic allowlists, with no arbitrary model-generated parameter keys.
 - [ ] Application semantic validation remains authoritative.
-- [ ] At most one additional semantic repair round occurs per job.
+- [ ] At most one visual repair and one plan repair occur per job; FFMPEGA adds no
+  repair call.
+- [ ] Advisory-only predictive findings make zero semantic repair calls.
 - [ ] Every LLM-repairable code has success and failure/fallback coverage.
 - [ ] Every non-LLM code has coverage proving no semantic repair call occurs.
 - [ ] Failed repair preserves original real defect codes.
 - [ ] Fallback preserves unaffected quality and a technically valid output.
+- [ ] Every technical-pass candidate is published with truthful limitations even
+  when strict creative QA remains blocked.
+- [ ] Strict QA verdict and delivery decision remain separate and auditable.
+- [ ] `audit defects` provides bounded agent-friendly queries without a migration.
 - [ ] Historical v1 outcomes remain readable and immutable.
 - [ ] Every sprint has passed its validation gate.
 - [ ] Every sprint has exactly one sprint-specific commit.
