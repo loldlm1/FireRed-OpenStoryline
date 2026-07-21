@@ -1,0 +1,19 @@
+{
+  "version": "mvp_agentic_fixture.v1",
+  "id": "sparse-visual-monologue",
+  "prompt_context": "Preserve readable source framing during long static passages and use bounded emphasis without fabricating visual evidence.",
+  "expected_roles": ["speaker", "background"],
+  "expected_capabilities": ["fit", "focus_zoom", "text_emphasis", "subtitles"],
+  "expected_asset_calls": 0,
+  "metrics": [
+    "schema_validity",
+    "source_bounds",
+    "target_visibility",
+    "attention_gaps",
+    "long_visual_holds",
+    "plan_execution",
+    "qa_status",
+    "latency_ms",
+    "provider_calls"
+  ]
+}

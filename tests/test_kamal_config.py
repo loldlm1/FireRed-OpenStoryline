@@ -11,6 +11,34 @@ import yaml
 ROOT = Path(__file__).resolve().parents[1]
 
 
+def validate_rollout_flags(**overrides: str) -> subprocess.CompletedProcess[str]:
+    env = {
+        **os.environ,
+        "KAMAL_ENV_FILE": str(ROOT / ".missing-rollout-test-env"),
+        "OPENSTORYLINE_POSTGRES_ADMIN_MODE": "local",
+        "OPENSTORYLINE_STRUCTURED_OUTPUT_MODE": "json_object",
+        "OPENSTORYLINE_STRUCTURED_OUTPUT_BOUNDARIES": "",
+        "OPENSTORYLINE_STRUCTURED_OUTPUT_CAPABILITY_VERIFIED": "false",
+        "OPENSTORYLINE_LLM_DEFECT_REPAIR_MODE": "off",
+        "OPENSTORYLINE_AGENTIC_EDITING_MODE": "off",
+        "OPENSTORYLINE_SEMANTIC_QA_ENABLED": "false",
+        "OPENSTORYLINE_FFMPEGA_ENABLED": "false",
+        "OPENSTORYLINE_DELIVERY_POLICY": "qa_enforced",
+        "OPENSTORYLINE_RETRY_UX_ENABLED": "false",
+        "OPENSTORYLINE_RENDER_PROMOTION_MODE": "report",
+        "OPENSTORYLINE_CREATIVE_QA_ENABLED": "true",
+        "OPENSTORYLINE_CREATIVE_QA_STRICT": "true",
+        **overrides,
+    }
+    return subprocess.run(
+        [str(ROOT / "bin" / "kamal-mvp"), "rollout", "validate"],
+        env=env,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+
 def render_sample(*, domain: str = "", http_port: str = "80") -> str:
     text = (ROOT / "config" / "deploy.yml").read_text(encoding="utf-8")
     values = {
@@ -426,6 +454,75 @@ class KamalConfigTests(unittest.TestCase):
 
         self.assertLess(validation, release_scan)
         self.assertIn("qa_enforced|technical_pass_guaranteed", wrapper)
+
+    def test_agentic_rollout_validator_accepts_defaults_and_complete_rollout(self):
+        default = validate_rollout_flags()
+        complete = validate_rollout_flags(
+            OPENSTORYLINE_STRUCTURED_OUTPUT_MODE="json_schema",
+            OPENSTORYLINE_STRUCTURED_OUTPUT_CAPABILITY_VERIFIED="true",
+            OPENSTORYLINE_STRUCTURED_OUTPUT_BOUNDARIES=(
+                "shorts_selection.v1,visual_understanding.v1,edit_plan.v1,"
+                "edit_plan_repair.v1,semantic_qa.v1,"
+                "ffmpega_agentic_finishing.v1,ffmpega_deterministic_effects.v1"
+            ),
+            OPENSTORYLINE_LLM_DEFECT_REPAIR_MODE="enforce",
+            OPENSTORYLINE_AGENTIC_EDITING_MODE="render",
+            OPENSTORYLINE_SEMANTIC_QA_ENABLED="true",
+            OPENSTORYLINE_FFMPEGA_ENABLED="true",
+            OPENSTORYLINE_DELIVERY_POLICY="technical_pass_guaranteed",
+            OPENSTORYLINE_RETRY_UX_ENABLED="true",
+            OPENSTORYLINE_RENDER_PROMOTION_MODE="enforce",
+        )
+
+        self.assertEqual(default.returncode, 0, default.stderr)
+        self.assertEqual(complete.returncode, 0, complete.stderr)
+        self.assertIn("internally consistent", complete.stdout)
+
+    def test_agentic_rollout_validator_rejects_out_of_order_flags(self):
+        cases = (
+            (
+                {"OPENSTORYLINE_STRUCTURED_OUTPUT_BOUNDARIES": "shorts_selection.v1"},
+                "require OPENSTORYLINE_STRUCTURED_OUTPUT_MODE=json_schema",
+            ),
+            (
+                {
+                    "OPENSTORYLINE_STRUCTURED_OUTPUT_MODE": "json_schema",
+                    "OPENSTORYLINE_STRUCTURED_OUTPUT_CAPABILITY_VERIFIED": "true",
+                    "OPENSTORYLINE_STRUCTURED_OUTPUT_BOUNDARIES": (
+                        "shorts_selection.v1,semantic_qa.v1"
+                    ),
+                },
+                "requires the edit-plan strict schemas first",
+            ),
+            (
+                {
+                    "OPENSTORYLINE_STRUCTURED_OUTPUT_MODE": "json_schema",
+                    "OPENSTORYLINE_STRUCTURED_OUTPUT_CAPABILITY_VERIFIED": "true",
+                    "OPENSTORYLINE_STRUCTURED_OUTPUT_BOUNDARIES": (
+                        "shorts_selection.v1,visual_understanding.v1,"
+                        "edit_plan.v1,edit_plan_repair.v1"
+                    ),
+                    "OPENSTORYLINE_LLM_DEFECT_REPAIR_MODE": "report",
+                    "OPENSTORYLINE_AGENTIC_EDITING_MODE": "shadow",
+                },
+                "requires every strict-schema boundary first",
+            ),
+            (
+                {
+                    "OPENSTORYLINE_DELIVERY_POLICY": "technical_pass_guaranteed",
+                },
+                "requires strict schema and enforced repair first",
+            ),
+            (
+                {"OPENSTORYLINE_RETRY_UX_ENABLED": "true"},
+                "must be the final rollout flag",
+            ),
+        )
+        for overrides, message in cases:
+            with self.subTest(overrides=overrides):
+                result = validate_rollout_flags(**overrides)
+                self.assertNotEqual(result.returncode, 0)
+                self.assertIn(message, result.stderr)
 
 
 if __name__ == "__main__":

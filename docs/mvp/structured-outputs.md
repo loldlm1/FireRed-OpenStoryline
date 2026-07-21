@@ -44,6 +44,11 @@ python scripts/qa_ninerouter.py \
   --strict-models --live-inference --strict-schema --skip-ssh
 ```
 
+The production ordering, owners, validation signals, and rollback switches are
+defined in [agentic-defect-repair-rollout.md](agentic-defect-repair-rollout.md).
+`./bin/kamal-mvp rollout validate` checks the flag order without calling a
+provider or changing deployment state.
+
 The FFMPEGA contracts are pinned to
 `AEmotionStudio/ComfyUI-FFMPEGA` commit
 `0cfe2db05df104f95c98cc45e11f129fa5ef5193`. All 26 deterministic effects use

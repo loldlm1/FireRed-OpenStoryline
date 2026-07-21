@@ -132,6 +132,11 @@ isolated so upstream behavior can continue to be merged into this fork.
   only synthetic schema expectations. The private production session
   `Sesion prueba 1` is an operator-only regression gate and its media,
   transcript, prompts, frames, and reports must never be committed.
+- Strict schemas, repair, technical-pass delivery, and retry details follow the
+  independently reversible order in
+  [agentic-defect-repair-rollout.md](agentic-defect-repair-rollout.md). The
+  release wrapper rejects skipped or partially enabled stages before Kamal or a
+  live provider gate runs.
 
 ## Clip-local crop evidence
 

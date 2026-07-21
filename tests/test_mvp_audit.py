@@ -230,6 +230,56 @@ class AuditDocumentTests(AuditPostgresTestCase):
                 "creative_limitation_codes": ["CAPTION_WIDTH_EXCEEDED"],
             },
             reused_stages=("transcript",),
+            repair_report={
+                "version": "repair_report.v1",
+                "registry_version": "defect_registry.v1",
+                "mode": "enforce",
+                "stages": [{
+                    "stage": "plan_repair",
+                    "status": "repaired",
+                    "request": {
+                        "response_schema_sha256": "a" * 64,
+                        "repair_prompt_sha256": "b" * 64,
+                    },
+                    "dispositions": [{
+                        "code": "EDIT_PLAN_INVALID",
+                        "eligible": True,
+                    }],
+                    "resolution": {
+                        "original_codes": ["EDIT_PLAN_INVALID"],
+                        "resolved_codes": ["EDIT_PLAN_INVALID"],
+                        "remaining_codes": [],
+                        "introduced_codes": [],
+                    },
+                    "attempts": [{
+                        "category": "plan_repair",
+                        "number": 1,
+                        "status_code": 200,
+                        "reason": "ok",
+                        "duration_ms": 250,
+                    }],
+                    "checkpoint_reused": False,
+                }],
+                "predictive_findings": [],
+                "fallbacks": [],
+                "summary": {
+                    "resolved_codes": ["EDIT_PLAN_INVALID"],
+                    "remaining_codes": [],
+                    "introduced_codes": [],
+                    "fallback_applied_codes": [],
+                    "not_repairable_codes": [],
+                },
+            },
+            rollout_attribution={
+                "model": "cx/gpt-5.6-sol",
+                "reasoning_effort": "medium",
+                "structured_output_mode": "json_schema",
+                "structured_output_boundaries": ["edit_plan_repair.v1"],
+                "repair_mode": "enforce",
+                "delivery_policy": "qa_enforced",
+                "catalog_version": "2026.07.1",
+                "renderer_profile": "high",
+            },
         )
         async with self.database.sessions() as session:
             async with session.begin():
@@ -280,6 +330,10 @@ class AuditDocumentTests(AuditPostgresTestCase):
         self.assertEqual(summary["retry"]["attempts"], 1)
         self.assertEqual(summary["retry"]["playable_successes"], 1)
         self.assertEqual(summary["checkpoints"]["reused_stage_count"], 1)
+        self.assertEqual(summary["repair"]["provider_calls"], 1)
+        self.assertEqual(summary["repair"]["strict_schema"]["validity_rate"], 1.0)
+        self.assertEqual(summary["attribution"][0]["model"], "cx/gpt-5.6-sol")
+        self.assertTrue(summary["rollout_review"]["operator_approval_required"])
         self.assertFalse(summary["truncated"])
 
     async def test_version_attempt_source_and_human_favorite_are_attributable(self):

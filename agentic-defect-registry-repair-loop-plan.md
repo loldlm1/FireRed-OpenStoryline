@@ -1,7 +1,8 @@
 # Plan: Centralized Agentic Defect Registry And Bounded Repair Loop
 
 **Generated**: 2026-07-21
-**Status**: Implementation in progress; Sprints 1-5 complete
+**Status**: Implementation in progress; Sprints 1-5 complete; Sprint 6
+pre-deploy gate passed and authorized production canary pending
 **Estimated Complexity**: High
 
 ## Overview
@@ -1188,6 +1189,22 @@ implementation history, and rollback runbook.
 `qa_enforced`, remove strict boundaries in reverse activation order, restore
 global `json_object`, disable repair UI, and roll back the image only after
 schema compatibility review. No additive evidence is deleted.
+
+**Pre-deploy evidence (2026-07-21)**:
+
+- The full local suite passed 443 tests with 76 expected environment skips; the
+  disposable connected PostgreSQL suite passed the same 443 tests with no
+  skips.
+- The 49-test focused release/catalog suite, catalog manifest/runtime check,
+  configuration load, Python compilation, shell syntax, and diff checks passed.
+- The remote image built as `openstoryline-mvp:sprint6-local`; console-strict
+  Chromium smoke and the focused retry/comparison flow passed with one worker.
+- Authorized redacted 9Router text, vision, image, strict-schema acceptance,
+  and extra-field rejection probes passed.
+- The production PostgreSQL backup and isolated restore check passed at schema
+  revision `20260721_0003`, and the private rollout flags passed the offline
+  monotonic validator. Deployment and private-session canary evidence remain
+  intentionally pending until this sprint commit exists.
 
 ### Task 6.1: Build The Repair Eval Matrix
 

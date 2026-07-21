@@ -11,6 +11,7 @@ from open_storyline.mvp.outcomes import (
     outcome_summary,
     retry_ux_enabled,
 )
+from open_storyline.mvp.repair import RepairMode, build_repair_report
 
 
 class OutcomeTests(unittest.TestCase):
@@ -245,6 +246,238 @@ class OutcomeTests(unittest.TestCase):
         with patch.dict(os.environ, {"OPENSTORYLINE_RETRY_UX_ENABLED": "sometimes"}):
             with self.assertRaises(ValueError):
                 retry_ux_enabled()
+
+    def test_rollout_metrics_are_attributable_bounded_and_reviewed(self):
+        schema_hash = "a" * 64
+        prompt_hash = "b" * 64
+
+        def stage(name, status, code, reason, duration, *, introduced=()):
+            return {
+                "stage": name,
+                "status": status,
+                "request": {
+                    "request_version": "repair_batch_request.v1",
+                    "response_schema": (
+                        "visual_understanding.v1"
+                        if name == "visual_understanding"
+                        else "edit_plan_repair.v1"
+                    ),
+                    "response_schema_sha256": schema_hash,
+                    "repair_prompt_version": "mvp-defect-repair.v1",
+                    "repair_prompt_sha256": prompt_hash,
+                    "request_fingerprint": "c" * 64,
+                    "editing_prompt_sha256": "d" * 64,
+                    "transcript_sha256": "e" * 64,
+                    "candidate_sha256": "f" * 64,
+                    "affected_clip_ids": [1],
+                    "objective_codes": [code],
+                    "advisory_codes": [],
+                    "evidence_types": ["edit_plan"],
+                    "evidence_ids": ["evidence-1"],
+                    "evidence_count": 1,
+                    "would_call": True,
+                    "call_allowed": True,
+                },
+                "dispositions": [{
+                    "code": code,
+                    "eligible": True,
+                    "would_call": True,
+                    "call_allowed": True,
+                    "reason": "eligible",
+                }],
+                "resolution": {
+                    "original_codes": [code],
+                    "resolved_codes": [code] if status == "repaired" else [],
+                    "remaining_codes": [] if status == "repaired" else [code],
+                    "introduced_codes": list(introduced),
+                },
+                "quality_floor": {
+                    "accepted": status == "repaired",
+                    "violation_codes": [],
+                },
+                "attempts": [{
+                    "category": name,
+                    "number": 1,
+                    "status_code": 200,
+                    "reason": reason,
+                    "duration_ms": duration,
+                    "input_tokens": 100,
+                    "output_tokens": 20,
+                    "reasoning_tokens": 10,
+                    "total_tokens": 130,
+                    "cost_usd": 0.01,
+                }],
+                "checkpoint_reused": False,
+            }
+
+        repair = build_repair_report(
+            mode=RepairMode.ENFORCE,
+            stage_records=(
+                stage(
+                    "visual_understanding",
+                    "failed",
+                    "VISUAL_RESPONSE_INVALID",
+                    "schema_mismatch",
+                    1_500,
+                    introduced=("VISUAL_FRAME_UNKNOWN",),
+                ),
+                stage(
+                    "plan_repair",
+                    "repaired",
+                    "EDIT_PLAN_INVALID",
+                    "ok",
+                    2_500,
+                ),
+            ),
+            predictive_findings=(
+                {
+                    "code": "PREDICTIVE_ACTIVE_PICTURE_RISK",
+                    "clip_index": 1,
+                    "objective": True,
+                    "confidence": 0.9,
+                    "detector": "synthetic",
+                    "threshold": "ratio<0.5",
+                },
+                {
+                    "code": "PREDICTIVE_INACTIVE_HOOK_RISK",
+                    "clip_index": 1,
+                    "objective": False,
+                    "confidence": 0.7,
+                    "detector": "synthetic",
+                    "threshold": "motion<0.1",
+                },
+            ),
+            fallback_entries=({
+                "code": "EFFECT_OMITTED",
+                "clip_index": 1,
+                "segment_id": "segment-1",
+                "requested": "FFMPEGA_PLAN_INVALID",
+                "executed": "native_render",
+            },),
+        )
+        report = build_completed_outcome_report(
+            outputs=[{"video": "short-01.mp4", "subtitles": None}],
+            promotion_report={
+                "technical_blocker_codes": [],
+                "creative_limitation_codes": ["ACTIVE_PICTURE_TOO_SMALL"],
+                "strict_decision": "block",
+                "delivery_policy": "technical_pass_guaranteed",
+                "delivery_decision": "publish_with_limitations",
+                "download_available": True,
+            },
+            repair_report=repair,
+            rollout_attribution={
+                "model": "cx/gpt-5.6-sol",
+                "reasoning_effort": "medium",
+                "structured_output_mode": "json_schema",
+                "structured_output_boundaries": [
+                    "visual_understanding.v1",
+                    "edit_plan_repair.v1",
+                ],
+                "repair_mode": "enforce",
+                "delivery_policy": "technical_pass_guaranteed",
+                "catalog_version": "2026.07.1",
+                "renderer_profile": "high",
+                "schema_hashes": [schema_hash],
+                "prompt_hashes": [prompt_hash],
+            },
+        )
+        summary = build_outcome_slo_summary([{
+            "outcome": report,
+            "started_at": "2026-07-21T10:00:00Z",
+            "completed_at": "2026-07-21T10:00:10Z",
+        }])
+
+        metrics = report["repair"]["metrics"]
+        self.assertEqual(metrics["semantic_calls"], 2)
+        self.assertEqual(metrics["strict_schema_attempts"], 2)
+        self.assertEqual(metrics["strict_schema_valid"], 1)
+        self.assertEqual(metrics["semantic_valid"], 1)
+        self.assertEqual(metrics["provider_latency_ms"], 4_000)
+        self.assertEqual(metrics["total_tokens"], 260)
+        self.assertEqual(metrics["ffmpega_omission_count"], 1)
+        self.assertEqual(summary["repair"]["strict_schema"]["validity_rate"], 0.5)
+        self.assertEqual(summary["repair"]["semantic_validity"]["rate"], 0.5)
+        self.assertEqual(summary["repair"]["success"]["plan"]["rate"], 1.0)
+        self.assertEqual(summary["repair"]["success"]["visual"]["rate"], 0.0)
+        self.assertEqual(
+            summary["repair"]["predictive"]["advisory_attachment_rate"],
+            1.0,
+        )
+        self.assertEqual(summary["delivery"]["technical_pass_publication_rate"], 1.0)
+        self.assertFalse(
+            summary["rollout_review"]["checks"]["no_new_defect_regression"]
+        )
+        self.assertTrue(summary["claim_gate"]["evidence_only"])
+        self.assertFalse(summary["claim_gate"]["enables_rollout"])
+        self.assertEqual(summary["attribution"][0]["model"], "cx/gpt-5.6-sol")
+
+    def test_zero_failure_claim_is_statistical_evidence_not_rollout_authority(self):
+        outcome = build_completed_outcome_report(
+            outputs=[{"video": "short-01.mp4", "subtitles": None}],
+        )
+        summary = build_outcome_slo_summary([
+            {"outcome": outcome}
+            for _ in range(500)
+        ])
+
+        self.assertTrue(summary["claim_ready"])
+        self.assertGreaterEqual(summary["confidence_95"]["low"], 0.99)
+        self.assertTrue(summary["claim_gate"]["evidence_only"])
+        self.assertFalse(summary["claim_gate"]["enables_rollout"])
+        self.assertTrue(summary["rollout_review"]["operator_approval_required"])
+        self.assertFalse(summary["rollout_review"]["automatic_enablement"])
+
+    def test_report_only_trigger_does_not_create_provider_latency_sample(self):
+        repair = build_repair_report(
+            mode=RepairMode.REPORT,
+            stage_records=({
+                "stage": "plan_repair",
+                "status": "report_only",
+                "request": {
+                    "request_version": "repair_batch_request.v1",
+                    "response_schema": "edit_plan_repair.v1",
+                    "affected_clip_ids": [1],
+                    "objective_codes": ["EDIT_PLAN_INVALID"],
+                    "advisory_codes": [],
+                    "evidence_types": ["edit_plan"],
+                    "evidence_ids": ["evidence-1"],
+                    "evidence_count": 1,
+                    "would_call": True,
+                    "call_allowed": False,
+                },
+                "dispositions": [{
+                    "code": "EDIT_PLAN_INVALID",
+                    "eligible": True,
+                    "would_call": True,
+                    "call_allowed": False,
+                    "reason": "report_only",
+                }],
+                "resolution": {
+                    "original_codes": ["EDIT_PLAN_INVALID"],
+                    "resolved_codes": [],
+                    "remaining_codes": ["EDIT_PLAN_INVALID"],
+                    "introduced_codes": [],
+                },
+                "quality_floor": {
+                    "accepted": False,
+                    "violation_codes": [],
+                },
+                "attempts": [],
+                "checkpoint_reused": False,
+            },),
+        )
+        report = build_completed_outcome_report(
+            outputs=[{"video": "short-01.mp4", "subtitles": None}],
+            repair_report=repair,
+        )
+
+        summary = build_outcome_slo_summary([{"outcome": report}])
+
+        self.assertEqual(summary["repair"]["triggered_attempts"], 1)
+        self.assertEqual(summary["repair"]["provider_calls"], 0)
+        self.assertIsNone(summary["repair"]["provider_latency_ms"]["p95"])
+        self.assertEqual(summary["repair"]["provider_latency_ms"]["total"], 0)
 
 
 if __name__ == "__main__":

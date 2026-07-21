@@ -166,6 +166,12 @@ Si `OPENSTORYLINE_PEXELS_ENABLED=true`, el wrapper también exige la key y una
 revisión vigente de licencia antes de esos gates, pero no consume cuota ni
 descarga medios Pexels.
 
+Antes de cambiar schemas estrictos, reparación, entrega de candidatos técnicos
+o detalles de reintento, sigue el orden reversible de
+[`agentic-defect-repair-rollout.md`](agentic-defect-repair-rollout.md) y ejecuta
+`./bin/kamal-mvp rollout validate`. Ese validador es local: no llama proveedores
+ni modifica el despliegue.
+
 El primer rollout con PostgreSQL se prepara por etapas para que la base de
 datos y la copia verificable existan antes de arrancar la nueva aplicación:
 

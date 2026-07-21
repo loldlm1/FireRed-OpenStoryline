@@ -310,7 +310,7 @@ class CreativeQATests(unittest.IsolatedAsyncioTestCase):
 
     def test_cross_niche_fixtures_are_private_free_schema_outcomes(self):
         fixture_paths = sorted(FIXTURES.glob("*.json"))
-        self.assertGreaterEqual(len(fixture_paths), 5)
+        self.assertGreaterEqual(len(fixture_paths), 8)
         identifiers = set()
         for path in fixture_paths:
             payload = json.loads(path.read_text(encoding="utf-8"))
@@ -324,6 +324,16 @@ class CreativeQATests(unittest.IsolatedAsyncioTestCase):
             self.assertNotIn("api_key", serialized)
             self.assertNotIn("/home/", serialized)
         self.assertEqual(len(identifiers), len(fixture_paths))
+        self.assertTrue({
+            "two-speaker-interview",
+            "product-presentation",
+            "single-speaker-tutorial",
+            "cooking-demonstration",
+            "trading-screen",
+            "multi-speaker-panel",
+            "sparse-visual-monologue",
+            "source-only-no-asset",
+        } <= identifiers)
         covered_metrics = {
             metric
             for path in fixture_paths

@@ -3,6 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 import asyncio
+from hashlib import sha256
 import json
 import re
 
@@ -85,7 +86,12 @@ from open_storyline.mvp.render import (
     render_settings_from_config,
 )
 from open_storyline.mvp.preflight import build_preflight
-from open_storyline.mvp.prompts import REPAIR_SYSTEM_PROMPT, REPAIR_SYSTEM_PROMPT_VERSION
+from open_storyline.mvp.prompts import (
+    EDIT_PLAN_SYSTEM_PROMPT,
+    REPAIR_SYSTEM_PROMPT,
+    REPAIR_SYSTEM_PROMPT_VERSION,
+    VISUAL_UNDERSTANDING_SYSTEM_PROMPT,
+)
 from open_storyline.mvp.repair import (
     REPAIR_BATCH_REQUEST_VERSION,
     REPAIR_REPORT_VERSION,
@@ -3038,6 +3044,47 @@ class MVPJobProcessor:
                 (),
             ),
             repair_report=repair_report,
+            rollout_attribution={
+                "model": getattr(remote_client, "model", "unknown"),
+                "reasoning_effort": getattr(
+                    remote_client,
+                    "reasoning_effort",
+                    "unknown",
+                ),
+                "structured_output_mode": getattr(
+                    remote_client,
+                    "structured_output_mode",
+                    "json_object",
+                ),
+                "structured_output_boundaries": sorted(
+                    getattr(remote_client, "structured_output_boundaries", ())
+                ),
+                "repair_mode": repair_mode.value,
+                "delivery_policy": (promotion_report or {}).get(
+                    "delivery_policy",
+                    "qa_enforced",
+                ),
+                "catalog_version": (
+                    creative_catalog.version
+                    if creative_catalog is not None
+                    else "unavailable"
+                ),
+                "renderer_profile": render_settings.quality_profile,
+                "schema_hashes": [
+                    structured_output(name).fingerprint
+                    for name in sorted(
+                        getattr(remote_client, "structured_output_boundaries", ())
+                    )
+                ],
+                "prompt_hashes": [
+                    sha256(prompt.encode("utf-8")).hexdigest()
+                    for prompt in (
+                        EDIT_PLAN_SYSTEM_PROMPT,
+                        VISUAL_UNDERSTANDING_SYSTEM_PROMPT,
+                        REPAIR_SYSTEM_PROMPT,
+                    )
+                ],
+            },
         )
         outcome_report_path = output_dir / names.outcome_report
         outcome_report_path.write_text(
