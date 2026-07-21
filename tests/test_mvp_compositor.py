@@ -361,7 +361,7 @@ class CompositorTests(unittest.TestCase):
             ),
             reason="keep the speaker centered in the portrait crop",
         )
-        observation = region("speaker", "frame-001", x=0.006, width=0.34)
+        observation = region("speaker", "frame-001", x=0.0, width=0.349)
 
         composition = resolve_clip_composition(
             clip_plan([segment]),
