@@ -165,6 +165,10 @@ class KamalConfigTests(unittest.TestCase):
             config["env"]["clear"]["OPENSTORYLINE_CREATIVE_CATALOG_PATH"],
             "/app/creative_catalog/manifest.json",
         )
+        self.assertIs(
+            config["env"]["clear"]["OPENSTORYLINE_CREATIVE_CATALOG_PLANNING_ENABLED"],
+            False,
+        )
         self.assertIs(config["env"]["clear"]["OPENSTORYLINE_CREATIVE_QA_STRICT"], True)
         self.assertEqual(
             config["env"]["clear"]["OPENSTORYLINE_RENDER_PROMOTION_MODE"],
@@ -214,6 +218,14 @@ class KamalConfigTests(unittest.TestCase):
         )
         self.assertIn(
             "OPENSTORYLINE_CREATIVE_CATALOG_PATH=./creative_catalog/manifest.json",
+            local_env,
+        )
+        self.assertIn(
+            "OPENSTORYLINE_CREATIVE_CATALOG_PLANNING_ENABLED=false",
+            kamal_env,
+        )
+        self.assertIn(
+            "OPENSTORYLINE_CREATIVE_CATALOG_PLANNING_ENABLED=false",
             local_env,
         )
 

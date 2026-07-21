@@ -23,9 +23,9 @@ from open_storyline.mvp.shorts import ShortCandidate, ShortsPlan
 from open_storyline.mvp.visual_understanding import VisualUnderstanding
 
 
-EDIT_PLAN_VERSION = "edit_plan.v1"
+EDIT_PLAN_VERSION = "edit_plan.v2"
 SHADOW_PLANNER_VERSION = "legacy-shadow.v1"
-AGENTIC_PLANNER_VERSION = "agentic-editor.v1"
+AGENTIC_PLANNER_VERSION = "agentic-editor.v2"
 
 SUPPORTED_CAPABILITIES = frozenset({
     "crop",
@@ -157,6 +157,12 @@ class LayoutSpec(PlanModel):
 class TransitionSpec(PlanModel):
     kind: TransitionKind = "cut"
     duration_ms: int = Field(default=0, ge=0, le=1500)
+    catalog_id: str = Field(default="", max_length=80)
+
+    @field_validator("catalog_id")
+    @classmethod
+    def clean_catalog_id(cls, value: str) -> str:
+        return "" if value == "" else _safe_identifier(value)
 
     @model_validator(mode="after")
     def validate_duration(self) -> "TransitionSpec":
@@ -165,6 +171,30 @@ class TransitionSpec(PlanModel):
         if self.kind != "cut" and self.duration_ms <= 0:
             raise ValueError("fade transitions require a positive duration")
         return self
+
+
+class CatalogSelection(PlanModel):
+    style_profile_id: str = Field(default="", max_length=80)
+    caption_treatment_id: str = Field(default="", max_length=80)
+    color_treatment_id: str = Field(default="", max_length=80)
+    recipe_ids: tuple[str, ...] = Field(default=(), max_length=8)
+
+    @field_validator(
+        "style_profile_id",
+        "caption_treatment_id",
+        "color_treatment_id",
+    )
+    @classmethod
+    def clean_catalog_id(cls, value: str) -> str:
+        return "" if value == "" else _safe_identifier(value)
+
+    @field_validator("recipe_ids")
+    @classmethod
+    def clean_recipe_ids(cls, values: tuple[str, ...]) -> tuple[str, ...]:
+        cleaned = tuple(_safe_identifier(value) for value in values)
+        if len(set(cleaned)) != len(cleaned):
+            raise ValueError("catalog recipe IDs must be unique")
+        return cleaned
 
 
 class OverlaySpec(PlanModel):
@@ -290,6 +320,7 @@ class ClipEditPlan(PlanModel):
     segments: tuple[EditSegment, ...] = Field(min_length=1, max_length=48)
     asset_requests: tuple[AssetRequest, ...] = Field(default=(), max_length=8)
     intent_decisions: tuple[CreativeIntentDecision, ...] = Field(default=(), max_length=32)
+    catalog_selection: CatalogSelection = Field(default_factory=CatalogSelection)
 
     @field_validator("title", "output_name")
     @classmethod
@@ -372,11 +403,20 @@ class EditPlan(PlanModel):
     clips: tuple[ClipEditPlan, ...] = Field(min_length=1, max_length=50)
     degraded: bool = False
     degradation_reason: str = Field(default="", max_length=240)
+    catalog_version: str = Field(default="", max_length=80)
+    catalog_manifest_sha256: str = Field(default="", max_length=64)
 
-    @field_validator("planner_version", "prompt_version")
+    @field_validator("planner_version", "prompt_version", "catalog_version")
     @classmethod
     def clean_planner_version(cls, value: str) -> str:
-        return _safe_identifier(value)
+        return "" if value == "" else _safe_identifier(value)
+
+    @field_validator("catalog_manifest_sha256")
+    @classmethod
+    def validate_catalog_hash(cls, value: str) -> str:
+        if value and not re.fullmatch(r"[a-f0-9]{64}", value):
+            raise ValueError("catalog manifest hash is invalid")
+        return value
 
     @field_validator("requested_capabilities")
     @classmethod
@@ -414,6 +454,7 @@ def _edit_plan_field_contract() -> dict[str, list[str]]:
         FocalTarget,
         LayoutSpec,
         TransitionSpec,
+        CatalogSelection,
         OverlaySpec,
         AssetRequest,
         CreativeIntentDecision,
@@ -427,7 +468,88 @@ def _edit_plan_field_contract() -> dict[str, list[str]]:
     }
 
 
-def _valid_clip_plan_template(clip_context: dict[str, Any]) -> dict[str, Any]:
+def _catalog_candidate_map(snapshot: dict[str, Any] | None) -> dict[str, dict[str, Any]]:
+    if not snapshot:
+        return {}
+    entries = snapshot.get("entries")
+    if not isinstance(entries, list) or len(entries) > 32:
+        raise EditPlanError("EDIT_PLAN_CATALOG_INVALID", "catalog candidates are invalid")
+    result: dict[str, dict[str, Any]] = {}
+    for entry in entries:
+        if not isinstance(entry, dict):
+            raise EditPlanError("EDIT_PLAN_CATALOG_INVALID", "catalog candidate is invalid")
+        entry_id = str(entry.get("id") or "")
+        kind = str(entry.get("kind") or "")
+        if not re.fullmatch(r"[a-z0-9][a-z0-9._-]{2,79}", entry_id):
+            raise EditPlanError("EDIT_PLAN_CATALOG_INVALID", "catalog candidate ID is invalid")
+        if entry_id in result or kind not in {
+            "style_profile", "caption_treatment", "color_treatment", "transition", "recipe",
+        }:
+            raise EditPlanError("EDIT_PLAN_CATALOG_INVALID", "catalog candidate kind is invalid")
+        result[entry_id] = entry
+    return result
+
+
+def _catalog_template(snapshot: dict[str, Any] | None) -> dict[str, Any]:
+    candidates = _catalog_candidate_map(snapshot)
+    if not candidates:
+        return {
+            "selection": {
+                "style_profile_id": "",
+                "caption_treatment_id": "",
+                "color_treatment_id": "",
+                "recipe_ids": [],
+            },
+            "cut_transition_id": "",
+        }
+    style = next(
+        entry for entry in candidates.values() if entry["kind"] == "style_profile"
+    )
+    style_ids = [
+        str(value)
+        for value in (style.get("config") or {}).get("catalog_ids") or []
+        if str(value) in candidates
+    ]
+
+    def select(kind: str) -> str:
+        selected = next(
+            (
+                entry_id
+                for entry_id in style_ids
+                if candidates[entry_id]["kind"] == kind
+            ),
+            "",
+        )
+        if selected:
+            return selected
+        return next(
+            entry_id
+            for entry_id, entry in candidates.items()
+            if entry["kind"] == kind
+        )
+
+    cut_id = next(
+        entry_id
+        for entry_id, entry in candidates.items()
+        if entry["kind"] == "transition"
+        and (entry.get("config") or {}).get("operation") == "hard_cut"
+    )
+    return {
+        "selection": {
+            "style_profile_id": str(style["id"]),
+            "caption_treatment_id": select("caption_treatment"),
+            "color_treatment_id": select("color_treatment"),
+            "recipe_ids": [],
+        },
+        "cut_transition_id": cut_id,
+    }
+
+
+def _valid_clip_plan_template(
+    clip_context: dict[str, Any],
+    *,
+    catalog_snapshot: dict[str, Any] | None = None,
+) -> dict[str, Any]:
     source_window = dict(clip_context["source_window"])
     duration_ms = int(source_window["end_ms"]) - int(source_window["start_ms"])
     focal_target = None
@@ -457,6 +579,7 @@ def _valid_clip_plan_template(clip_context: dict[str, Any]) -> dict[str, Any]:
     }
     if focal_target:
         layout["focal_target"] = focal_target
+    catalog_defaults = _catalog_template(catalog_snapshot)
     return {
         "requested_capabilities": [
             "crop" if focal_target else "fit",
@@ -473,13 +596,18 @@ def _valid_clip_plan_template(clip_context: dict[str, Any]) -> dict[str, Any]:
                 "source_window": source_window,
                 "timeline_window": {"start_ms": 0, "end_ms": duration_ms},
                 "layout": layout,
-                "transition_in": {"kind": "cut", "duration_ms": 0},
+                "transition_in": {
+                    "kind": "cut",
+                    "duration_ms": 0,
+                    "catalog_id": catalog_defaults["cut_transition_id"],
+                },
                 "overlays": [],
                 "reason": "Keep the strongest prompt-relevant source evidence visible.",
                 "evidence_ids": evidence_ids,
             }],
             "asset_requests": [],
             "intent_decisions": [],
+            "catalog_selection": catalog_defaults["selection"],
         }],
     }
 
@@ -981,6 +1109,100 @@ def validate_edit_plan_context(
     return plan
 
 
+def validate_catalog_plan_context(
+    plan: EditPlan,
+    catalog_snapshot: dict[str, Any] | None,
+) -> EditPlan:
+    candidates = _catalog_candidate_map(catalog_snapshot)
+    selected_ids = {
+        value
+        for clip in plan.clips
+        for value in (
+            clip.catalog_selection.style_profile_id,
+            clip.catalog_selection.caption_treatment_id,
+            clip.catalog_selection.color_treatment_id,
+            *clip.catalog_selection.recipe_ids,
+            *(segment.transition_in.catalog_id for segment in clip.segments),
+        )
+        if value
+    }
+    if not candidates:
+        if selected_ids:
+            raise EditPlanError(
+                "EDIT_PLAN_CATALOG_UNAVAILABLE",
+                "the planner selected catalog IDs when catalog planning is disabled",
+            )
+        return plan
+    if (
+        plan.catalog_version != str(catalog_snapshot.get("catalog_version") or "")
+        or plan.catalog_manifest_sha256
+        != str(catalog_snapshot.get("manifest_sha256") or "")
+    ):
+        raise EditPlanError(
+            "EDIT_PLAN_CATALOG_VERSION_MISMATCH",
+            "the edit plan catalog snapshot does not match the advertised candidates",
+        )
+
+    def require_kind(entry_id: str, kind: str) -> dict[str, Any]:
+        entry = candidates.get(entry_id)
+        if entry is None:
+            raise EditPlanError(
+                "EDIT_PLAN_CATALOG_ID_UNKNOWN",
+                f"planner selected an unknown catalog ID: {entry_id}",
+            )
+        if entry.get("kind") != kind:
+            raise EditPlanError(
+                "EDIT_PLAN_CATALOG_KIND_INVALID",
+                f"catalog ID {entry_id} is not a {kind}",
+            )
+        return entry
+
+    for clip in plan.clips:
+        selection = clip.catalog_selection
+        style = require_kind(selection.style_profile_id, "style_profile")
+        require_kind(selection.caption_treatment_id, "caption_treatment")
+        require_kind(selection.color_treatment_id, "color_treatment")
+        for recipe_id in selection.recipe_ids:
+            require_kind(recipe_id, "recipe")
+        style_ids = {
+            str(value)
+            for value in (style.get("config") or {}).get("catalog_ids") or []
+        }
+        inconsistent = sorted({
+            selection.caption_treatment_id,
+            selection.color_treatment_id,
+            *selection.recipe_ids,
+        } - style_ids)
+        if inconsistent:
+            raise EditPlanError(
+                "EDIT_PLAN_CATALOG_STYLE_MISMATCH",
+                "catalog selections do not belong to the selected style profile: "
+                + ", ".join(inconsistent),
+            )
+        for segment in clip.segments:
+            transition_id = segment.transition_in.catalog_id
+            transition = require_kind(transition_id, "transition")
+            operation = str((transition.get("config") or {}).get("operation") or "")
+            if operation != "hard_cut" and transition_id not in style_ids:
+                raise EditPlanError(
+                    "EDIT_PLAN_CATALOG_STYLE_MISMATCH",
+                    f"transition {transition_id} does not belong to the selected style profile",
+                )
+            expected_kind = (
+                "cut"
+                if operation == "hard_cut"
+                else "fade"
+                if operation == "fade" and transition_id.startswith("transition.fade-")
+                else "xfade"
+            )
+            if segment.transition_in.kind != expected_kind:
+                raise EditPlanError(
+                    "EDIT_PLAN_CATALOG_TRANSITION_MISMATCH",
+                    f"transition {transition_id} does not match {segment.transition_in.kind}",
+                )
+    return plan
+
+
 def _clip_context(
     clip: ShortCandidate,
     *,
@@ -1071,6 +1293,7 @@ class AgenticEditPlanner:
         allow_degraded_fallback: bool = False,
         visual_coverage_feedback: dict[str, Any] | None = None,
         prior_attempt_quality_feedback: dict[str, Any] | None = None,
+        catalog_snapshot: dict[str, Any] | None = None,
         renderer_capabilities: Iterable[str] = SUPPORTED_CAPABILITIES,
     ) -> EditPlan:
         available_capabilities = frozenset(str(value) for value in renderer_capabilities)
@@ -1154,9 +1377,11 @@ class AgenticEditPlanner:
                 "Crop/focus segments should use same-window track evidence spanning the segment.",
                 "A fit or letterbox crop fallback is valid only with allow_full_frame_fallback=true.",
                 "Never return FFmpeg expressions, commands, paths, or unsupported operations.",
+                "Choose catalog IDs only from creative_catalog.entries and keep style, caption, color, and transition choices consistent.",
             ],
             "visual_coverage_feedback": visual_coverage_feedback or {},
             "prior_attempt_quality_feedback": prior_attempt_quality_feedback or {},
+            "creative_catalog": catalog_snapshot or {},
             "exact_field_contract": _edit_plan_field_contract(),
         }
         known_region_ids = tuple(region.id for region in visual_understanding.regions)
@@ -1191,7 +1416,10 @@ class AgenticEditPlanner:
                     "clip_index": clip_index,
                     "total_clips": len(clip_contexts),
                 },
-                "valid_output_template": _valid_clip_plan_template(clip_context),
+                "valid_output_template": _valid_clip_plan_template(
+                    clip_context,
+                    catalog_snapshot=catalog_snapshot,
+                ),
                 "clips": [clip_context],
                 "creative_intent": (
                     creative_intent.planner_payload(clip_index=clip_index)
@@ -1215,6 +1443,12 @@ class AgenticEditPlanner:
                     "planner_version": AGENTIC_PLANNER_VERSION,
                     "prompt_version": EDIT_PLAN_PROMPT_VERSION,
                     "source_duration_ms": source_duration_ms,
+                    "catalog_version": str(
+                        (catalog_snapshot or {}).get("catalog_version") or ""
+                    ),
+                    "catalog_manifest_sha256": str(
+                        (catalog_snapshot or {}).get("manifest_sha256") or ""
+                    ),
                 })
                 clip_plan = validate_edit_plan(
                     payload,
@@ -1236,6 +1470,10 @@ class AgenticEditPlanner:
                     max_segments_per_clip=max_segments_per_clip,
                     max_overlays_per_clip=max_overlays_per_clip,
                     max_assets_per_clip=max_assets_per_clip,
+                )
+                clip_plan = validate_catalog_plan_context(
+                    clip_plan,
+                    catalog_snapshot,
                 )
                 generated_count = sum(
                     asset.kind == "generated_image"
@@ -1351,6 +1589,12 @@ class AgenticEditPlanner:
             clips=tuple(planned_clips),
             degraded=bool(degradation_reasons),
             degradation_reason=";".join(sorted(degradation_reasons)),
+            catalog_version=str(
+                (catalog_snapshot or {}).get("catalog_version") or ""
+            ),
+            catalog_manifest_sha256=str(
+                (catalog_snapshot or {}).get("manifest_sha256") or ""
+            ),
         )
         generated_assets = [
             asset
@@ -1398,7 +1642,7 @@ class AgenticEditPlanner:
                 "EDIT_PLAN_CAPABILITY_UNAVAILABLE",
                 f"planner requested unavailable capabilities: {', '.join(unavailable)}",
             )
-        return validate_edit_plan_context(
+        plan = validate_edit_plan_context(
             plan,
             selected_clips=shorts_plan.clips,
             known_region_ids=known_region_ids,
@@ -1408,6 +1652,7 @@ class AgenticEditPlanner:
             max_overlays_per_clip=max_overlays_per_clip,
             max_assets_per_clip=max_assets_per_clip,
         )
+        return validate_catalog_plan_context(plan, catalog_snapshot)
 
 
 def build_shadow_edit_plan(
@@ -1518,6 +1763,7 @@ class AgenticArtifactNames:
     preflight: str = "edit_preflight.json"
     ffmpeg_preflight: str = "ffmpeg_preflight.json"
     asset_manifest: str = "asset_manifest.json"
+    creative_catalog_usage: str = "creative_catalog_usage.json"
     render_execution: str = "render_execution.json"
     render_quality_profile: str = "render_quality_profile.json"
     frame_quality_qa: str = "frame_quality_qa.json"

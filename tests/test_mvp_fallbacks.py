@@ -197,12 +197,21 @@ class BaselineFallbackTests(unittest.TestCase):
             outputs=[{"video": "short-01.mp4", "subtitles": "short-01.srt"}],
             fallback_entries=result.entries,
             reused_stages=("transcript",),
+            prior_limitation_codes=("VISUAL_REFRAME_FALLBACK", "RENDER_PREFLIGHT_FALLBACK"),
         )
 
         self.assertEqual(report["grade"], "with_limitations")
         self.assertEqual(report["technical_status"], "pass")
         self.assertEqual(report["limitations"][0]["code"], "RENDER_PREFLIGHT_FALLBACK")
         self.assertEqual(report["retry"]["reused_stage_names"], ["transcript"])
+        self.assertEqual(
+            report["retry"]["resolved_limitation_codes"],
+            ["VISUAL_REFRAME_FALLBACK"],
+        )
+        self.assertEqual(
+            report["retry"]["remaining_limitation_codes"],
+            ["RENDER_PREFLIGHT_FALLBACK"],
+        )
 
 
 if __name__ == "__main__":

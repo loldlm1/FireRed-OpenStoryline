@@ -183,23 +183,27 @@ def build_manifest() -> dict[str, Any]:
     ]
 
     transitions = [
-        ("hard-cut", "Hard Cut", "hard_cut", [], ""),
-        ("fade-black", "Fade Through Black", "fade", ["fade"], "transition.hard-cut"),
-        ("fade-white", "Fade Through White", "fade", ["fade"], "transition.fade-black"),
-        ("crossfade", "Soft Crossfade", "fade", ["xfade"], "transition.fade-black"),
-        ("wipe-left", "Wipe Left", "wipeleft", ["xfade"], "transition.crossfade"),
-        ("wipe-right", "Wipe Right", "wiperight", ["xfade"], "transition.crossfade"),
-        ("slide-left", "Slide Left", "slideleft", ["xfade"], "transition.crossfade"),
-        ("slide-right", "Slide Right", "slideright", ["xfade"], "transition.crossfade"),
-        ("circle-open", "Circle Open", "circleopen", ["xfade"], "transition.crossfade"),
-        ("dissolve", "Dissolve", "dissolve", ["xfade"], "transition.crossfade"),
+        ("hard-cut", "Hard Cut", "hard_cut", "black", [], ""),
+        ("fade-black", "Fade Through Black", "fade", "black", ["fade"], "transition.hard-cut"),
+        ("fade-white", "Fade Through White", "fade", "white", ["fade"], "transition.fade-black"),
+        ("crossfade", "Soft Crossfade", "fade", "black", ["xfade"], "transition.fade-black"),
+        ("wipe-left", "Wipe Left", "wipeleft", "black", ["xfade"], "transition.crossfade"),
+        ("wipe-right", "Wipe Right", "wiperight", "black", ["xfade"], "transition.crossfade"),
+        ("slide-left", "Slide Left", "slideleft", "black", ["xfade"], "transition.crossfade"),
+        ("slide-right", "Slide Right", "slideright", "black", ["xfade"], "transition.crossfade"),
+        ("circle-open", "Circle Open", "circleopen", "black", ["xfade"], "transition.crossfade"),
+        ("dissolve", "Dissolve", "dissolve", "black", ["xfade"], "transition.crossfade"),
     ]
-    for slug, label, name, filters, fallback in transitions:
+    for slug, label, name, color, filters, fallback in transitions:
         entries.append(preset_entry(
             entry_id=f"transition.{slug}",
             kind="transition",
             label=label,
-            config={"operation": name, "duration_ms": 220 if name != "hard_cut" else 0},
+            config={
+                "operation": name,
+                "color": color,
+                "duration_ms": 220 if name != "hard_cut" else 0,
+            },
             filters=filters,
             tags=["transition", "safe" if name in {"hard_cut", "fade"} else "energetic"],
             fallback_id=fallback,

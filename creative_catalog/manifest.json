@@ -243,7 +243,7 @@
       "license": "Apache-2.0",
       "license_path": "licenses/Apache-2.0.txt",
       "license_sha256": "25d0c3c01beb2aa534ce986c0ac86e91f8a34864baf497f84d025074e74b8247",
-      "sha256": "b5742110750f4cb94f2c75e2a24b304050bf0b27808e92f3b0b42beafdd9b112",
+      "sha256": "b47522f6ffbc6f505190ed1dda990bd51fc1ac0177721de4ede736437620b977",
       "source_url": "https://github.com/loldlm1/FireRed-OpenStoryline",
       "source_revision": "creative-catalog-v1",
       "commercial_use": true,
@@ -264,6 +264,7 @@
       "review_note": "Project-native deterministic FFmpeg recipe; no downloaded template or runtime asset.",
       "config": {
         "operation": "hard_cut",
+        "color": "black",
         "duration_ms": 0
       }
     },
@@ -276,7 +277,7 @@
       "license": "Apache-2.0",
       "license_path": "licenses/Apache-2.0.txt",
       "license_sha256": "25d0c3c01beb2aa534ce986c0ac86e91f8a34864baf497f84d025074e74b8247",
-      "sha256": "05446c665e45b27fb49815ccc502f76ca5962f49c7dca7fb19883e6fdab6d335",
+      "sha256": "7fddaa122addeba85a51e8555a9bf194f2bcf5ab6e68cc97ee4d857bb1e7d769",
       "source_url": "https://github.com/loldlm1/FireRed-OpenStoryline",
       "source_revision": "creative-catalog-v1",
       "commercial_use": true,
@@ -299,6 +300,7 @@
       "review_note": "Project-native deterministic FFmpeg recipe; no downloaded template or runtime asset.",
       "config": {
         "operation": "fade",
+        "color": "black",
         "duration_ms": 220
       }
     },
@@ -311,7 +313,7 @@
       "license": "Apache-2.0",
       "license_path": "licenses/Apache-2.0.txt",
       "license_sha256": "25d0c3c01beb2aa534ce986c0ac86e91f8a34864baf497f84d025074e74b8247",
-      "sha256": "05446c665e45b27fb49815ccc502f76ca5962f49c7dca7fb19883e6fdab6d335",
+      "sha256": "deacd32a8ff32df35362106c76e6d2e3a1187f132fd0b570383f9a6bb21c5420",
       "source_url": "https://github.com/loldlm1/FireRed-OpenStoryline",
       "source_revision": "creative-catalog-v1",
       "commercial_use": true,
@@ -334,6 +336,7 @@
       "review_note": "Project-native deterministic FFmpeg recipe; no downloaded template or runtime asset.",
       "config": {
         "operation": "fade",
+        "color": "white",
         "duration_ms": 220
       }
     },
@@ -346,7 +349,7 @@
       "license": "Apache-2.0",
       "license_path": "licenses/Apache-2.0.txt",
       "license_sha256": "25d0c3c01beb2aa534ce986c0ac86e91f8a34864baf497f84d025074e74b8247",
-      "sha256": "05446c665e45b27fb49815ccc502f76ca5962f49c7dca7fb19883e6fdab6d335",
+      "sha256": "7fddaa122addeba85a51e8555a9bf194f2bcf5ab6e68cc97ee4d857bb1e7d769",
       "source_url": "https://github.com/loldlm1/FireRed-OpenStoryline",
       "source_revision": "creative-catalog-v1",
       "commercial_use": true,
@@ -369,6 +372,7 @@
       "review_note": "Project-native deterministic FFmpeg recipe; no downloaded template or runtime asset.",
       "config": {
         "operation": "fade",
+        "color": "black",
         "duration_ms": 220
       }
     },
@@ -381,7 +385,7 @@
       "license": "Apache-2.0",
       "license_path": "licenses/Apache-2.0.txt",
       "license_sha256": "25d0c3c01beb2aa534ce986c0ac86e91f8a34864baf497f84d025074e74b8247",
-      "sha256": "926ed0fa64b32caa2a1de0a433cfcccc5f14cf10f1ece8c9c24a1b6b74a2c01d",
+      "sha256": "a03462af56a7bb20e01227598f0700de379b9822488f3927ec9866850242f18e",
       "source_url": "https://github.com/loldlm1/FireRed-OpenStoryline",
       "source_revision": "creative-catalog-v1",
       "commercial_use": true,
@@ -404,6 +408,7 @@
       "review_note": "Project-native deterministic FFmpeg recipe; no downloaded template or runtime asset.",
       "config": {
         "operation": "wipeleft",
+        "color": "black",
         "duration_ms": 220
       }
     },
@@ -416,7 +421,7 @@
       "license": "Apache-2.0",
       "license_path": "licenses/Apache-2.0.txt",
       "license_sha256": "25d0c3c01beb2aa534ce986c0ac86e91f8a34864baf497f84d025074e74b8247",
-      "sha256": "5dd3e0a0a358b7ef0e15e7641c4d99d571a87c414b20e54f8a60e84459818ce1",
+      "sha256": "fff27828953f8f9e2393050a863934087691c727e8b0ada7e087c6fa9410250b",
       "source_url": "https://github.com/loldlm1/FireRed-OpenStoryline",
       "source_revision": "creative-catalog-v1",
       "commercial_use": true,
@@ -439,6 +444,7 @@
       "review_note": "Project-native deterministic FFmpeg recipe; no downloaded template or runtime asset.",
       "config": {
         "operation": "wiperight",
+        "color": "black",
         "duration_ms": 220
       }
     },
@@ -451,7 +457,7 @@
       "license": "Apache-2.0",
       "license_path": "licenses/Apache-2.0.txt",
       "license_sha256": "25d0c3c01beb2aa534ce986c0ac86e91f8a34864baf497f84d025074e74b8247",
-      "sha256": "830ebdd010b17869c02509d954c674f0460edb2b5e5b5f1578b80dfa0d5d0bce",
+      "sha256": "b5197f7a7b20e3e3a823efa56fc7db50b65b3c5a0c131b7e22121ab7158052ae",
       "source_url": "https://github.com/loldlm1/FireRed-OpenStoryline",
       "source_revision": "creative-catalog-v1",
       "commercial_use": true,
@@ -474,6 +480,7 @@
       "review_note": "Project-native deterministic FFmpeg recipe; no downloaded template or runtime asset.",
       "config": {
         "operation": "slideleft",
+        "color": "black",
         "duration_ms": 220
       }
     },
@@ -486,7 +493,7 @@
       "license": "Apache-2.0",
       "license_path": "licenses/Apache-2.0.txt",
       "license_sha256": "25d0c3c01beb2aa534ce986c0ac86e91f8a34864baf497f84d025074e74b8247",
-      "sha256": "e8df95620b10b2c8e07a527ef04586d6b38a2f6e76e13bf0a5d3d09d5fe3ed75",
+      "sha256": "3276ee7293d159b5da2b10a3acd1f31432fe352f853c3505b0fbb687a995fdeb",
       "source_url": "https://github.com/loldlm1/FireRed-OpenStoryline",
       "source_revision": "creative-catalog-v1",
       "commercial_use": true,
@@ -509,6 +516,7 @@
       "review_note": "Project-native deterministic FFmpeg recipe; no downloaded template or runtime asset.",
       "config": {
         "operation": "slideright",
+        "color": "black",
         "duration_ms": 220
       }
     },
@@ -521,7 +529,7 @@
       "license": "Apache-2.0",
       "license_path": "licenses/Apache-2.0.txt",
       "license_sha256": "25d0c3c01beb2aa534ce986c0ac86e91f8a34864baf497f84d025074e74b8247",
-      "sha256": "aa23ff1a5d350b97fe4df3e9de48b06bb085283cacafb56a454db2d0cf91a39a",
+      "sha256": "0940ab5e540eeee46643cc1ddbfe323c56f7502ad2d04eee118d7917455d841d",
       "source_url": "https://github.com/loldlm1/FireRed-OpenStoryline",
       "source_revision": "creative-catalog-v1",
       "commercial_use": true,
@@ -544,6 +552,7 @@
       "review_note": "Project-native deterministic FFmpeg recipe; no downloaded template or runtime asset.",
       "config": {
         "operation": "circleopen",
+        "color": "black",
         "duration_ms": 220
       }
     },
@@ -556,7 +565,7 @@
       "license": "Apache-2.0",
       "license_path": "licenses/Apache-2.0.txt",
       "license_sha256": "25d0c3c01beb2aa534ce986c0ac86e91f8a34864baf497f84d025074e74b8247",
-      "sha256": "4ad61b73008ab224f6fcd0daf65db8fa37eb245d5773a55e5ad5a4cf144c4e45",
+      "sha256": "8c0448d17ebec010be9c8a5e7d129b5a66bdaea7f6cf42bdeb61d1b186012993",
       "source_url": "https://github.com/loldlm1/FireRed-OpenStoryline",
       "source_revision": "creative-catalog-v1",
       "commercial_use": true,
@@ -579,6 +588,7 @@
       "review_note": "Project-native deterministic FFmpeg recipe; no downloaded template or runtime asset.",
       "config": {
         "operation": "dissolve",
+        "color": "black",
         "duration_ms": 220
       }
     },

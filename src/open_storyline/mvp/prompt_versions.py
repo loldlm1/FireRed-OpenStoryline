@@ -328,6 +328,16 @@ class PromptVersionService:
                                     if quality_feedback
                                     else None
                                 ),
+                                "retry_reason_codes": (
+                                    quality_feedback.get("retry_reason_codes", [])
+                                    if quality_feedback
+                                    else []
+                                ),
+                                "resume_policy": (
+                                    "reuse_compatible_checkpoints"
+                                    if quality_feedback
+                                    else None
+                                ),
                             },
                         )
         except JobStoreError:
@@ -670,6 +680,12 @@ class PromptVersionService:
         request_data = dict(version.settings_data or {})
         if quality_feedback:
             request_data["prior_attempt_quality_feedback"] = quality_feedback
+            request_data.update({
+                "retry_of_attempt_id": quality_feedback.get("prior_attempt_id"),
+                "retry_reason_codes": quality_feedback.get("retry_reason_codes", []),
+                "resume_policy": "reuse_compatible_checkpoints",
+                "prior_outcome_grade": quality_feedback.get("prior_outcome_grade"),
+            })
         return VideoJob(
             id=job_id,
             editing_session_id=owner.id,
@@ -734,6 +750,8 @@ class PromptVersionService:
                 "frame_quality_qa.json",
                 "clip_visual_coverage.json",
                 "creative_conformance.json",
+                "outcome_report.json",
+                "fallback_ledger.json",
             } or row.source_name.endswith(".caption-footprint.json"):
                 documents[row.source_name] = dict(row.parsed_data)
         if not documents:

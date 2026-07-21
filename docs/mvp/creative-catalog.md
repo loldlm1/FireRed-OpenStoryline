@@ -9,6 +9,9 @@ on runtime downloads, paid template marketplaces, or provider availability.
 - `OPENSTORYLINE_CREATIVE_CATALOG_PATH` points to the checked-in
   `creative_catalog/manifest.json`; production uses
   `/app/creative_catalog/manifest.json`.
+- `OPENSTORYLINE_CREATIVE_CATALOG_PLANNING_ENABLED=false` keeps catalog-aware
+  model planning behind an independent canary flag. The renderer may still use
+  the verified core caption font while this flag is off.
 - Startup validates the manifest schema, paths, hashes, matching license files,
   required Spanish/English and marketing-emoji glyphs, and required FFmpeg
   filters. A missing or invalid required entry prevents startup.
@@ -24,6 +27,13 @@ The initial catalog contains five OFL font families, ten native transition
 presets, five color treatments, five caption treatments, six deterministic
 recipes, and four generic style profiles. Profiles describe combinations of
 stable catalog IDs; they are not copies of branded or marketplace templates.
+
+When planning is enabled, the server sends at most 32 compact candidates chosen
+from the prompt tone and target aspect ratio. The structured edit-plan contract
+accepts only those IDs and rejects arbitrary paths, URLs, font names, filter
+expressions, transition names, and style-inconsistent selections. Rendering
+resolves the selected IDs server-side and records their versions, hashes, and
+licenses in `creative_catalog_usage.json`.
 
 ## Provenance and licensing
 

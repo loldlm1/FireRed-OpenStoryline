@@ -22,7 +22,12 @@ from open_storyline.mvp.checkpoints import (
     CheckpointStore,
     checkpoint_fingerprint,
 )
-from open_storyline.mvp.catalog import CreativeCatalog
+from open_storyline.mvp.catalog import (
+    CreativeCatalog,
+    build_catalog_usage,
+    catalog_candidate_snapshot,
+    creative_catalog_planning_enabled,
+)
 from open_storyline.mvp.edit_plan import (
     AgenticEditPlanner,
     AgenticArtifactNames,
@@ -325,10 +330,22 @@ class MVPJobProcessor:
                 )
 
         request = state.get("request") or {}
+        creative_catalog = getattr(self, "creative_catalog", None)
         prior_quality_feedback = request.get("prior_attempt_quality_feedback")
         if not isinstance(prior_quality_feedback, dict):
             prior_quality_feedback = {}
         agentic_requested = request.get("edit_mode") == "agentic"
+        catalog_snapshot: dict[str, Any] | None = None
+        if (
+            agentic_requested
+            and creative_catalog is not None
+            and creative_catalog_planning_enabled()
+        ):
+            catalog_snapshot = catalog_candidate_snapshot(
+                creative_catalog,
+                editing_prompt=state["prompt"],
+                aspect_ratio="9:16",
+            )
         server_mode = None
         effective_asset_policy = "off"
         effective_generated_asset_cap = 0
@@ -1056,6 +1073,7 @@ class MVPJobProcessor:
                     allow_degraded_fallback=(server_mode == "shadow"),
                     visual_coverage_feedback=visual_coverage_feedback,
                     prior_attempt_quality_feedback=prior_quality_feedback,
+                    catalog_snapshot=catalog_snapshot,
                     renderer_capabilities=REFRAME_RENDER_CAPABILITIES,
                 )
 
@@ -1425,6 +1443,22 @@ class MVPJobProcessor:
                 encoding="utf-8",
             )
             await store.register_artifact(job_id, edit_plan_path, kind="edit_plan")
+            catalog_usage = (
+                build_catalog_usage(creative_catalog, edit_plan)
+                if creative_catalog is not None
+                else None
+            )
+            if catalog_usage is not None:
+                catalog_usage_path = output_dir / names.creative_catalog_usage
+                catalog_usage_path.write_text(
+                    json.dumps(catalog_usage, ensure_ascii=False, indent=2),
+                    encoding="utf-8",
+                )
+                await store.register_artifact(
+                    job_id,
+                    catalog_usage_path,
+                    kind="creative_catalog_usage",
+                )
             fallback_ledger_path = output_dir / names.fallback_ledger
             fallback_ledger = {
                 "version": "fallback_ledger.v1",
@@ -1467,6 +1501,9 @@ class MVPJobProcessor:
                 "edit_plan": names.edit_plan,
                 "proposed_edit_plan": names.proposed_edit_plan,
                 "fallback_ledger": names.fallback_ledger,
+                "creative_catalog_usage": (
+                    names.creative_catalog_usage if catalog_usage is not None else None
+                ),
                 "edit_planner": {
                     "model": remote_client.model,
                     "schema_version": edit_plan.version,
@@ -1567,7 +1604,10 @@ class MVPJobProcessor:
                 )
         agentic_renderer = None
         if agentic_requested and server_mode == "render":
-            agentic_renderer = AgenticShortRenderer(render_settings)
+            agentic_renderer = AgenticShortRenderer(
+                render_settings,
+                creative_catalog=creative_catalog,
+            )
             if fallback_enabled:
                 try:
                     ffmpeg_preflight = await asyncio.to_thread(
@@ -2116,9 +2156,18 @@ class MVPJobProcessor:
                     "width": render_settings.width,
                     "height": render_settings.height,
                 }),
+                "catalog": (
+                    creative_catalog.manifest_sha256
+                    if creative_catalog is not None
+                    else ""
+                ),
             },
             reused_stages=checkpoint_summary["reused_stages"],
             recomputed_stages=checkpoint_summary["recomputed_stages"],
+            prior_limitation_codes=prior_quality_feedback.get(
+                "retry_reason_codes",
+                (),
+            ),
         )
         outcome_report_path = output_dir / names.outcome_report
         outcome_report_path.write_text(

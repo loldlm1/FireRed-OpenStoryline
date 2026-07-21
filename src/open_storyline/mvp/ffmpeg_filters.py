@@ -6,6 +6,10 @@ import re
 
 
 MAX_FILTERGRAPH_LENGTH = 65_536
+SAFE_XFADE_TRANSITIONS = frozenset({
+    "fade", "wipeleft", "wiperight", "slideleft", "slideright",
+    "circleopen", "dissolve",
+})
 
 
 class FilterGraphError(RuntimeError):
@@ -148,6 +152,7 @@ def build_reframe_filtergraph(
     has_audio: bool,
     asset_input_indexes: dict[str, int] | None = None,
     asset_input_kinds: dict[str, str] | None = None,
+    color_filter: str = "",
 ) -> tuple[str, str, str]:
     if not has_audio:
         raise FilterGraphError(
@@ -157,6 +162,17 @@ def build_reframe_filtergraph(
     if not 1 <= len(segments) <= 48:
         raise FilterGraphError("FILTER_SEGMENT_LIMIT", "filtergraph requires 1 to 48 segments")
     validate_output_dimensions(output_width, output_height)
+    if color_filter and (
+        len(color_filter) > 240
+        or not re.fullmatch(
+            r"(?:eq|colorbalance|curves)=[A-Za-z0-9_.:=+-]+",
+            color_filter,
+        )
+    ):
+        raise FilterGraphError(
+            "FILTER_COLOR_TREATMENT_INVALID",
+            "catalog color treatment is invalid",
+        )
 
     assets = dict(asset_input_indexes or {})
     asset_kinds = dict(asset_input_kinds or {})
@@ -201,9 +217,10 @@ def build_reframe_filtergraph(
             )
         start = source.start_ms / 1000
         end = source.end_ms / 1000
+        treatment = f",{color_filter}" if color_filter else ""
         graph.append(
             f"{video_input}trim=start={start:.3f}:end={end:.3f},"
-            f"settb=AVTB,setpts=PTS-STARTPTS,{composition},setsar=1[vbase{index}]"
+            f"settb=AVTB,setpts=PTS-STARTPTS,{composition}{treatment},setsar=1[vbase{index}]"
         )
         graph.append(
             f"{audio_input}atrim=start={start:.3f}:end={end:.3f},"
@@ -226,10 +243,10 @@ def build_reframe_filtergraph(
                 alpha = f"{overlay.opacity:.4f}"
                 if transition > 0:
                     alpha = (
-                        f"if(lt(t\,{local_start + transition:.3f})\,"
-                        f"((t-{local_start:.3f})/{transition:.3f})*{overlay.opacity:.4f}\,"
-                        f"if(gt(t\,{local_end - transition:.3f})\,"
-                        f"(({local_end:.3f}-t)/{transition:.3f})*{overlay.opacity:.4f}\,"
+                        f"if(lt(t\\,{local_start + transition:.3f})\\,"
+                        f"((t-{local_start:.3f})/{transition:.3f})*{overlay.opacity:.4f}\\,"
+                        f"if(gt(t\\,{local_end - transition:.3f})\\,"
+                        f"(({local_end:.3f}-t)/{transition:.3f})*{overlay.opacity:.4f}\\,"
                         f"{overlay.opacity:.4f}))"
                     )
                 x, y = _text_position(
@@ -313,10 +330,19 @@ def build_reframe_filtergraph(
             chain_duration += segment_duration
         elif kind == "fade":
             half = transition / 2
+            color = getattr(segment, "transition_color", "black")
+            if color not in {"black", "white"}:
+                raise FilterGraphError(
+                    "FILTER_TRANSITION_INVALID",
+                    "fade transition color is invalid",
+                )
             graph.append(
-                f"[{video_output}]fade=t=out:st={max(0.0, chain_duration - half):.3f}:d={half:.3f}[vfprev{index}]"
+                f"[{video_output}]fade=t=out:st={max(0.0, chain_duration - half):.3f}:"
+                f"d={half:.3f}:color={color}[vfprev{index}]"
             )
-            graph.append(f"[v{index}]fade=t=in:st=0:d={half:.3f}[vfnext{index}]")
+            graph.append(
+                f"[v{index}]fade=t=in:st=0:d={half:.3f}:color={color}[vfnext{index}]"
+            )
             graph.append(
                 f"[vfprev{index}][vfnext{index}]concat=n=2:v=1:a=0[{next_video}]"
             )
@@ -332,8 +358,14 @@ def build_reframe_filtergraph(
             offset = chain_duration - transition
             if transition <= 0 or offset < 0:
                 raise FilterGraphError("FILTER_TRANSITION_INVALID", "crossfade timing is invalid")
+            transition_name = getattr(segment, "transition_name", "fade") or "fade"
+            if transition_name not in SAFE_XFADE_TRANSITIONS:
+                raise FilterGraphError(
+                    "FILTER_TRANSITION_INVALID",
+                    "catalog crossfade transition is invalid",
+                )
             graph.append(
-                f"[{video_output}][v{index}]xfade=transition=fade:duration={transition:.3f}:"
+                f"[{video_output}][v{index}]xfade=transition={transition_name}:duration={transition:.3f}:"
                 f"offset={offset:.3f}[{next_video}]"
             )
             graph.append(

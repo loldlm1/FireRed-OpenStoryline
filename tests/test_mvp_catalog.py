@@ -6,8 +6,18 @@ import shutil
 import subprocess
 import sys
 import unittest
+from unittest.mock import patch
 
-from open_storyline.mvp.catalog import CatalogError, load_creative_catalog
+from open_storyline.mvp.catalog import (
+    CatalogError,
+    build_catalog_usage,
+    catalog_candidate_snapshot,
+    catalog_color_filter,
+    creative_catalog_planning_enabled,
+    load_creative_catalog,
+)
+from open_storyline.mvp.edit_plan import build_shadow_edit_plan
+from open_storyline.mvp.shorts import ShortCandidate
 from open_storyline.mvp.render import render_settings_from_config
 
 
@@ -54,6 +64,56 @@ class CreativeCatalogTests(unittest.TestCase):
         self.assertNotIn("creative_catalog/fonts", serialized)
         self.assertNotIn("https://", serialized)
         self.assertNotIn("sha256", serialized)
+
+    def test_planner_snapshot_is_bounded_and_catalog_usage_is_auditable(self):
+        catalog = load_creative_catalog(MANIFEST)
+        snapshot = catalog_candidate_snapshot(
+            catalog,
+            editing_prompt="Crea un lanzamiento energetico y audaz",
+        )
+
+        self.assertEqual(snapshot["version"], "catalog_candidates.v1")
+        self.assertLessEqual(len(snapshot["entries"]), 32)
+        self.assertEqual(snapshot["entries"][0]["id"], "style.energetic-launch")
+        self.assertIn("recipe", {entry["kind"] for entry in snapshot["entries"]})
+        serialized = json.dumps(snapshot)
+        self.assertNotIn("creative_catalog/fonts", serialized)
+        self.assertNotIn("https://", serialized)
+
+        plan = build_shadow_edit_plan(
+            [ShortCandidate(0, 4_000, "Title", "Hook", "Reason", 0.9)],
+            source_duration_ms=4_000,
+        )
+        usage = build_catalog_usage(catalog, plan)
+        self.assertEqual(usage["version"], "creative_catalog_usage.v1")
+        self.assertEqual(usage["manifest_sha256"], catalog.manifest_sha256)
+        self.assertEqual(usage["clips"][0]["font_id"], "font.caption.core")
+        self.assertTrue(all(entry["sha256"] for entry in usage["entries"]))
+
+    def test_catalog_compiles_only_allowlisted_filters_and_flag_values(self):
+        catalog = load_creative_catalog(MANIFEST)
+        self.assertEqual(
+            catalog_color_filter(catalog, "color.clean-contrast"),
+            "eq=contrast=1.0600:saturation=1.0200",
+        )
+        self.assertEqual(
+            catalog_color_filter(catalog, "color.warm-launch"),
+            "colorbalance=rs=0.0400:bs=-0.0250",
+        )
+        with self.assertRaises(CatalogError):
+            catalog_color_filter(catalog, "transition.hard-cut")
+
+        with patch.dict(
+            "os.environ",
+            {"OPENSTORYLINE_CREATIVE_CATALOG_PLANNING_ENABLED": "true"},
+        ):
+            self.assertTrue(creative_catalog_planning_enabled())
+        with patch.dict(
+            "os.environ",
+            {"OPENSTORYLINE_CREATIVE_CATALOG_PLANNING_ENABLED": "invalid"},
+        ):
+            with self.assertRaises(CatalogError):
+                creative_catalog_planning_enabled()
 
     def test_optional_incompatible_entry_is_quarantined(self):
         with TemporaryDirectory() as temporary:

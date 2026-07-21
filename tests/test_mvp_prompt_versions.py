@@ -454,6 +454,11 @@ class PromptVersionPostgresTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(feedback["prior_attempt_number"], 1)
         self.assertIn("ACTIVE_PICTURE_TOO_SMALL", feedback["blocker_codes"])
         self.assertEqual(feedback["worst_metric_samples"][0]["timestamp_ms"], 1000)
+        self.assertEqual(rerun["request"]["retry_of_attempt_id"], prior["id"])
+        self.assertEqual(
+            rerun["request"]["resume_policy"],
+            "reuse_compatible_checkpoints",
+        )
 
         with self.assertRaises(JobStoreError) as missing_flag:
             await self.service.rerun(

@@ -1,4 +1,4 @@
-EDIT_PLAN_PROMPT_VERSION = "mvp-agentic-edit-plan.v7"
+EDIT_PLAN_PROMPT_VERSION = "mvp-agentic-edit-plan.v8"
 VISUAL_UNDERSTANDING_PROMPT_VERSION = "mvp-visual-understanding.v2"
 
 
@@ -20,7 +20,9 @@ EDIT_PLAN_SYSTEM_PROMPT = (
     "an automatic crop into fit or letterbox; those full-frame fallbacks require the "
     "explicit allow_full_frame_fallback flag. AssetRequest fallback must be exactly "
     "source, fit, or omit. A required asset already blocks rendering when unresolved, "
-    "so represent fail or error semantics as required=true with fallback=omit. When asked to "
+    "so represent fail or error semantics as required=true with fallback=omit. Choose "
+    "creative catalog IDs only from the compact candidate set in the request. Never invent "
+    "catalog IDs, URLs, fonts, file paths, filters, or transition names. When asked to "
     "repair a response, use the valid template only for field names and nesting. "
     "Preserve usable segment boundaries, focal intent, transitions, overlays, and "
     "asset decisions from the invalid response without changing the authoritative "

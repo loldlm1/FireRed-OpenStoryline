@@ -47,6 +47,7 @@ class CatalogEntry:
     license: str
     source_url: str
     source_revision: str
+    sha256: str
     file_path: Path | None
     font_family: str
     config: dict[str, Any]
@@ -126,6 +127,21 @@ def catalog_manifest_path() -> Path:
             "OPENSTORYLINE_CREATIVE_CATALOG_PATH is required",
         )
     return Path(value).expanduser().resolve()
+
+
+def creative_catalog_planning_enabled() -> bool:
+    value = os.getenv(
+        "OPENSTORYLINE_CREATIVE_CATALOG_PLANNING_ENABLED",
+        "false",
+    ).strip().lower()
+    if value in {"1", "true", "yes", "on"}:
+        return True
+    if value in {"0", "false", "no", "off", ""}:
+        return False
+    raise CatalogError(
+        "CATALOG_CONFIG_INVALID",
+        "OPENSTORYLINE_CREATIVE_CATALOG_PLANNING_ENABLED must be true or false",
+    )
 
 
 def _safe_path(root: Path, value: str, *, code: str) -> Path:
@@ -374,6 +390,7 @@ def _validate_entry(
         license=license_id,
         source_url=source_url,
         source_revision=source_revision,
+        sha256=expected_hash,
         file_path=file_path,
         font_family=font_family,
         config=dict(config),
@@ -473,6 +490,149 @@ def load_creative_catalog(
         ffmpeg_filters=filters,
         manifest_sha256=hashlib.sha256(manifest_bytes).hexdigest(),
     )
+
+
+_TAG_PATTERNS = (
+    (r"\b(?:bold|audaz|impactante|gancho|hook)\b", "bold"),
+    (r"\b(?:clean|limpio|minimal|minimalista)\b", "clean"),
+    (r"\b(?:product|producto|demo|demostracion)\b", "product"),
+    (r"\b(?:launch|lanzamiento|release|estreno)\b", "launch"),
+    (r"\b(?:energetic|energetico|dinamico|dynamic)\b", "energetic"),
+    (r"\b(?:cinematic|cinematografico|cinematica)\b", "cinematic"),
+    (r"\b(?:editorial|elegant|elegante|premium)\b", "editorial"),
+)
+
+
+def catalog_candidate_snapshot(
+    catalog: CreativeCatalog,
+    *,
+    editing_prompt: str,
+    aspect_ratio: str = "9:16",
+) -> dict[str, Any]:
+    text = str(editing_prompt or "").lower()
+    tags = {"marketing", "portrait" if aspect_ratio == "9:16" else "landscape"}
+    tags.update(
+        tag
+        for pattern, tag in _TAG_PATTERNS
+        if re.search(pattern, text, re.IGNORECASE)
+    )
+    entries: list[dict[str, Any]] = []
+    for kind, limit in (
+        ("style_profile", 4),
+        ("caption_treatment", 5),
+        ("color_treatment", 5),
+        ("transition", 10),
+        ("recipe", 6),
+    ):
+        entries.extend(catalog.compact_candidates(
+            kinds={kind},
+            tags=tags,
+            limit=limit,
+        ))
+    return {
+        "version": "catalog_candidates.v1",
+        "catalog_version": catalog.version,
+        "manifest_sha256": catalog.manifest_sha256,
+        "aspect_ratio": aspect_ratio,
+        "requested_tags": sorted(tags),
+        "entries": entries,
+    }
+
+
+def catalog_transition_presets(catalog: CreativeCatalog) -> dict[str, dict[str, Any]]:
+    return {
+        entry.id: dict(entry.config)
+        for entry in catalog.by_kind("transition")
+    }
+
+
+def catalog_color_filter(catalog: CreativeCatalog, entry_id: str) -> str:
+    entry = catalog.require(entry_id)
+    if entry.kind != "color_treatment":
+        raise CatalogError("CATALOG_KIND_INVALID", "catalog color treatment is invalid")
+    config = entry.config
+    filter_name = str(config.get("filter") or "")
+    if filter_name == "eq":
+        contrast = float(config.get("contrast") or 1)
+        saturation = float(config.get("saturation") or 1)
+        if not 0.5 <= contrast <= 1.5 or not 0 <= saturation <= 2:
+            raise CatalogError("CATALOG_CONFIG_INVALID", "catalog EQ values are invalid")
+        return f"eq=contrast={contrast:.4f}:saturation={saturation:.4f}"
+    if filter_name == "colorbalance":
+        red = float(config.get("rs") or 0)
+        blue = float(config.get("bs") or 0)
+        if not -0.25 <= red <= 0.25 or not -0.25 <= blue <= 0.25:
+            raise CatalogError("CATALOG_CONFIG_INVALID", "catalog color balance is invalid")
+        return f"colorbalance=rs={red:.4f}:bs={blue:.4f}"
+    if filter_name == "curves" and config.get("preset") in {
+        "lighter", "darker", "increase_contrast", "linear_contrast",
+    }:
+        return f"curves=preset={config['preset']}"
+    raise CatalogError("CATALOG_CONFIG_INVALID", "catalog color filter is unsupported")
+
+
+def catalog_caption_font(catalog: CreativeCatalog, caption_treatment_id: str) -> str:
+    treatment = catalog.require(caption_treatment_id)
+    if treatment.kind != "caption_treatment":
+        raise CatalogError("CATALOG_KIND_INVALID", "caption treatment is invalid")
+    font_id = str(treatment.config.get("font_id") or "")
+    font = catalog.require(font_id)
+    if font.kind != "font" or not font.font_family:
+        raise CatalogError("CATALOG_KIND_INVALID", "caption font is invalid")
+    return font.font_family
+
+
+def build_catalog_usage(catalog: CreativeCatalog, plan: Any) -> dict[str, Any]:
+    clips = []
+    all_ids: set[str] = {"font.emoji.monochrome"}
+    for clip in plan.clips:
+        selection = clip.catalog_selection
+        selected_ids = {
+            selection.style_profile_id,
+            selection.caption_treatment_id,
+            selection.color_treatment_id,
+            *selection.recipe_ids,
+        }
+        transition_ids = {
+            segment.transition_in.catalog_id
+            for segment in clip.segments
+            if segment.transition_in.catalog_id
+        }
+        selected_ids.discard("")
+        caption_id = selection.caption_treatment_id or "caption.clean"
+        caption = catalog.require(caption_id)
+        font_id = str(caption.config.get("font_id") or "font.caption.core")
+        selected_ids.add(caption_id)
+        selected_ids.add(font_id)
+        selected_ids.update(transition_ids)
+        all_ids.update(selected_ids)
+        clips.append({
+            "clip_index": clip.clip_index,
+            "style_profile_id": selection.style_profile_id,
+            "caption_treatment_id": caption_id,
+            "color_treatment_id": selection.color_treatment_id,
+            "recipe_ids": list(selection.recipe_ids),
+            "transition_ids": sorted(transition_ids),
+            "font_id": font_id,
+        })
+    entries = []
+    for entry_id in sorted(all_ids):
+        entry = catalog.require(entry_id)
+        entries.append({
+            "id": entry.id,
+            "kind": entry.kind,
+            "version": entry.version,
+            "sha256": entry.sha256,
+            "license": entry.license,
+            "source_revision": entry.source_revision,
+        })
+    return {
+        "version": "creative_catalog_usage.v1",
+        "catalog_version": catalog.version,
+        "manifest_sha256": catalog.manifest_sha256,
+        "entries": entries,
+        "clips": clips,
+    }
 
 
 def main() -> int:

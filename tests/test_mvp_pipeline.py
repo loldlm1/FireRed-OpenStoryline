@@ -74,7 +74,7 @@ class FakeRenderer:
 
 
 class FakeAgenticRenderer:
-    def __init__(self, _settings):
+    def __init__(self, _settings, **_kwargs):
         pass
 
     def preflight_plan(self, **_kwargs):
@@ -145,7 +145,7 @@ class FakeBlockedEditPlanner:
     async def plan(self, *, shorts_plan, source_duration_ms, **_kwargs):
         clip = shorts_plan.clips[0]
         return EditPlan(
-            planner_version="agentic-editor.v1",
+            planner_version="agentic-editor.v2",
             source_duration_ms=source_duration_ms,
             requested_capabilities=("fit", "hard_cut", "image_overlay", "subtitles"),
             clips=(ClipEditPlan(
@@ -190,7 +190,7 @@ class FakeMissingCropEditPlanner:
         type(self).calls += 1
         clip = shorts_plan.clips[0]
         return EditPlan(
-            planner_version="agentic-editor.v1",
+            planner_version="agentic-editor.v2",
             source_duration_ms=source_duration_ms,
             requested_capabilities=("crop", "hard_cut", "subtitles"),
             clips=(ClipEditPlan(
@@ -220,7 +220,7 @@ class FakeGeneratedEditPlanner:
         clip = shorts_plan.clips[0]
         asset_window = TimeWindow(start_ms=1000, end_ms=3000)
         return EditPlan(
-            planner_version="agentic-editor.v1",
+            planner_version="agentic-editor.v2",
             source_duration_ms=source_duration_ms,
             requested_capabilities=("fit", "hard_cut", "image_overlay", "subtitles"),
             clips=(ClipEditPlan(
@@ -263,7 +263,7 @@ class FakeStockEditPlanner:
         clip = shorts_plan.clips[0]
         asset_window = TimeWindow(start_ms=1000, end_ms=3000)
         return EditPlan(
-            planner_version="agentic-editor.v1",
+            planner_version="agentic-editor.v2",
             source_duration_ms=source_duration_ms,
             requested_capabilities=("fit", "hard_cut", "image_overlay", "subtitles"),
             clips=(ClipEditPlan(
@@ -670,10 +670,10 @@ class MVPAgenticPipelineTests(unittest.IsolatedAsyncioTestCase):
             self.assertTrue(manifest["run"]["is_favorite"])
             self.assertEqual(manifest["source"]["input_video_id"], "c" * 32)
             self.assertEqual(manifest["source"]["sha256"], "d" * 64)
-            self.assertEqual(manifest["agentic"]["edit_planner"]["schema_version"], "edit_plan.v1")
+            self.assertEqual(manifest["agentic"]["edit_planner"]["schema_version"], "edit_plan.v2")
             self.assertEqual(
                 manifest["agentic"]["edit_planner"]["prompt_version"],
-                "mvp-agentic-edit-plan.v7",
+                "mvp-agentic-edit-plan.v8",
             )
             registered_names = [name for name, _kind in store.registered]
             self.assertLess(

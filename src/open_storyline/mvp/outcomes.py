@@ -16,6 +16,7 @@ def build_completed_outcome_report(
     fingerprints: dict[str, str] | None = None,
     reused_stages: Iterable[str] = (),
     recomputed_stages: Iterable[str] = (),
+    prior_limitation_codes: Iterable[str] = (),
 ) -> dict[str, Any]:
     fallbacks = tuple(fallback_entries)
     qa_codes = tuple(sorted({str(code)[:80] for code in qa_blocker_codes if code}))
@@ -47,6 +48,8 @@ def build_completed_outcome_report(
         for code in qa_codes
     )
     grade = "with_limitations" if limitations else "enhanced"
+    current_codes = {str(item["code"]) for item in limitations}
+    prior_codes = {str(value) for value in prior_limitation_codes if value}
     return {
         "version": OUTCOME_REPORT_VERSION,
         "grade": grade,
@@ -65,6 +68,10 @@ def build_completed_outcome_report(
             "recommended_action": "retry_defects" if limitations else "none",
             "reused_stage_names": sorted({str(value) for value in reused_stages}),
             "recomputed_stage_names": sorted({str(value) for value in recomputed_stages}),
+            "prior_limitation_codes": sorted(prior_codes),
+            "resolved_limitation_codes": sorted(prior_codes - current_codes),
+            "remaining_limitation_codes": sorted(prior_codes & current_codes),
+            "new_limitation_codes": sorted(current_codes - prior_codes),
         },
         "fingerprints": {
             str(key): str(value)

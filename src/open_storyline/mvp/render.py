@@ -13,6 +13,12 @@ import subprocess
 import time
 
 from open_storyline.mvp.shorts import ShortCandidate
+from open_storyline.mvp.catalog import (
+    CreativeCatalog,
+    catalog_caption_font,
+    catalog_color_filter,
+    catalog_transition_presets,
+)
 from open_storyline.mvp.compositor import (
     RENDER_EXECUTION_VERSION,
     ClipComposition,
@@ -448,8 +454,35 @@ class CPUShortRenderer:
 
 
 class AgenticShortRenderer:
-    def __init__(self, settings: RenderSettings | None = None) -> None:
+    def __init__(
+        self,
+        settings: RenderSettings | None = None,
+        *,
+        creative_catalog: CreativeCatalog | None = None,
+    ) -> None:
         self.settings = settings or RenderSettings()
+        self.creative_catalog = creative_catalog
+        self.transition_presets = (
+            catalog_transition_presets(creative_catalog)
+            if creative_catalog is not None
+            else {}
+        )
+
+    def _catalog_rendering(self, clip_plan: Any) -> tuple[str, str]:
+        if self.creative_catalog is None:
+            return self.settings.caption_font_family, ""
+        selection = clip_plan.catalog_selection
+        caption_id = selection.caption_treatment_id or "caption.clean"
+        font_family = catalog_caption_font(self.creative_catalog, caption_id)
+        color = (
+            catalog_color_filter(
+                self.creative_catalog,
+                selection.color_treatment_id,
+            )
+            if selection.color_treatment_id
+            else ""
+        )
+        return font_family, color
 
     def preflight_plan(
         self,
@@ -482,13 +515,14 @@ class AgenticShortRenderer:
         with TemporaryDirectory(prefix=".ffmpeg-preflight-", dir=output_dir) as directory:
             temporary = Path(directory)
             for clip_plan, selected_clip in zip(edit_plan.clips, selected_clips):
+                caption_font_family, color_filter = self._catalog_rendering(clip_plan)
                 subtitles, _layout, _footprint_path, _footprint = _write_caption_evidence(
                     temporary / f"{clip_plan.output_name}.srt",
                     clip=selected_clip,
                     transcript_segments=transcript_segments,
                     width=self.settings.width,
                     height=self.settings.height,
-                    font_family=self.settings.caption_font_family,
+                    font_family=caption_font_family,
                 )
                 composition = resolve_clip_composition(
                     clip_plan,
@@ -501,6 +535,7 @@ class AgenticShortRenderer:
                     max_crop_velocity_ratio_per_second=(
                         max_crop_velocity_ratio_per_second
                     ),
+                    transition_presets=self.transition_presets,
                 )
                 used_asset_ids = sorted({
                     overlay.asset_id
@@ -533,6 +568,7 @@ class AgenticShortRenderer:
                     has_audio=media.has_audio,
                     asset_input_indexes=asset_input_indexes,
                     asset_input_kinds=asset_kinds,
+                    color_filter=color_filter,
                 )
                 command = [
                     "ffmpeg", "-v", "error", "-i", str(Path(source).resolve()),
@@ -631,13 +667,14 @@ class AgenticShortRenderer:
                     f"clip {clip_plan.clip_index} source bounds changed after planning",
                 )
             video_path = output_dir / clip_plan.output_name
+            caption_font_family, color_filter = self._catalog_rendering(clip_plan)
             subtitles, layout_path, footprint_path, footprint = _write_caption_evidence(
                 output_dir / f"{video_path.stem}.srt",
                 clip=selected_clip,
                 transcript_segments=transcript_segments,
                 width=settings.width,
                 height=settings.height,
-                font_family=settings.caption_font_family,
+                font_family=caption_font_family,
             )
             composition: ClipComposition = resolve_clip_composition(
                 clip_plan,
@@ -648,6 +685,7 @@ class AgenticShortRenderer:
                 hysteresis_ratio=crop_hysteresis_ratio,
                 smoothing_alpha=crop_smoothing_alpha,
                 max_crop_velocity_ratio_per_second=max_crop_velocity_ratio_per_second,
+                transition_presets=self.transition_presets,
             )
             used_asset_ids = sorted({
                 overlay.asset_id
@@ -680,6 +718,7 @@ class AgenticShortRenderer:
                 has_audio=media.has_audio,
                 asset_input_indexes=asset_input_indexes,
                 asset_input_kinds=asset_kinds,
+                color_filter=color_filter,
             )
             command = [
                 "ffmpeg", "-y", "-v", "error",
