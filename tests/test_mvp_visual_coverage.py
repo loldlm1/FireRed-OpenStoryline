@@ -112,6 +112,73 @@ class ClipVisualCoverageTests(unittest.TestCase):
         self.assertGreater(report.segments[0].temporal_coverage_ratio, 0.9)
         self.assertEqual(report.to_dict()["version"], "clip_visual_coverage.v1")
 
+    def test_stable_high_confidence_track_can_bridge_one_large_sample_gap(self):
+        timestamps = (20_250, 28_750)
+        manifest = FrameManifest(
+            source_duration_ms=30_000,
+            source_width=1920,
+            source_height=1080,
+            frames=tuple(
+                sampled_frame(f"clip-01-frame-{index:03d}", timestamp)
+                for index, timestamp in enumerate(timestamps, start=1)
+            ),
+        )
+        visual = visual_for(timestamps)
+        visual = SimpleNamespace(
+            frame_manifest=visual.frame_manifest,
+            regions=visual.regions,
+            tracks=(visual.tracks[0].model_copy(update={
+                "start_ms": 20_000,
+                "end_ms": 29_000,
+                "confidence": 0.99,
+            }),),
+        )
+
+        report = build_clip_visual_coverage(
+            crop_plan(),
+            visual=visual,
+            clip_frame_manifests={1: manifest},
+        )
+
+        self.assertEqual(report.blocking, 0)
+        self.assertTrue(report.segments[0].track_window_covers_segment)
+        self.assertTrue(report.segments[0].gap_override_applied)
+        self.assertGreater(report.segments[0].maximum_gap_ms, 8_000)
+
+    def test_unstable_track_does_not_override_a_large_sample_gap(self):
+        timestamps = (20_250, 28_750)
+        manifest = FrameManifest(
+            source_duration_ms=30_000,
+            source_width=1920,
+            source_height=1080,
+            frames=tuple(
+                sampled_frame(f"clip-01-frame-{index:03d}", timestamp)
+                for index, timestamp in enumerate(timestamps, start=1)
+            ),
+        )
+        visual = visual_for(timestamps)
+        moved_region = visual.regions[1].model_copy(update={
+            "bbox": NormalizedBox(x=0.7, y=0.1, width=0.2, height=0.8),
+        })
+        visual = SimpleNamespace(
+            frame_manifest=visual.frame_manifest,
+            regions=(visual.regions[0], moved_region),
+            tracks=(visual.tracks[0].model_copy(update={
+                "start_ms": 20_000,
+                "end_ms": 29_000,
+                "confidence": 0.99,
+            }),),
+        )
+
+        report = build_clip_visual_coverage(
+            crop_plan(),
+            visual=visual,
+            clip_frame_manifests={1: manifest},
+        )
+
+        self.assertIn("CROP_VISUAL_GAP_TOO_LARGE", report.blocker_codes)
+        self.assertFalse(report.segments[0].gap_override_applied)
+
     def test_explicit_semantic_role_fills_sparse_track_coverage(self):
         timestamps = (20_250, 22_500, 24_500, 26_500, 28_750)
         manifest = FrameManifest(

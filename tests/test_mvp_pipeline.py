@@ -623,6 +623,9 @@ class MVPAgenticPipelineTests(unittest.IsolatedAsyncioTestCase):
             )
             self.assertTrue(coverage["repair"]["attempted"])
             self.assertEqual(coverage["status"], "blocked")
+            registered_names = [name for name, _kind in store.registered]
+            self.assertEqual(registered_names.count("visual_understanding.json"), 2)
+            self.assertEqual(registered_names.count("shorts_plan.json"), 2)
 
     async def test_agentic_request_fails_explicitly_when_server_is_off(self):
         with TemporaryDirectory() as directory:
