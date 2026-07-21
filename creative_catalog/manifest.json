@@ -1,0 +1,1408 @@
+{
+  "schema_version": "creative_catalog.v1",
+  "catalog_version": "2026.07.1",
+  "generated_by": "scripts/generate_creative_catalog_manifest.py",
+  "upstream_revision": "2f6daa88e1e71320a6fe71cc91ecbfc018928737",
+  "required_ids": [
+    "font.caption.core",
+    "font.emoji.monochrome",
+    "transition.hard-cut",
+    "transition.fade-black",
+    "color.clean-contrast",
+    "caption.clean",
+    "recipe.blur-background",
+    "style.clean-product"
+  ],
+  "entries": [
+    {
+      "id": "font.caption.core",
+      "kind": "font",
+      "version": "1.0.0",
+      "label": "Noto Sans Core Captions",
+      "required": true,
+      "license": "OFL-1.1",
+      "license_path": "licenses/OFL-NotoSans-1.1.txt",
+      "license_sha256": "cee9892f9f0cc8fe882c9e9537ee6a89621d86ee7ceaf70b02e2b2b1c25c061a",
+      "file": "fonts/NotoSans-wdth-wght.ttf",
+      "sha256": "bfb7bb691513f12e734dc346c03a03f784912432d7e3fa8e56efcf906fe86b3d",
+      "expected_type": "ttf",
+      "font_family": "Noto Sans",
+      "glyph_sets": [
+        "english",
+        "spanish"
+      ],
+      "source_url": "https://raw.githubusercontent.com/google/fonts/2f6daa88e1e71320a6fe71cc91ecbfc018928737/ofl/notosans/NotoSans%5Bwdth,wght%5D.ttf",
+      "source_revision": "2f6daa88e1e71320a6fe71cc91ecbfc018928737",
+      "commercial_use": true,
+      "modification": true,
+      "redistribution": true,
+      "attribution": "",
+      "ffmpeg_filters": [
+        "ass"
+      ],
+      "style_tags": [
+        "clean",
+        "caption",
+        "product",
+        "accessible"
+      ],
+      "compatibility_tags": [
+        "portrait",
+        "landscape",
+        "spanish",
+        "english"
+      ],
+      "fallback_id": "",
+      "reviewed_at": "2026-07-21",
+      "review_note": "Pinned Google Fonts file and matching family license reviewed for bundled commercial marketing use.",
+      "config": {
+        "font_family": "Noto Sans"
+      }
+    },
+    {
+      "id": "font.hook.archivo-black",
+      "kind": "font",
+      "version": "1.0.0",
+      "label": "Archivo Black Hooks",
+      "required": false,
+      "license": "OFL-1.1",
+      "license_path": "licenses/OFL-ArchivoBlack-1.1.txt",
+      "license_sha256": "3173acd82f8c6159b5b1037b539fcbd4edff68e65c2ea8b9412b5a5ca97b08ff",
+      "file": "fonts/ArchivoBlack-Regular.ttf",
+      "sha256": "dd9a89a019b4849f66ab75455fe7bdf931311042cbb0f0f97acc061539703180",
+      "expected_type": "ttf",
+      "font_family": "Archivo Black",
+      "glyph_sets": [
+        "english",
+        "spanish"
+      ],
+      "source_url": "https://raw.githubusercontent.com/google/fonts/2f6daa88e1e71320a6fe71cc91ecbfc018928737/ofl/archivoblack/ArchivoBlack-Regular.ttf",
+      "source_revision": "2f6daa88e1e71320a6fe71cc91ecbfc018928737",
+      "commercial_use": true,
+      "modification": true,
+      "redistribution": true,
+      "attribution": "",
+      "ffmpeg_filters": [
+        "ass"
+      ],
+      "style_tags": [
+        "bold",
+        "hook",
+        "social"
+      ],
+      "compatibility_tags": [
+        "portrait",
+        "landscape",
+        "spanish",
+        "english"
+      ],
+      "fallback_id": "font.caption.core",
+      "reviewed_at": "2026-07-21",
+      "review_note": "Pinned Google Fonts file and matching family license reviewed for bundled commercial marketing use.",
+      "config": {
+        "font_family": "Archivo Black"
+      }
+    },
+    {
+      "id": "font.headline.barlow-condensed",
+      "kind": "font",
+      "version": "1.0.0",
+      "label": "Barlow Condensed Headlines",
+      "required": false,
+      "license": "OFL-1.1",
+      "license_path": "licenses/OFL-Barlow-1.1.txt",
+      "license_sha256": "186d750eb496a4c17a76385f82be6aea2ac1cf2de074a811d63786cf374ea73f",
+      "file": "fonts/BarlowCondensed-SemiBold.ttf",
+      "sha256": "7b619d14bc2327509a9ef32b0890f709626f7ecc9ff61191c2a4314c5499d2d9",
+      "expected_type": "ttf",
+      "font_family": "Barlow Condensed",
+      "glyph_sets": [
+        "english",
+        "spanish"
+      ],
+      "source_url": "https://raw.githubusercontent.com/google/fonts/2f6daa88e1e71320a6fe71cc91ecbfc018928737/ofl/barlowcondensed/BarlowCondensed-SemiBold.ttf",
+      "source_revision": "2f6daa88e1e71320a6fe71cc91ecbfc018928737",
+      "commercial_use": true,
+      "modification": true,
+      "redistribution": true,
+      "attribution": "",
+      "ffmpeg_filters": [
+        "ass"
+      ],
+      "style_tags": [
+        "compact",
+        "headline",
+        "launch"
+      ],
+      "compatibility_tags": [
+        "portrait",
+        "landscape",
+        "spanish",
+        "english"
+      ],
+      "fallback_id": "font.caption.core",
+      "reviewed_at": "2026-07-21",
+      "review_note": "Pinned Google Fonts file and matching family license reviewed for bundled commercial marketing use.",
+      "config": {
+        "font_family": "Barlow Condensed"
+      }
+    },
+    {
+      "id": "font.editorial.dm-serif",
+      "kind": "font",
+      "version": "1.0.0",
+      "label": "DM Serif Display Editorial",
+      "required": false,
+      "license": "OFL-1.1",
+      "license_path": "licenses/OFL-DMSerifDisplay-1.1.txt",
+      "license_sha256": "a3e5cdd67d4571dd0a24fcc968de0efde7ae97ef752daf0906e4767619dd7231",
+      "file": "fonts/DMSerifDisplay-Regular.ttf",
+      "sha256": "8cc3643535edf039aa5d95440a8542735e9197e4f4b8d9303e980fefbf5ab616",
+      "expected_type": "ttf",
+      "font_family": "DM Serif Display",
+      "glyph_sets": [
+        "english",
+        "spanish"
+      ],
+      "source_url": "https://raw.githubusercontent.com/google/fonts/2f6daa88e1e71320a6fe71cc91ecbfc018928737/ofl/dmserifdisplay/DMSerifDisplay-Regular.ttf",
+      "source_revision": "2f6daa88e1e71320a6fe71cc91ecbfc018928737",
+      "commercial_use": true,
+      "modification": true,
+      "redistribution": true,
+      "attribution": "",
+      "ffmpeg_filters": [
+        "ass"
+      ],
+      "style_tags": [
+        "editorial",
+        "cinematic",
+        "premium"
+      ],
+      "compatibility_tags": [
+        "portrait",
+        "landscape",
+        "spanish",
+        "english"
+      ],
+      "fallback_id": "font.caption.core",
+      "reviewed_at": "2026-07-21",
+      "review_note": "Pinned Google Fonts file and matching family license reviewed for bundled commercial marketing use.",
+      "config": {
+        "font_family": "DM Serif Display"
+      }
+    },
+    {
+      "id": "font.emoji.monochrome",
+      "kind": "emoji_font",
+      "version": "1.0.0",
+      "label": "Noto Emoji Monochrome",
+      "required": true,
+      "license": "OFL-1.1",
+      "license_path": "licenses/OFL-NotoEmoji-1.1.txt",
+      "license_sha256": "500bb1ccf43df7bbb522112f9133a52b16e1c35e809632f5d8609b179152de5b",
+      "file": "fonts/NotoEmoji-wght.ttf",
+      "sha256": "de6c18832938afc99caf132b39d6a30a19bac7f2e812e28db2535b4608d27551",
+      "expected_type": "ttf",
+      "font_family": "Noto Emoji",
+      "glyph_sets": [
+        "common_marketing_emoji"
+      ],
+      "source_url": "https://raw.githubusercontent.com/google/fonts/2f6daa88e1e71320a6fe71cc91ecbfc018928737/ofl/notoemoji/NotoEmoji%5Bwght%5D.ttf",
+      "source_revision": "2f6daa88e1e71320a6fe71cc91ecbfc018928737",
+      "commercial_use": true,
+      "modification": true,
+      "redistribution": true,
+      "attribution": "",
+      "ffmpeg_filters": [
+        "ass"
+      ],
+      "style_tags": [
+        "emoji",
+        "symbol",
+        "marketing"
+      ],
+      "compatibility_tags": [
+        "portrait",
+        "landscape",
+        "spanish",
+        "english"
+      ],
+      "fallback_id": "font.caption.core",
+      "reviewed_at": "2026-07-21",
+      "review_note": "Pinned Google Fonts file and matching family license reviewed for bundled commercial marketing use.",
+      "config": {
+        "font_family": "Noto Emoji"
+      }
+    },
+    {
+      "id": "transition.hard-cut",
+      "kind": "transition",
+      "version": "1.0.0",
+      "label": "Hard Cut",
+      "required": true,
+      "license": "Apache-2.0",
+      "license_path": "licenses/Apache-2.0.txt",
+      "license_sha256": "25d0c3c01beb2aa534ce986c0ac86e91f8a34864baf497f84d025074e74b8247",
+      "sha256": "b5742110750f4cb94f2c75e2a24b304050bf0b27808e92f3b0b42beafdd9b112",
+      "source_url": "https://github.com/loldlm1/FireRed-OpenStoryline",
+      "source_revision": "creative-catalog-v1",
+      "commercial_use": true,
+      "modification": true,
+      "redistribution": true,
+      "attribution": "",
+      "ffmpeg_filters": [],
+      "style_tags": [
+        "transition",
+        "safe"
+      ],
+      "compatibility_tags": [
+        "portrait",
+        "landscape"
+      ],
+      "fallback_id": "",
+      "reviewed_at": "2026-07-21",
+      "review_note": "Project-native deterministic FFmpeg recipe; no downloaded template or runtime asset.",
+      "config": {
+        "operation": "hard_cut",
+        "duration_ms": 0
+      }
+    },
+    {
+      "id": "transition.fade-black",
+      "kind": "transition",
+      "version": "1.0.0",
+      "label": "Fade Through Black",
+      "required": true,
+      "license": "Apache-2.0",
+      "license_path": "licenses/Apache-2.0.txt",
+      "license_sha256": "25d0c3c01beb2aa534ce986c0ac86e91f8a34864baf497f84d025074e74b8247",
+      "sha256": "05446c665e45b27fb49815ccc502f76ca5962f49c7dca7fb19883e6fdab6d335",
+      "source_url": "https://github.com/loldlm1/FireRed-OpenStoryline",
+      "source_revision": "creative-catalog-v1",
+      "commercial_use": true,
+      "modification": true,
+      "redistribution": true,
+      "attribution": "",
+      "ffmpeg_filters": [
+        "fade"
+      ],
+      "style_tags": [
+        "transition",
+        "safe"
+      ],
+      "compatibility_tags": [
+        "portrait",
+        "landscape"
+      ],
+      "fallback_id": "transition.hard-cut",
+      "reviewed_at": "2026-07-21",
+      "review_note": "Project-native deterministic FFmpeg recipe; no downloaded template or runtime asset.",
+      "config": {
+        "operation": "fade",
+        "duration_ms": 220
+      }
+    },
+    {
+      "id": "transition.fade-white",
+      "kind": "transition",
+      "version": "1.0.0",
+      "label": "Fade Through White",
+      "required": true,
+      "license": "Apache-2.0",
+      "license_path": "licenses/Apache-2.0.txt",
+      "license_sha256": "25d0c3c01beb2aa534ce986c0ac86e91f8a34864baf497f84d025074e74b8247",
+      "sha256": "05446c665e45b27fb49815ccc502f76ca5962f49c7dca7fb19883e6fdab6d335",
+      "source_url": "https://github.com/loldlm1/FireRed-OpenStoryline",
+      "source_revision": "creative-catalog-v1",
+      "commercial_use": true,
+      "modification": true,
+      "redistribution": true,
+      "attribution": "",
+      "ffmpeg_filters": [
+        "fade"
+      ],
+      "style_tags": [
+        "transition",
+        "safe"
+      ],
+      "compatibility_tags": [
+        "portrait",
+        "landscape"
+      ],
+      "fallback_id": "transition.fade-black",
+      "reviewed_at": "2026-07-21",
+      "review_note": "Project-native deterministic FFmpeg recipe; no downloaded template or runtime asset.",
+      "config": {
+        "operation": "fade",
+        "duration_ms": 220
+      }
+    },
+    {
+      "id": "transition.crossfade",
+      "kind": "transition",
+      "version": "1.0.0",
+      "label": "Soft Crossfade",
+      "required": true,
+      "license": "Apache-2.0",
+      "license_path": "licenses/Apache-2.0.txt",
+      "license_sha256": "25d0c3c01beb2aa534ce986c0ac86e91f8a34864baf497f84d025074e74b8247",
+      "sha256": "05446c665e45b27fb49815ccc502f76ca5962f49c7dca7fb19883e6fdab6d335",
+      "source_url": "https://github.com/loldlm1/FireRed-OpenStoryline",
+      "source_revision": "creative-catalog-v1",
+      "commercial_use": true,
+      "modification": true,
+      "redistribution": true,
+      "attribution": "",
+      "ffmpeg_filters": [
+        "xfade"
+      ],
+      "style_tags": [
+        "transition",
+        "safe"
+      ],
+      "compatibility_tags": [
+        "portrait",
+        "landscape"
+      ],
+      "fallback_id": "transition.fade-black",
+      "reviewed_at": "2026-07-21",
+      "review_note": "Project-native deterministic FFmpeg recipe; no downloaded template or runtime asset.",
+      "config": {
+        "operation": "fade",
+        "duration_ms": 220
+      }
+    },
+    {
+      "id": "transition.wipe-left",
+      "kind": "transition",
+      "version": "1.0.0",
+      "label": "Wipe Left",
+      "required": false,
+      "license": "Apache-2.0",
+      "license_path": "licenses/Apache-2.0.txt",
+      "license_sha256": "25d0c3c01beb2aa534ce986c0ac86e91f8a34864baf497f84d025074e74b8247",
+      "sha256": "926ed0fa64b32caa2a1de0a433cfcccc5f14cf10f1ece8c9c24a1b6b74a2c01d",
+      "source_url": "https://github.com/loldlm1/FireRed-OpenStoryline",
+      "source_revision": "creative-catalog-v1",
+      "commercial_use": true,
+      "modification": true,
+      "redistribution": true,
+      "attribution": "",
+      "ffmpeg_filters": [
+        "xfade"
+      ],
+      "style_tags": [
+        "transition",
+        "energetic"
+      ],
+      "compatibility_tags": [
+        "portrait",
+        "landscape"
+      ],
+      "fallback_id": "transition.crossfade",
+      "reviewed_at": "2026-07-21",
+      "review_note": "Project-native deterministic FFmpeg recipe; no downloaded template or runtime asset.",
+      "config": {
+        "operation": "wipeleft",
+        "duration_ms": 220
+      }
+    },
+    {
+      "id": "transition.wipe-right",
+      "kind": "transition",
+      "version": "1.0.0",
+      "label": "Wipe Right",
+      "required": false,
+      "license": "Apache-2.0",
+      "license_path": "licenses/Apache-2.0.txt",
+      "license_sha256": "25d0c3c01beb2aa534ce986c0ac86e91f8a34864baf497f84d025074e74b8247",
+      "sha256": "5dd3e0a0a358b7ef0e15e7641c4d99d571a87c414b20e54f8a60e84459818ce1",
+      "source_url": "https://github.com/loldlm1/FireRed-OpenStoryline",
+      "source_revision": "creative-catalog-v1",
+      "commercial_use": true,
+      "modification": true,
+      "redistribution": true,
+      "attribution": "",
+      "ffmpeg_filters": [
+        "xfade"
+      ],
+      "style_tags": [
+        "transition",
+        "energetic"
+      ],
+      "compatibility_tags": [
+        "portrait",
+        "landscape"
+      ],
+      "fallback_id": "transition.crossfade",
+      "reviewed_at": "2026-07-21",
+      "review_note": "Project-native deterministic FFmpeg recipe; no downloaded template or runtime asset.",
+      "config": {
+        "operation": "wiperight",
+        "duration_ms": 220
+      }
+    },
+    {
+      "id": "transition.slide-left",
+      "kind": "transition",
+      "version": "1.0.0",
+      "label": "Slide Left",
+      "required": false,
+      "license": "Apache-2.0",
+      "license_path": "licenses/Apache-2.0.txt",
+      "license_sha256": "25d0c3c01beb2aa534ce986c0ac86e91f8a34864baf497f84d025074e74b8247",
+      "sha256": "830ebdd010b17869c02509d954c674f0460edb2b5e5b5f1578b80dfa0d5d0bce",
+      "source_url": "https://github.com/loldlm1/FireRed-OpenStoryline",
+      "source_revision": "creative-catalog-v1",
+      "commercial_use": true,
+      "modification": true,
+      "redistribution": true,
+      "attribution": "",
+      "ffmpeg_filters": [
+        "xfade"
+      ],
+      "style_tags": [
+        "transition",
+        "energetic"
+      ],
+      "compatibility_tags": [
+        "portrait",
+        "landscape"
+      ],
+      "fallback_id": "transition.crossfade",
+      "reviewed_at": "2026-07-21",
+      "review_note": "Project-native deterministic FFmpeg recipe; no downloaded template or runtime asset.",
+      "config": {
+        "operation": "slideleft",
+        "duration_ms": 220
+      }
+    },
+    {
+      "id": "transition.slide-right",
+      "kind": "transition",
+      "version": "1.0.0",
+      "label": "Slide Right",
+      "required": false,
+      "license": "Apache-2.0",
+      "license_path": "licenses/Apache-2.0.txt",
+      "license_sha256": "25d0c3c01beb2aa534ce986c0ac86e91f8a34864baf497f84d025074e74b8247",
+      "sha256": "e8df95620b10b2c8e07a527ef04586d6b38a2f6e76e13bf0a5d3d09d5fe3ed75",
+      "source_url": "https://github.com/loldlm1/FireRed-OpenStoryline",
+      "source_revision": "creative-catalog-v1",
+      "commercial_use": true,
+      "modification": true,
+      "redistribution": true,
+      "attribution": "",
+      "ffmpeg_filters": [
+        "xfade"
+      ],
+      "style_tags": [
+        "transition",
+        "energetic"
+      ],
+      "compatibility_tags": [
+        "portrait",
+        "landscape"
+      ],
+      "fallback_id": "transition.crossfade",
+      "reviewed_at": "2026-07-21",
+      "review_note": "Project-native deterministic FFmpeg recipe; no downloaded template or runtime asset.",
+      "config": {
+        "operation": "slideright",
+        "duration_ms": 220
+      }
+    },
+    {
+      "id": "transition.circle-open",
+      "kind": "transition",
+      "version": "1.0.0",
+      "label": "Circle Open",
+      "required": false,
+      "license": "Apache-2.0",
+      "license_path": "licenses/Apache-2.0.txt",
+      "license_sha256": "25d0c3c01beb2aa534ce986c0ac86e91f8a34864baf497f84d025074e74b8247",
+      "sha256": "aa23ff1a5d350b97fe4df3e9de48b06bb085283cacafb56a454db2d0cf91a39a",
+      "source_url": "https://github.com/loldlm1/FireRed-OpenStoryline",
+      "source_revision": "creative-catalog-v1",
+      "commercial_use": true,
+      "modification": true,
+      "redistribution": true,
+      "attribution": "",
+      "ffmpeg_filters": [
+        "xfade"
+      ],
+      "style_tags": [
+        "transition",
+        "energetic"
+      ],
+      "compatibility_tags": [
+        "portrait",
+        "landscape"
+      ],
+      "fallback_id": "transition.crossfade",
+      "reviewed_at": "2026-07-21",
+      "review_note": "Project-native deterministic FFmpeg recipe; no downloaded template or runtime asset.",
+      "config": {
+        "operation": "circleopen",
+        "duration_ms": 220
+      }
+    },
+    {
+      "id": "transition.dissolve",
+      "kind": "transition",
+      "version": "1.0.0",
+      "label": "Dissolve",
+      "required": false,
+      "license": "Apache-2.0",
+      "license_path": "licenses/Apache-2.0.txt",
+      "license_sha256": "25d0c3c01beb2aa534ce986c0ac86e91f8a34864baf497f84d025074e74b8247",
+      "sha256": "4ad61b73008ab224f6fcd0daf65db8fa37eb245d5773a55e5ad5a4cf144c4e45",
+      "source_url": "https://github.com/loldlm1/FireRed-OpenStoryline",
+      "source_revision": "creative-catalog-v1",
+      "commercial_use": true,
+      "modification": true,
+      "redistribution": true,
+      "attribution": "",
+      "ffmpeg_filters": [
+        "xfade"
+      ],
+      "style_tags": [
+        "transition",
+        "energetic"
+      ],
+      "compatibility_tags": [
+        "portrait",
+        "landscape"
+      ],
+      "fallback_id": "transition.crossfade",
+      "reviewed_at": "2026-07-21",
+      "review_note": "Project-native deterministic FFmpeg recipe; no downloaded template or runtime asset.",
+      "config": {
+        "operation": "dissolve",
+        "duration_ms": 220
+      }
+    },
+    {
+      "id": "color.clean-contrast",
+      "kind": "color_treatment",
+      "version": "1.0.0",
+      "label": "Clean Contrast",
+      "required": true,
+      "license": "Apache-2.0",
+      "license_path": "licenses/Apache-2.0.txt",
+      "license_sha256": "25d0c3c01beb2aa534ce986c0ac86e91f8a34864baf497f84d025074e74b8247",
+      "sha256": "e08b98c6cd8c79ceb42f7c12d16763b1926ef6e93377cbcbd2dc6a8153ce30db",
+      "source_url": "https://github.com/loldlm1/FireRed-OpenStoryline",
+      "source_revision": "creative-catalog-v1",
+      "commercial_use": true,
+      "modification": true,
+      "redistribution": true,
+      "attribution": "",
+      "ffmpeg_filters": [
+        "eq"
+      ],
+      "style_tags": [
+        "clean",
+        "product"
+      ],
+      "compatibility_tags": [
+        "portrait",
+        "landscape"
+      ],
+      "fallback_id": "",
+      "reviewed_at": "2026-07-21",
+      "review_note": "Project-native deterministic FFmpeg recipe; no downloaded template or runtime asset.",
+      "config": {
+        "filter": "eq",
+        "contrast": 1.06,
+        "saturation": 1.02
+      }
+    },
+    {
+      "id": "color.warm-launch",
+      "kind": "color_treatment",
+      "version": "1.0.0",
+      "label": "Warm Launch",
+      "required": false,
+      "license": "Apache-2.0",
+      "license_path": "licenses/Apache-2.0.txt",
+      "license_sha256": "25d0c3c01beb2aa534ce986c0ac86e91f8a34864baf497f84d025074e74b8247",
+      "sha256": "bc900158f06cee4a889ad56cadf8f21f9c3f36e19a36f4d6948908f8249814b1",
+      "source_url": "https://github.com/loldlm1/FireRed-OpenStoryline",
+      "source_revision": "creative-catalog-v1",
+      "commercial_use": true,
+      "modification": true,
+      "redistribution": true,
+      "attribution": "",
+      "ffmpeg_filters": [
+        "colorbalance"
+      ],
+      "style_tags": [
+        "warm",
+        "launch"
+      ],
+      "compatibility_tags": [
+        "portrait",
+        "landscape"
+      ],
+      "fallback_id": "color.clean-contrast",
+      "reviewed_at": "2026-07-21",
+      "review_note": "Project-native deterministic FFmpeg recipe; no downloaded template or runtime asset.",
+      "config": {
+        "filter": "colorbalance",
+        "rs": 0.04,
+        "bs": -0.025
+      }
+    },
+    {
+      "id": "color.cool-product",
+      "kind": "color_treatment",
+      "version": "1.0.0",
+      "label": "Cool Product",
+      "required": false,
+      "license": "Apache-2.0",
+      "license_path": "licenses/Apache-2.0.txt",
+      "license_sha256": "25d0c3c01beb2aa534ce986c0ac86e91f8a34864baf497f84d025074e74b8247",
+      "sha256": "5c75e668e236e033c3d1019606a1b3df7d7610bd7e27484bef686aa91b7c7815",
+      "source_url": "https://github.com/loldlm1/FireRed-OpenStoryline",
+      "source_revision": "creative-catalog-v1",
+      "commercial_use": true,
+      "modification": true,
+      "redistribution": true,
+      "attribution": "",
+      "ffmpeg_filters": [
+        "colorbalance"
+      ],
+      "style_tags": [
+        "cool",
+        "product"
+      ],
+      "compatibility_tags": [
+        "portrait",
+        "landscape"
+      ],
+      "fallback_id": "color.clean-contrast",
+      "reviewed_at": "2026-07-21",
+      "review_note": "Project-native deterministic FFmpeg recipe; no downloaded template or runtime asset.",
+      "config": {
+        "filter": "colorbalance",
+        "rs": -0.02,
+        "bs": 0.035
+      }
+    },
+    {
+      "id": "color.cinematic-soft",
+      "kind": "color_treatment",
+      "version": "1.0.0",
+      "label": "Cinematic Soft",
+      "required": false,
+      "license": "Apache-2.0",
+      "license_path": "licenses/Apache-2.0.txt",
+      "license_sha256": "25d0c3c01beb2aa534ce986c0ac86e91f8a34864baf497f84d025074e74b8247",
+      "sha256": "1698f1d4bfa18439e00ecc806df7547773d7f8c196441513c29f2c684518a4da",
+      "source_url": "https://github.com/loldlm1/FireRed-OpenStoryline",
+      "source_revision": "creative-catalog-v1",
+      "commercial_use": true,
+      "modification": true,
+      "redistribution": true,
+      "attribution": "",
+      "ffmpeg_filters": [
+        "curves"
+      ],
+      "style_tags": [
+        "cinematic",
+        "editorial"
+      ],
+      "compatibility_tags": [
+        "portrait",
+        "landscape"
+      ],
+      "fallback_id": "color.clean-contrast",
+      "reviewed_at": "2026-07-21",
+      "review_note": "Project-native deterministic FFmpeg recipe; no downloaded template or runtime asset.",
+      "config": {
+        "filter": "curves",
+        "preset": "lighter"
+      }
+    },
+    {
+      "id": "color.vivid-social",
+      "kind": "color_treatment",
+      "version": "1.0.0",
+      "label": "Vivid Social",
+      "required": false,
+      "license": "Apache-2.0",
+      "license_path": "licenses/Apache-2.0.txt",
+      "license_sha256": "25d0c3c01beb2aa534ce986c0ac86e91f8a34864baf497f84d025074e74b8247",
+      "sha256": "4865a845102b36eca418f884edb4cd1be19a793d0d4427edc2ba97efa13fbcf9",
+      "source_url": "https://github.com/loldlm1/FireRed-OpenStoryline",
+      "source_revision": "creative-catalog-v1",
+      "commercial_use": true,
+      "modification": true,
+      "redistribution": true,
+      "attribution": "",
+      "ffmpeg_filters": [
+        "eq"
+      ],
+      "style_tags": [
+        "bold",
+        "social"
+      ],
+      "compatibility_tags": [
+        "portrait",
+        "landscape"
+      ],
+      "fallback_id": "color.clean-contrast",
+      "reviewed_at": "2026-07-21",
+      "review_note": "Project-native deterministic FFmpeg recipe; no downloaded template or runtime asset.",
+      "config": {
+        "filter": "eq",
+        "contrast": 1.08,
+        "saturation": 1.12
+      }
+    },
+    {
+      "id": "caption.clean",
+      "kind": "caption_treatment",
+      "version": "1.0.0",
+      "label": "Clean Captions",
+      "required": true,
+      "license": "Apache-2.0",
+      "license_path": "licenses/Apache-2.0.txt",
+      "license_sha256": "25d0c3c01beb2aa534ce986c0ac86e91f8a34864baf497f84d025074e74b8247",
+      "sha256": "956a84fcc38e855ce62385a2bb93444a0cf0cfaa9c4c482e0154a01bb3ddef3e",
+      "source_url": "https://github.com/loldlm1/FireRed-OpenStoryline",
+      "source_revision": "creative-catalog-v1",
+      "commercial_use": true,
+      "modification": true,
+      "redistribution": true,
+      "attribution": "",
+      "ffmpeg_filters": [
+        "ass"
+      ],
+      "style_tags": [
+        "clean",
+        "caption"
+      ],
+      "compatibility_tags": [
+        "portrait",
+        "landscape"
+      ],
+      "fallback_id": "",
+      "reviewed_at": "2026-07-21",
+      "review_note": "Project-native deterministic FFmpeg recipe; no downloaded template or runtime asset.",
+      "config": {
+        "catalog_ids": [
+          "font.caption.core",
+          "font.emoji.monochrome"
+        ],
+        "font_id": "font.caption.core",
+        "foreground": "#FFFFFF",
+        "background": "#111111",
+        "outline": 2,
+        "safe_zone": "footer",
+        "max_lines": 2
+      }
+    },
+    {
+      "id": "caption.bold-hook",
+      "kind": "caption_treatment",
+      "version": "1.0.0",
+      "label": "Bold Hook Captions",
+      "required": false,
+      "license": "Apache-2.0",
+      "license_path": "licenses/Apache-2.0.txt",
+      "license_sha256": "25d0c3c01beb2aa534ce986c0ac86e91f8a34864baf497f84d025074e74b8247",
+      "sha256": "dbada0f395d5bbcb2618267b499e552033b14e669571d27d89fbcdf1d27d3a10",
+      "source_url": "https://github.com/loldlm1/FireRed-OpenStoryline",
+      "source_revision": "creative-catalog-v1",
+      "commercial_use": true,
+      "modification": true,
+      "redistribution": true,
+      "attribution": "",
+      "ffmpeg_filters": [
+        "ass"
+      ],
+      "style_tags": [
+        "bold",
+        "hook"
+      ],
+      "compatibility_tags": [
+        "portrait",
+        "landscape"
+      ],
+      "fallback_id": "caption.clean",
+      "reviewed_at": "2026-07-21",
+      "review_note": "Project-native deterministic FFmpeg recipe; no downloaded template or runtime asset.",
+      "config": {
+        "catalog_ids": [
+          "font.hook.archivo-black",
+          "font.emoji.monochrome"
+        ],
+        "font_id": "font.hook.archivo-black",
+        "foreground": "#FFFFFF",
+        "background": "#D93A2F",
+        "outline": 3,
+        "safe_zone": "footer",
+        "max_lines": 2
+      }
+    },
+    {
+      "id": "caption.compact",
+      "kind": "caption_treatment",
+      "version": "1.0.0",
+      "label": "Compact Headlines",
+      "required": false,
+      "license": "Apache-2.0",
+      "license_path": "licenses/Apache-2.0.txt",
+      "license_sha256": "25d0c3c01beb2aa534ce986c0ac86e91f8a34864baf497f84d025074e74b8247",
+      "sha256": "444c12fd2d2bb04af769a7da2311fd10494304b4bc2a3a454ca7c60e741462ae",
+      "source_url": "https://github.com/loldlm1/FireRed-OpenStoryline",
+      "source_revision": "creative-catalog-v1",
+      "commercial_use": true,
+      "modification": true,
+      "redistribution": true,
+      "attribution": "",
+      "ffmpeg_filters": [
+        "ass"
+      ],
+      "style_tags": [
+        "compact",
+        "launch"
+      ],
+      "compatibility_tags": [
+        "portrait",
+        "landscape"
+      ],
+      "fallback_id": "caption.clean",
+      "reviewed_at": "2026-07-21",
+      "review_note": "Project-native deterministic FFmpeg recipe; no downloaded template or runtime asset.",
+      "config": {
+        "catalog_ids": [
+          "font.headline.barlow-condensed",
+          "font.emoji.monochrome"
+        ],
+        "font_id": "font.headline.barlow-condensed",
+        "foreground": "#FFFFFF",
+        "background": "#111111",
+        "outline": 2,
+        "safe_zone": "footer",
+        "max_lines": 2
+      }
+    },
+    {
+      "id": "caption.editorial",
+      "kind": "caption_treatment",
+      "version": "1.0.0",
+      "label": "Editorial Accent",
+      "required": false,
+      "license": "Apache-2.0",
+      "license_path": "licenses/Apache-2.0.txt",
+      "license_sha256": "25d0c3c01beb2aa534ce986c0ac86e91f8a34864baf497f84d025074e74b8247",
+      "sha256": "e038df55fb60f8aefed6871403d35c264ee6f374a66ca0edf677e9ba0efa4955",
+      "source_url": "https://github.com/loldlm1/FireRed-OpenStoryline",
+      "source_revision": "creative-catalog-v1",
+      "commercial_use": true,
+      "modification": true,
+      "redistribution": true,
+      "attribution": "",
+      "ffmpeg_filters": [
+        "ass"
+      ],
+      "style_tags": [
+        "editorial",
+        "cinematic"
+      ],
+      "compatibility_tags": [
+        "portrait",
+        "landscape"
+      ],
+      "fallback_id": "caption.clean",
+      "reviewed_at": "2026-07-21",
+      "review_note": "Project-native deterministic FFmpeg recipe; no downloaded template or runtime asset.",
+      "config": {
+        "catalog_ids": [
+          "font.editorial.dm-serif",
+          "font.emoji.monochrome"
+        ],
+        "font_id": "font.editorial.dm-serif",
+        "foreground": "#FFF8E7",
+        "background": "#111111",
+        "outline": 2,
+        "safe_zone": "footer",
+        "max_lines": 2
+      }
+    },
+    {
+      "id": "caption.high-contrast",
+      "kind": "caption_treatment",
+      "version": "1.0.0",
+      "label": "High Contrast Captions",
+      "required": false,
+      "license": "Apache-2.0",
+      "license_path": "licenses/Apache-2.0.txt",
+      "license_sha256": "25d0c3c01beb2aa534ce986c0ac86e91f8a34864baf497f84d025074e74b8247",
+      "sha256": "007516087eb94c978673fcd942eac1ac4ad8e39254c5ba2abf8ba413c1c376fd",
+      "source_url": "https://github.com/loldlm1/FireRed-OpenStoryline",
+      "source_revision": "creative-catalog-v1",
+      "commercial_use": true,
+      "modification": true,
+      "redistribution": true,
+      "attribution": "",
+      "ffmpeg_filters": [
+        "ass"
+      ],
+      "style_tags": [
+        "accessible",
+        "contrast"
+      ],
+      "compatibility_tags": [
+        "portrait",
+        "landscape"
+      ],
+      "fallback_id": "caption.clean",
+      "reviewed_at": "2026-07-21",
+      "review_note": "Project-native deterministic FFmpeg recipe; no downloaded template or runtime asset.",
+      "config": {
+        "catalog_ids": [
+          "font.caption.core",
+          "font.emoji.monochrome"
+        ],
+        "font_id": "font.caption.core",
+        "foreground": "#FFFFFF",
+        "background": "#000000",
+        "outline": 4,
+        "safe_zone": "footer",
+        "max_lines": 2
+      }
+    },
+    {
+      "id": "recipe.blur-background",
+      "kind": "recipe",
+      "version": "1.0.0",
+      "label": "Content-Preserving Blur Background",
+      "required": true,
+      "license": "Apache-2.0",
+      "license_path": "licenses/Apache-2.0.txt",
+      "license_sha256": "25d0c3c01beb2aa534ce986c0ac86e91f8a34864baf497f84d025074e74b8247",
+      "sha256": "9f614aeb11d4fd02353d728ff6f8731ad657f264a3aaab6c3c6ab4182ee4a760",
+      "source_url": "https://github.com/loldlm1/FireRed-OpenStoryline",
+      "source_revision": "creative-catalog-v1",
+      "commercial_use": true,
+      "modification": true,
+      "redistribution": true,
+      "attribution": "",
+      "ffmpeg_filters": [
+        "scale",
+        "gblur",
+        "overlay"
+      ],
+      "style_tags": [
+        "safe",
+        "portrait"
+      ],
+      "compatibility_tags": [
+        "portrait",
+        "landscape"
+      ],
+      "fallback_id": "",
+      "reviewed_at": "2026-07-21",
+      "review_note": "Project-native deterministic FFmpeg recipe; no downloaded template or runtime asset.",
+      "config": {
+        "operation": "blur_background",
+        "strength": 18
+      }
+    },
+    {
+      "id": "recipe.punch-in",
+      "kind": "recipe",
+      "version": "1.0.0",
+      "label": "Bounded Punch In",
+      "required": false,
+      "license": "Apache-2.0",
+      "license_path": "licenses/Apache-2.0.txt",
+      "license_sha256": "25d0c3c01beb2aa534ce986c0ac86e91f8a34864baf497f84d025074e74b8247",
+      "sha256": "554ccc44c7094b99d690c5260eae84ebf867e2352b139e25c3fbf2512d8b5df7",
+      "source_url": "https://github.com/loldlm1/FireRed-OpenStoryline",
+      "source_revision": "creative-catalog-v1",
+      "commercial_use": true,
+      "modification": true,
+      "redistribution": true,
+      "attribution": "",
+      "ffmpeg_filters": [
+        "scale",
+        "crop"
+      ],
+      "style_tags": [
+        "energetic",
+        "hook"
+      ],
+      "compatibility_tags": [
+        "portrait",
+        "landscape"
+      ],
+      "fallback_id": "recipe.blur-background",
+      "reviewed_at": "2026-07-21",
+      "review_note": "Project-native deterministic FFmpeg recipe; no downloaded template or runtime asset.",
+      "config": {
+        "operation": "punch_in",
+        "scale": 1.08,
+        "duration_ms": 420
+      }
+    },
+    {
+      "id": "recipe.slow-zoom",
+      "kind": "recipe",
+      "version": "1.0.0",
+      "label": "Slow Product Zoom",
+      "required": false,
+      "license": "Apache-2.0",
+      "license_path": "licenses/Apache-2.0.txt",
+      "license_sha256": "25d0c3c01beb2aa534ce986c0ac86e91f8a34864baf497f84d025074e74b8247",
+      "sha256": "c31bf7929d45e10d199ca8af89110192c2ca8f6ce65d5a02e6160641f088df6e",
+      "source_url": "https://github.com/loldlm1/FireRed-OpenStoryline",
+      "source_revision": "creative-catalog-v1",
+      "commercial_use": true,
+      "modification": true,
+      "redistribution": true,
+      "attribution": "",
+      "ffmpeg_filters": [
+        "zoompan"
+      ],
+      "style_tags": [
+        "product",
+        "motion"
+      ],
+      "compatibility_tags": [
+        "portrait",
+        "landscape"
+      ],
+      "fallback_id": "recipe.blur-background",
+      "reviewed_at": "2026-07-21",
+      "review_note": "Project-native deterministic FFmpeg recipe; no downloaded template or runtime asset.",
+      "config": {
+        "operation": "slow_zoom",
+        "scale": 1.05
+      }
+    },
+    {
+      "id": "recipe.vignette",
+      "kind": "recipe",
+      "version": "1.0.0",
+      "label": "Restrained Vignette",
+      "required": false,
+      "license": "Apache-2.0",
+      "license_path": "licenses/Apache-2.0.txt",
+      "license_sha256": "25d0c3c01beb2aa534ce986c0ac86e91f8a34864baf497f84d025074e74b8247",
+      "sha256": "568598a867b960584e4616af29b3338d8b9827beaf5f173908830e313ce4c772",
+      "source_url": "https://github.com/loldlm1/FireRed-OpenStoryline",
+      "source_revision": "creative-catalog-v1",
+      "commercial_use": true,
+      "modification": true,
+      "redistribution": true,
+      "attribution": "",
+      "ffmpeg_filters": [
+        "vignette"
+      ],
+      "style_tags": [
+        "cinematic",
+        "editorial"
+      ],
+      "compatibility_tags": [
+        "portrait",
+        "landscape"
+      ],
+      "fallback_id": "recipe.blur-background",
+      "reviewed_at": "2026-07-21",
+      "review_note": "Project-native deterministic FFmpeg recipe; no downloaded template or runtime asset.",
+      "config": {
+        "operation": "vignette",
+        "angle": 0.45
+      }
+    },
+    {
+      "id": "recipe.highlight-bar",
+      "kind": "recipe",
+      "version": "1.0.0",
+      "label": "Caption Highlight Bar",
+      "required": false,
+      "license": "Apache-2.0",
+      "license_path": "licenses/Apache-2.0.txt",
+      "license_sha256": "25d0c3c01beb2aa534ce986c0ac86e91f8a34864baf497f84d025074e74b8247",
+      "sha256": "cf786a03e0dac143d8e0fd261b86a2fe87355179105dbabba412059578886656",
+      "source_url": "https://github.com/loldlm1/FireRed-OpenStoryline",
+      "source_revision": "creative-catalog-v1",
+      "commercial_use": true,
+      "modification": true,
+      "redistribution": true,
+      "attribution": "",
+      "ffmpeg_filters": [
+        "drawtext"
+      ],
+      "style_tags": [
+        "caption",
+        "bold"
+      ],
+      "compatibility_tags": [
+        "portrait",
+        "landscape"
+      ],
+      "fallback_id": "recipe.blur-background",
+      "reviewed_at": "2026-07-21",
+      "review_note": "Project-native deterministic FFmpeg recipe; no downloaded template or runtime asset.",
+      "config": {
+        "operation": "highlight_bar",
+        "opacity": 0.82
+      }
+    },
+    {
+      "id": "recipe.source-cutaway",
+      "kind": "recipe",
+      "version": "1.0.0",
+      "label": "Source-Native Cutaway",
+      "required": false,
+      "license": "Apache-2.0",
+      "license_path": "licenses/Apache-2.0.txt",
+      "license_sha256": "25d0c3c01beb2aa534ce986c0ac86e91f8a34864baf497f84d025074e74b8247",
+      "sha256": "50f40b48a16c14d2d99b11eac292a621f22b659c6aab45784bb4e7cfe24b1099",
+      "source_url": "https://github.com/loldlm1/FireRed-OpenStoryline",
+      "source_revision": "creative-catalog-v1",
+      "commercial_use": true,
+      "modification": true,
+      "redistribution": true,
+      "attribution": "",
+      "ffmpeg_filters": [
+        "trim",
+        "setpts",
+        "concat"
+      ],
+      "style_tags": [
+        "source",
+        "safe"
+      ],
+      "compatibility_tags": [
+        "portrait",
+        "landscape"
+      ],
+      "fallback_id": "recipe.blur-background",
+      "reviewed_at": "2026-07-21",
+      "review_note": "Project-native deterministic FFmpeg recipe; no downloaded template or runtime asset.",
+      "config": {
+        "operation": "source_cutaway",
+        "maximum_ms": 1200
+      }
+    },
+    {
+      "id": "style.bold-social",
+      "kind": "style_profile",
+      "version": "1.0.0",
+      "label": "Bold Social",
+      "required": false,
+      "license": "Apache-2.0",
+      "license_path": "licenses/Apache-2.0.txt",
+      "license_sha256": "25d0c3c01beb2aa534ce986c0ac86e91f8a34864baf497f84d025074e74b8247",
+      "sha256": "077d621c089cffdca6f86a76b3366e7cd330cf3185035474a7e52bb238badf2c",
+      "source_url": "https://github.com/loldlm1/FireRed-OpenStoryline",
+      "source_revision": "creative-catalog-v1",
+      "commercial_use": true,
+      "modification": true,
+      "redistribution": true,
+      "attribution": "",
+      "ffmpeg_filters": [],
+      "style_tags": [
+        "social",
+        "bold",
+        "marketing"
+      ],
+      "compatibility_tags": [
+        "portrait",
+        "landscape"
+      ],
+      "fallback_id": "style.clean-product",
+      "reviewed_at": "2026-07-21",
+      "review_note": "Project-native deterministic FFmpeg recipe; no downloaded template or runtime asset.",
+      "config": {
+        "catalog_ids": [
+          "font.hook.archivo-black",
+          "caption.bold-hook",
+          "transition.slide-left",
+          "color.vivid-social",
+          "recipe.punch-in"
+        ],
+        "aspect_ratios": [
+          "9:16",
+          "1:1",
+          "16:9"
+        ],
+        "niches": [
+          "marketing",
+          "product",
+          "service"
+        ],
+        "motion_intensity": 3,
+        "maximum_effect_density": 3,
+        "maximum_overlay_count": 2,
+        "trend_rationale": "Current short-form hierarchy using readable type, restrained native motion, and deterministic source-first treatments."
+      }
+    },
+    {
+      "id": "style.clean-product",
+      "kind": "style_profile",
+      "version": "1.0.0",
+      "label": "Clean Product",
+      "required": true,
+      "license": "Apache-2.0",
+      "license_path": "licenses/Apache-2.0.txt",
+      "license_sha256": "25d0c3c01beb2aa534ce986c0ac86e91f8a34864baf497f84d025074e74b8247",
+      "sha256": "ec262eb4fcb94350b58d73f408137e5247d0285192484050d525b731095ac256",
+      "source_url": "https://github.com/loldlm1/FireRed-OpenStoryline",
+      "source_revision": "creative-catalog-v1",
+      "commercial_use": true,
+      "modification": true,
+      "redistribution": true,
+      "attribution": "",
+      "ffmpeg_filters": [],
+      "style_tags": [
+        "product",
+        "clean",
+        "marketing"
+      ],
+      "compatibility_tags": [
+        "portrait",
+        "landscape"
+      ],
+      "fallback_id": "",
+      "reviewed_at": "2026-07-21",
+      "review_note": "Project-native deterministic FFmpeg recipe; no downloaded template or runtime asset.",
+      "config": {
+        "catalog_ids": [
+          "font.caption.core",
+          "caption.clean",
+          "transition.crossfade",
+          "color.clean-contrast",
+          "recipe.slow-zoom"
+        ],
+        "aspect_ratios": [
+          "9:16",
+          "1:1",
+          "16:9"
+        ],
+        "niches": [
+          "marketing",
+          "product",
+          "service"
+        ],
+        "motion_intensity": 2,
+        "maximum_effect_density": 2,
+        "maximum_overlay_count": 2,
+        "trend_rationale": "Current short-form hierarchy using readable type, restrained native motion, and deterministic source-first treatments."
+      }
+    },
+    {
+      "id": "style.energetic-launch",
+      "kind": "style_profile",
+      "version": "1.0.0",
+      "label": "Energetic Launch",
+      "required": false,
+      "license": "Apache-2.0",
+      "license_path": "licenses/Apache-2.0.txt",
+      "license_sha256": "25d0c3c01beb2aa534ce986c0ac86e91f8a34864baf497f84d025074e74b8247",
+      "sha256": "39ecb0af634d68b06138b1762f684bcf31840c216fa52fc343d81e2400ca86e9",
+      "source_url": "https://github.com/loldlm1/FireRed-OpenStoryline",
+      "source_revision": "creative-catalog-v1",
+      "commercial_use": true,
+      "modification": true,
+      "redistribution": true,
+      "attribution": "",
+      "ffmpeg_filters": [],
+      "style_tags": [
+        "launch",
+        "energetic",
+        "marketing"
+      ],
+      "compatibility_tags": [
+        "portrait",
+        "landscape"
+      ],
+      "fallback_id": "style.clean-product",
+      "reviewed_at": "2026-07-21",
+      "review_note": "Project-native deterministic FFmpeg recipe; no downloaded template or runtime asset.",
+      "config": {
+        "catalog_ids": [
+          "font.headline.barlow-condensed",
+          "caption.compact",
+          "transition.wipe-left",
+          "color.warm-launch",
+          "recipe.highlight-bar"
+        ],
+        "aspect_ratios": [
+          "9:16",
+          "1:1",
+          "16:9"
+        ],
+        "niches": [
+          "marketing",
+          "product",
+          "service"
+        ],
+        "motion_intensity": 4,
+        "maximum_effect_density": 4,
+        "maximum_overlay_count": 2,
+        "trend_rationale": "Current short-form hierarchy using readable type, restrained native motion, and deterministic source-first treatments."
+      }
+    },
+    {
+      "id": "style.restrained-cinematic",
+      "kind": "style_profile",
+      "version": "1.0.0",
+      "label": "Restrained Cinematic",
+      "required": false,
+      "license": "Apache-2.0",
+      "license_path": "licenses/Apache-2.0.txt",
+      "license_sha256": "25d0c3c01beb2aa534ce986c0ac86e91f8a34864baf497f84d025074e74b8247",
+      "sha256": "fdb74c251c1ffd0248270ab78476bdaba75d340ce3ebf37bd65b6a0826d05587",
+      "source_url": "https://github.com/loldlm1/FireRed-OpenStoryline",
+      "source_revision": "creative-catalog-v1",
+      "commercial_use": true,
+      "modification": true,
+      "redistribution": true,
+      "attribution": "",
+      "ffmpeg_filters": [],
+      "style_tags": [
+        "cinematic",
+        "editorial",
+        "premium"
+      ],
+      "compatibility_tags": [
+        "portrait",
+        "landscape"
+      ],
+      "fallback_id": "style.clean-product",
+      "reviewed_at": "2026-07-21",
+      "review_note": "Project-native deterministic FFmpeg recipe; no downloaded template or runtime asset.",
+      "config": {
+        "catalog_ids": [
+          "font.editorial.dm-serif",
+          "caption.editorial",
+          "transition.fade-black",
+          "color.cinematic-soft",
+          "recipe.vignette"
+        ],
+        "aspect_ratios": [
+          "9:16",
+          "1:1",
+          "16:9"
+        ],
+        "niches": [
+          "marketing",
+          "product",
+          "service"
+        ],
+        "motion_intensity": 2,
+        "maximum_effect_density": 2,
+        "maximum_overlay_count": 2,
+        "trend_rationale": "Current short-form hierarchy using readable type, restrained native motion, and deterministic source-first treatments."
+      }
+    }
+  ]
+}

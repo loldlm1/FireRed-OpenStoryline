@@ -356,6 +356,7 @@ def write_subtitle_artifacts(
     transcript_segments: Sequence[dict[str, Any]],
     width: int,
     height: int,
+    font_family: str = "DejaVu Sans",
 ) -> SubtitleArtifacts:
     destination_path = Path(destination)
     if destination_path.suffix.lower() != ".srt":
@@ -364,7 +365,11 @@ def write_subtitle_artifacts(
         clip=clip,
         transcript_segments=transcript_segments,
     )
-    style = build_subtitle_style(width=width, height=height)
+    style = build_subtitle_style(
+        width=width,
+        height=height,
+        font_family=font_family,
+    )
     if not cues:
         return SubtitleArtifacts(None, None, (), style)
     destination_path.write_text(

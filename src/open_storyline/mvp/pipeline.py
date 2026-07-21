@@ -22,6 +22,7 @@ from open_storyline.mvp.checkpoints import (
     CheckpointStore,
     checkpoint_fingerprint,
 )
+from open_storyline.mvp.catalog import CreativeCatalog
 from open_storyline.mvp.edit_plan import (
     AgenticEditPlanner,
     AgenticArtifactNames,
@@ -238,9 +239,20 @@ def _checkpoint_job_id(value: Any) -> str | None:
 class MVPJobProcessor:
     """Remote-inference pipeline; local work is restricted to deterministic FFmpeg."""
 
-    def __init__(self, config: Settings) -> None:
+    def __init__(
+        self,
+        config: Settings,
+        *,
+        creative_catalog: CreativeCatalog | None = None,
+    ) -> None:
         self.config = config
         self.stt = MistralSTTClient.from_config(config.remote_asr)
+        self.creative_catalog = creative_catalog
+        self.caption_font_family = (
+            creative_catalog.require("font.caption.core").font_family
+            if creative_catalog is not None
+            else "DejaVu Sans"
+        )
 
     async def __call__(self, job_id: str, store: JobStore) -> dict[str, Any]:
         state = await store.load(job_id)
@@ -1510,7 +1522,14 @@ class MVPJobProcessor:
         render_floor = float(
             render_stage.get("progress", STAGES["rendering"].progress)
         )
-        render_settings = render_settings_from_config(self.config.mvp)
+        render_settings = render_settings_from_config(
+            self.config.mvp,
+            caption_font_family=getattr(
+                self,
+                "caption_font_family",
+                "DejaVu Sans",
+            ),
+        )
         loop = asyncio.get_running_loop()
 
         def render_activity(phase: str, current: int, total: int) -> None:

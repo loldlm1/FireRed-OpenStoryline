@@ -97,6 +97,7 @@ class RenderSettings:
     preset: str | None = None
     crf: int | None = None
     timeout: float = 1800.0
+    caption_font_family: str = "DejaVu Sans"
 
     def resolve(self, source_frame_rate: float) -> dict[str, Any]:
         try:
@@ -142,7 +143,11 @@ class RenderSettings:
         }
 
 
-def render_settings_from_config(config: Any) -> RenderSettings:
+def render_settings_from_config(
+    config: Any,
+    *,
+    caption_font_family: str = "DejaVu Sans",
+) -> RenderSettings:
     quality_profile = os.getenv(
         "OPENSTORYLINE_RENDER_QUALITY_PROFILE",
         str(getattr(config, "render_quality_profile", "high")),
@@ -163,6 +168,7 @@ def render_settings_from_config(config: Any) -> RenderSettings:
         height=int(getattr(config, "render_height", 1920)),
         quality_profile=quality_profile,
         fps_cap=fps_cap,
+        caption_font_family=caption_font_family,
     )
     settings.resolve(30.0)
     return settings
@@ -278,6 +284,7 @@ def _write_caption_evidence(
     transcript_segments: Sequence[dict[str, Any]],
     width: int,
     height: int,
+    font_family: str,
 ) -> tuple[SubtitleArtifacts, Path, Path, CaptionFootprintReport]:
     try:
         artifacts = write_subtitle_artifacts(
@@ -286,6 +293,7 @@ def _write_caption_evidence(
             transcript_segments=transcript_segments,
             width=width,
             height=height,
+            font_family=font_family,
         )
         footprint = measure_caption_footprint(
             artifacts,
@@ -365,6 +373,7 @@ class CPUShortRenderer:
             transcript_segments=transcript_segments,
             width=settings.width,
             height=settings.height,
+            font_family=settings.caption_font_family,
         )
         filters = [
             f"scale={settings.width}:{settings.height}:force_original_aspect_ratio=increase",
@@ -479,6 +488,7 @@ class AgenticShortRenderer:
                     transcript_segments=transcript_segments,
                     width=self.settings.width,
                     height=self.settings.height,
+                    font_family=self.settings.caption_font_family,
                 )
                 composition = resolve_clip_composition(
                     clip_plan,
@@ -627,6 +637,7 @@ class AgenticShortRenderer:
                 transcript_segments=transcript_segments,
                 width=settings.width,
                 height=settings.height,
+                font_family=settings.caption_font_family,
             )
             composition: ClipComposition = resolve_clip_composition(
                 clip_plan,
