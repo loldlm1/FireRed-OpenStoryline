@@ -84,7 +84,9 @@ from open_storyline.mvp.render import (
 from open_storyline.mvp.preflight import build_preflight
 from open_storyline.mvp.promotion import (
     build_render_promotion_report,
+    completion_policy,
     enforce_render_promotion,
+    limited_output_promotion_enabled,
     render_promotion_mode,
 )
 from open_storyline.mvp.scene_boundaries import (
@@ -2066,6 +2068,8 @@ class MVPJobProcessor:
                     })
             promotion_report = build_render_promotion_report(
                 mode=promotion_mode,
+                policy=completion_policy(self.config.agentic_editing),
+                limited_output_enabled=limited_output_promotion_enabled(),
                 frame_quality=frame_quality_report,
                 render_qa=render_qa_report,
                 creative_conformance=creative_conformance_report,
@@ -2148,6 +2152,7 @@ class MVPJobProcessor:
             outputs=final_outputs,
             fallback_entries=fallback_entries,
             qa_blocker_codes=(promotion_report or {}).get("blocker_codes") or (),
+            promotion_report=promotion_report,
             fingerprints={
                 "source": source_hash,
                 "prompt": checkpoint_fingerprint({"prompt": state["prompt"]}),

@@ -37,6 +37,7 @@ from open_storyline.mvp.models import (
     VideoJob,
 )
 from open_storyline.mvp.observability import emit_event
+from open_storyline.mvp.outcomes import build_failed_outcome_report
 from open_storyline.mvp.security import sanitize_for_persistence, sanitize_text
 
 
@@ -771,10 +772,36 @@ class JobStore:
         }
         if details is not None:
             error["details"] = sanitize_for_persistence(details)
+        blocker_codes = (
+            details.get("blocker_codes")
+            if isinstance(details, dict) and isinstance(details.get("blocker_codes"), list)
+            else []
+        )
+        technical_blocker_codes = (
+            details.get("technical_blocker_codes")
+            if isinstance(details, dict)
+            and isinstance(details.get("technical_blocker_codes"), list)
+            else []
+        )
+        creative_limitation_codes = (
+            details.get("creative_limitation_codes")
+            if isinstance(details, dict)
+            and isinstance(details.get("creative_limitation_codes"), list)
+            else []
+        )
+        outcome = build_failed_outcome_report(
+            code=code,
+            stage=(await self.load(job_id)).get("stage"),
+            retryable=retryable_error(code),
+            blocker_codes=blocker_codes,
+            technical_blocker_codes=technical_blocker_codes,
+            creative_limitation_codes=creative_limitation_codes,
+        )
         state = await self.update(
             job_id,
             state="failed",
             error=error,
+            outcome=outcome,
             event_type="job_failed",
         )
         failure_path = self.output_dir(job_id) / "failure.json"

@@ -155,9 +155,12 @@ Agentic render candidates also produce bounded `frame_quality_qa.json` and
 ratios, decoded frame counts, bounded blur/blockiness signal summaries, and
 caption-masked aligned SSIM/PSNR samples without retaining sampled frames or
 private paths. `OPENSTORYLINE_RENDER_PROMOTION_MODE=report` preserves completion
-while exposing blocker codes; `enforce` removes the candidate video before it
-can be registered when deterministic geometry, media structure, caption, or
-asset-conformance evidence blocks promotion. `off` is a rollback-only mode.
+while exposing blocker codes. In `enforce`, the default `strict` completion
+policy removes a candidate for any blocker. `baseline_guaranteed` may publish
+creative-only limitations only when
+`OPENSTORYLINE_LIMITED_OUTPUT_PROMOTION_ENABLED=true`; missing or invalid core
+media/QA evidence still blocks. Every report preserves strict and baseline
+decisions for comparison. `off` is a rollback-only mode.
 Optional offline VMAF/XPSNR analysis remains a read-only operator action in the
 separate [quality sidecar](quality-sidecar.md). Its metrics do not change job
 state or promotion decisions. A later run can explicitly reuse only the
@@ -180,6 +183,7 @@ Use bounded JSON or NDJSON output when another agent will inspect the result:
 
 ```bash
 ./bin/kamal-mvp audit list --since 24h --limit 50 --format json
+./bin/kamal-mvp audit outcomes --since 24h --limit 5000 --format json
 ./bin/kamal-mvp audit show JOB_ID --limit 200 --format json
 ./bin/kamal-mvp audit events JOB_ID --limit 200 --format json
 ./bin/kamal-mvp audit documents JOB_ID --limit 200 --format ndjson
@@ -188,7 +192,12 @@ Use bounded JSON or NDJSON output when another agent will inspect the result:
 
 `audit list` also filters by editing session, state, stage, latest verdict,
 error code, media availability, and audit hold. Follow its `next_cursor` for
-the next bounded page. `audit verify` uses FFprobe plus manifest/subtitle checks
+the next bounded page. `audit outcomes` reports classified sample size, playable
+output rate, a 95% Wilson interval, outcome counts, top limitation codes, retry
+success, checkpoint reuse, and time to playable output. It sets `claim_ready`
+only when the lower confidence bound reaches the 99% target with at least 100
+classified attempts; unclassified historical attempts remain explicit.
+`audit verify` uses FFprobe plus manifest/subtitle checks
 to assess decodability, stream metadata, duration/count agreement, cue ordering,
 and the recorded promotion/frame-quality documents. Its verdict confirms
 evidence integrity and structure; it does not claim engagement, semantic

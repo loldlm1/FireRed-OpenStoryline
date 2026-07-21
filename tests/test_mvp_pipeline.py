@@ -724,6 +724,7 @@ class MVPAgenticPipelineTests(unittest.IsolatedAsyncioTestCase):
             processor = object.__new__(MVPJobProcessor)
             processor.config = config("render")
             processor.config.agentic_editing.baseline_fallbacks_enabled = True
+            processor.config.agentic_editing.render_promotion_mode = "off"
             processor.stt = FakeSTT()
             scene_report = build_scene_boundaries(
                 [],
@@ -1091,6 +1092,7 @@ class MVPAgenticPipelineTests(unittest.IsolatedAsyncioTestCase):
             processor = object.__new__(MVPJobProcessor)
             processor.config = config("render", generated_assets=True)
             processor.config.agentic_editing.baseline_fallbacks_enabled = True
+            processor.config.agentic_editing.render_promotion_mode = "off"
             processor.stt = FakeSTT()
             scene_report = build_scene_boundaries(
                 [], source_duration_ms=30_000, threshold=0.35

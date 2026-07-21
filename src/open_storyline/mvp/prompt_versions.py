@@ -41,6 +41,7 @@ from open_storyline.mvp.models import (
     VideoJob,
 )
 from open_storyline.mvp.observability import compact_prior_attempt_quality_feedback
+from open_storyline.mvp.outcomes import outcome_summary
 from open_storyline.mvp.session_media import SessionMediaStore
 
 
@@ -834,6 +835,8 @@ class PromptVersionService:
 
     @staticmethod
     def _run_summary(row: VideoJob) -> dict[str, Any]:
+        result_data = row.result_data if isinstance(row.result_data, dict) else {}
+        request_data = row.request_data if isinstance(row.request_data, dict) else {}
         return {
             "id": row.id,
             "attempt_number": row.attempt_number,
@@ -846,6 +849,8 @@ class PromptVersionService:
                 if isinstance(row.error_data, dict)
                 else None
             ),
+            "outcome": outcome_summary(result_data.get("outcome")),
+            "retry_of_attempt_id": request_data.get("retry_of_attempt_id"),
             "created_at": _iso(row.created_at),
             "completed_at": _iso(row.completed_at),
             "media_expires_at": _iso(row.media_expires_at),

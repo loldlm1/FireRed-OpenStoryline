@@ -34,8 +34,14 @@ from open_storyline.mvp.auth import (
 from open_storyline.mvp.database import Database
 from open_storyline.mvp.jobs import JobManager, JobStore
 from open_storyline.mvp.observability import emit_event, finish_request, start_request
+from open_storyline.mvp.outcomes import retry_ux_enabled
 from open_storyline.mvp.pipeline import MVPJobProcessor
 from open_storyline.mvp.prompt_versions import PromptVersionService
+from open_storyline.mvp.promotion import (
+    completion_policy,
+    limited_output_promotion_enabled,
+    render_promotion_mode,
+)
 from open_storyline.mvp.retention import (
     RetentionScheduler,
     RetentionService,
@@ -89,6 +95,10 @@ def create_app() -> FastAPI:
     @asynccontextmanager
     async def lifespan(app: FastAPI):
         config = load_settings(default_config_path())
+        render_promotion_mode(config.agentic_editing)
+        completion_policy(config.agentic_editing)
+        limited_output_promotion_enabled()
+        retry_ux_enabled()
         creative_catalog = load_creative_catalog()
         database = Database.from_env()
         auth_service = AuthService(database, AuthSettings.from_env())

@@ -174,6 +174,18 @@ class KamalConfigTests(unittest.TestCase):
             config["env"]["clear"]["OPENSTORYLINE_RENDER_PROMOTION_MODE"],
             "report",
         )
+        self.assertEqual(
+            config["env"]["clear"]["OPENSTORYLINE_COMPLETION_POLICY"],
+            "strict",
+        )
+        self.assertIs(
+            config["env"]["clear"]["OPENSTORYLINE_LIMITED_OUTPUT_PROMOTION_ENABLED"],
+            False,
+        )
+        self.assertIs(
+            config["env"]["clear"]["OPENSTORYLINE_RETRY_UX_ENABLED"],
+            False,
+        )
         self.assertIs(config["env"]["clear"]["OPENSTORYLINE_SEMANTIC_QA_ENABLED"], False)
         self.assertEqual(config["env"]["clear"]["OPENSTORYLINE_SEMANTIC_QA_MAX_FRAMES"], 4)
         self.assertEqual(
@@ -212,6 +224,13 @@ class KamalConfigTests(unittest.TestCase):
         self.assertIn("OPENSTORYLINE_RENDER_QUALITY_PROFILE=high", local_env)
         self.assertIn("OPENSTORYLINE_RENDER_PROMOTION_MODE=report", kamal_env)
         self.assertIn("OPENSTORYLINE_RENDER_PROMOTION_MODE=report", local_env)
+        self.assertIn("OPENSTORYLINE_COMPLETION_POLICY=strict", kamal_env)
+        self.assertIn("OPENSTORYLINE_COMPLETION_POLICY=strict", local_env)
+        self.assertIn(
+            "OPENSTORYLINE_LIMITED_OUTPUT_PROMOTION_ENABLED=false",
+            kamal_env,
+        )
+        self.assertIn("OPENSTORYLINE_RETRY_UX_ENABLED=false", kamal_env)
         self.assertIn(
             "OPENSTORYLINE_CREATIVE_CATALOG_PATH=/app/creative_catalog/manifest.json",
             kamal_env,

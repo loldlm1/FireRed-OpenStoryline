@@ -122,6 +122,7 @@ pexels_max_video_duration_seconds = 60
 creative_qa_enabled = true
 creative_qa_strict = true
 render_promotion_mode = "report"
+completion_policy = "strict"
 semantic_qa_enabled = false
 semantic_qa_max_frames = 4
 scene_threshold = 0.35

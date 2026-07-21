@@ -56,9 +56,12 @@ isolated so upstream behavior can continue to be merged into this fork.
 9. Agentic renders remain unregistered candidates while deterministic QA writes
    `render_qa.json`, `frame_quality_qa.json`, `creative_conformance.json`,
    caption-footprint evidence, and `render_promotion.json`. Report mode records
-   objective blockers without changing completion behavior; enforce mode
-   deletes blocked video candidates before artifact registration. Rhythm and
-   semantic findings remain advisory and do not predict retention or virality.
+   objective blockers without changing completion behavior. Enforce mode uses
+   the configured completion policy: `strict` blocks any objective blocker,
+   while the independently enabled `baseline_guaranteed` policy publishes a
+   technically valid output with typed creative limitations and still deletes
+   candidates with technical blockers. Rhythm and semantic findings remain
+   advisory and do not predict retention or virality.
 10. PostgreSQL ingests sanitized JSON/SRT evidence, promotion decisions, public
    activity events, and deterministic FFprobe/subtitle checks without storing
    media or frame bytes.
@@ -66,8 +69,11 @@ isolated so upstream behavior can continue to be merged into this fork.
    heartbeats. The browser reconnects from the last sequence and falls back to
    bounded event/job polling when the stream is unavailable.
 12. The browser compares prompt versions and attempts, previews or downloads
-   registered outputs, and may mark one completed run as the human favorite.
-   Selecting a favorite never changes deterministic QA verdicts.
+   registered outputs, shows enhanced/limited/retryable/terminal outcomes, and may
+   mark one completed run as the human favorite. When the independent retry UX
+   flag is enabled, it can rerun the immutable version with typed prior evidence
+   or prefill a user-editable improved version. Selecting a favorite never
+   changes deterministic QA verdicts.
 
 ## Reusable workspace contract and rollout bridge
 
@@ -104,6 +110,13 @@ isolated so upstream behavior can continue to be merged into this fork.
   visual holds, attention gaps, and output-aligned subtitle cadence.
 - Conformance evidence compares validated planned operations and requested
   assets with executed operations, used assets, and explained fallbacks.
+- `OPENSTORYLINE_COMPLETION_POLICY` defaults to `strict`.
+  `baseline_guaranteed` takes effect only when
+  `OPENSTORYLINE_LIMITED_OUTPUT_PROMOTION_ENABLED=true`; otherwise strict
+  remains authoritative. `render_promotion.json` records both decisions for
+  canary comparison and rollback.
+- `OPENSTORYLINE_RETRY_UX_ENABLED` independently controls the browser actions;
+  disabling it does not remove outcome, lineage, or audit evidence.
 - Optional semantic frame review uses the approved 9Router vision route only
   when `OPENSTORYLINE_SEMANTIC_QA_ENABLED=true`. It samples at most
   `OPENSTORYLINE_SEMANTIC_QA_MAX_FRAMES`, stores no frame bytes or raw provider
@@ -309,8 +322,9 @@ missing evidence, and skips corrupt or unsafe snapshots. It never imports the
 retired SQLite limiter.
 
 Agents and operators inspect persistent evidence through bounded commands such
-as `./bin/kamal-mvp audit list --since 24h --format json`, `audit show`,
-`audit events`, `audit documents`, and `audit verify`. Reviews enter through a
+as `./bin/kamal-mvp audit list --since 24h --format json`,
+`audit outcomes --since 24h --format json`, `audit show`, `audit events`,
+`audit documents`, and `audit verify`. Reviews enter through a
 JSON file or stdin, not command arguments. Rotating `kamal app logs` contain
 only recent correlation/lifecycle summaries and are not the audit source.
 Retention is inspected with `./bin/kamal-mvp retention status` and
