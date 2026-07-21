@@ -217,6 +217,18 @@ class CPUShortRendererTests(unittest.TestCase):
                 crf=30,
                 timeout=120,
             ))
+            preflight = renderer.preflight_plan(
+                source=source,
+                edit_plan=edit_plan,
+                selected_clips=[selected],
+                visual_understanding=visual,
+                transcript_segments=[
+                    {"start": 200, "end": 1500, "text": "Target visible"}
+                ],
+                destination_dir=root / "agentic",
+            )
+            self.assertEqual(preflight["status"], "pass")
+            self.assertEqual(len(preflight["clips"][0]["filtergraph_sha256"]), 64)
             progress = []
             result = renderer.render_plan(
                 source=source,

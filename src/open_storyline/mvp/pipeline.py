@@ -9,6 +9,7 @@ import re
 from open_storyline.config import Settings
 from open_storyline.mvp.activity import ActivityService, STAGES, retryable_error
 from open_storyline.mvp.assets import (
+    AssetResolutionError,
     generated_asset_server_cap,
     generated_asset_size,
     generated_assets_enabled,
@@ -32,12 +33,19 @@ from open_storyline.mvp.ffmpega import (
     DETERMINISTIC_SKILLS,
     EffectsPlanner,
     FFMPEGAClient,
+    FFMPEGAError,
     ffmpega_enabled,
 )
 from open_storyline.mvp.frame_sampling import FrameManifest, SampledFrame, sample_frames
 from open_storyline.mvp.frame_quality import (
     FRAME_QUALITY_VERSION,
     build_frame_quality_report,
+)
+from open_storyline.mvp.fallbacks import (
+    FallbackEntry,
+    baseline_fallbacks_enabled,
+    compile_baseline_plan,
+    merge_fallback_entries,
 )
 from open_storyline.mvp.compositor import REFRAME_RENDER_CAPABILITIES
 from open_storyline.mvp.creative_intent import (
@@ -55,12 +63,14 @@ from open_storyline.mvp.creative_qa import (
     semantic_qa_frame_limit,
 )
 from open_storyline.mvp.jobs import JobStore
-from open_storyline.mvp.ninerouter import NineRouterClient
+from open_storyline.mvp.ninerouter import NineRouterClient, NineRouterError
 from open_storyline.mvp.observability import emit_event
+from open_storyline.mvp.outcomes import build_completed_outcome_report
 from open_storyline.mvp.render import (
     AgenticShortRenderer,
     CPUShortRenderer,
     RENDER_QUALITY_PROFILE_VERSION,
+    RenderError,
     extract_frame_data_urls,
     probe_media,
     render_settings_from_config,
@@ -242,6 +252,8 @@ class MVPJobProcessor:
             "recomputed_stages": [],
             "errors": [],
         }
+        fallback_enabled = baseline_fallbacks_enabled(self.config.agentic_editing)
+        fallback_entries: tuple[FallbackEntry, ...] = ()
 
         def track_checkpoint(stage: str, *, reused: bool) -> None:
             key = "reused_stages" if reused else "recomputed_stages"
@@ -339,9 +351,21 @@ class MVPJobProcessor:
             ):
                 effective_asset_policy = requested_asset_policy
             elif requested_asset_policy == "required":
-                raise EditPlanError(
-                    "CREATIVE_INTENT_CAPABILITY_UNAVAILABLE",
-                    "required generated-image capability is unavailable",
+                if not fallback_enabled:
+                    raise EditPlanError(
+                        "CREATIVE_INTENT_CAPABILITY_UNAVAILABLE",
+                        "required generated-image capability is unavailable",
+                    )
+                fallback_entries = merge_fallback_entries(
+                    fallback_entries,
+                    (FallbackEntry(
+                        code="EXTERNAL_ASSET_OMITTED",
+                        clip_index=1,
+                        segment_id="capability",
+                        requested="generated_image",
+                        executed="source_media",
+                        reason="The generated-image capability is unavailable.",
+                    ),),
                 )
             stock_server_cap = pexels_server_cap(self.config.agentic_editing)
             job_stock_cap = int(
@@ -365,9 +389,21 @@ class MVPJobProcessor:
                 pexels_client = PexelsClient.from_config(self.config.agentic_editing)
                 effective_stock_policy = requested_stock_policy
             elif requested_stock_policy == "required":
-                raise EditPlanError(
-                    "CREATIVE_INTENT_CAPABILITY_UNAVAILABLE",
-                    "required Pexels capability is unavailable",
+                if not fallback_enabled:
+                    raise EditPlanError(
+                        "CREATIVE_INTENT_CAPABILITY_UNAVAILABLE",
+                        "required Pexels capability is unavailable",
+                    )
+                fallback_entries = merge_fallback_entries(
+                    fallback_entries,
+                    (FallbackEntry(
+                        code="EXTERNAL_ASSET_OMITTED",
+                        clip_index=1,
+                        segment_id="capability",
+                        requested="stock_asset",
+                        executed="source_media",
+                        reason="The stock-media capability is unavailable.",
+                    ),),
                 )
             preliminary_intent = build_creative_intent(
                 state["prompt"],
@@ -381,10 +417,22 @@ class MVPJobProcessor:
                     stock_available=effective_stock_policy != "off",
                 )
             except ValueError as exc:
-                raise EditPlanError(
-                    "CREATIVE_INTENT_CAPABILITY_UNAVAILABLE",
-                    str(exc),
-                ) from exc
+                if not fallback_enabled:
+                    raise EditPlanError(
+                        "CREATIVE_INTENT_CAPABILITY_UNAVAILABLE",
+                        str(exc),
+                    ) from exc
+                fallback_entries = merge_fallback_entries(
+                    fallback_entries,
+                    (FallbackEntry(
+                        code="CREATIVE_INTENT_UNMET",
+                        clip_index=1,
+                        segment_id="capability",
+                        requested="unavailable_optional_capability",
+                        executed="installed_baseline_capabilities",
+                        reason=str(exc)[:240],
+                    ),),
+                )
         source = await store.source_path(job_id)
         work_dir = store.work_dir(job_id)
         output_dir = store.output_dir(job_id)
@@ -1101,7 +1149,33 @@ class MVPJobProcessor:
                         prior_attempt_id if clip_hit is not None else None
                     ),
                 )
-            if edit_plan.degraded:
+            proposed_edit_plan = edit_plan
+            if (
+                server_mode == "render"
+                and fallback_enabled
+            ):
+                compilation = compile_baseline_plan(
+                    edit_plan,
+                    visual_coverage=visual_coverage,
+                    available_capabilities=REFRAME_RENDER_CAPABILITIES,
+                )
+                edit_plan = compilation.plan
+                fallback_entries = merge_fallback_entries(
+                    fallback_entries,
+                    compilation.entries,
+                )
+                if compilation.entries:
+                    visual_coverage = build_clip_visual_coverage(
+                        edit_plan,
+                        visual=visual_understanding,
+                        clip_frame_manifests=clip_frame_manifests,
+                        min_observations=agentic_config.crop_coverage_min_observations,
+                        min_temporal_coverage_ratio=agentic_config.crop_coverage_min_ratio,
+                        max_observation_gap_ms=agentic_config.crop_coverage_max_gap_ms,
+                        repair_attempted=True,
+                        initial_blocker_codes=visual_coverage.blocker_codes,
+                    )
+            if proposed_edit_plan.degraded:
                 creative_conformance = {
                     "version": creative_intent.version,
                     "status": "degraded",
@@ -1114,15 +1188,33 @@ class MVPJobProcessor:
                         creative_intent,
                     ).to_dict()
                 except ValueError as exc:
-                    raise EditPlanError(
-                        "EDIT_PLAN_INTENT_MISMATCH",
-                        str(exc),
-                        evidence={
-                            "intent_conformance": (
-                                creative_intent_conformance_evidence(exc)
-                            ),
-                        },
-                    ) from exc
+                    if not (server_mode == "render" and fallback_enabled):
+                        raise EditPlanError(
+                            "EDIT_PLAN_INTENT_MISMATCH",
+                            str(exc),
+                            evidence={
+                                "intent_conformance": (
+                                    creative_intent_conformance_evidence(exc)
+                                ),
+                            },
+                        ) from exc
+                    creative_conformance = {
+                        "version": creative_intent.version,
+                        "status": "degraded",
+                        "error_code": "EDIT_PLAN_INTENT_MISMATCH",
+                        "evidence": creative_intent_conformance_evidence(exc),
+                    }
+                    fallback_entries = merge_fallback_entries(
+                        fallback_entries,
+                        (FallbackEntry(
+                            code="CREATIVE_INTENT_UNMET",
+                            clip_index=1,
+                            segment_id="plan",
+                            requested="creative_intent",
+                            executed="validated_baseline_plan",
+                            reason="The proposed plan did not fully satisfy the creative intent contract.",
+                        ),),
+                    )
             edit_planner_attempts = [
                 attempt.to_dict()
                 for attempt in getattr(remote_client, "last_attempts", ())
@@ -1139,12 +1231,16 @@ class MVPJobProcessor:
                 attempt_number=max(1, len(edit_planner_attempts)),
                 clip_count=len(edit_plan.clips),
             )
-            edit_plan_path = output_dir / names.edit_plan
-            edit_plan_path.write_text(
-                json.dumps(edit_plan.to_dict(), ensure_ascii=False, indent=2),
+            proposed_edit_plan_path = output_dir / names.proposed_edit_plan
+            proposed_edit_plan_path.write_text(
+                json.dumps(proposed_edit_plan.to_dict(), ensure_ascii=False, indent=2),
                 encoding="utf-8",
             )
-            await store.register_artifact(job_id, edit_plan_path, kind="edit_plan")
+            await store.register_artifact(
+                job_id,
+                proposed_edit_plan_path,
+                kind="proposed_edit_plan",
+            )
             visual_coverage_path = output_dir / names.clip_visual_coverage
             visual_coverage_path.write_text(
                 json.dumps(visual_coverage.to_dict(), ensure_ascii=False, indent=2),
@@ -1215,25 +1311,48 @@ class MVPJobProcessor:
                     if asset.kind == "generated_image"
                 }
                 stock_asset_ids = planned_asset_ids - generated_asset_ids
-                asset_result = await resolve_assets(
-                    edit_plan,
-                    output_dir=output_dir,
-                    asset_policy=effective_asset_policy,
-                    stock_policy=effective_stock_policy,
-                    max_generated_assets_per_clip=effective_generated_asset_cap,
-                    max_stock_assets_per_clip=effective_stock_asset_cap,
-                    cascade=(
-                        RemoteImageCascade.from_config(self.config.remote_image)
-                        if generated_asset_ids
-                        else None
-                    ),
-                    pexels=(pexels_client if stock_asset_ids else None),
-                    size=(
-                        generated_asset_size(self.config.remote_image)
-                        if generated_asset_ids
-                        else "1024x1024"
-                    ),
-                )
+                try:
+                    asset_result = await resolve_assets(
+                        edit_plan,
+                        output_dir=output_dir,
+                        asset_policy=effective_asset_policy,
+                        stock_policy=effective_stock_policy,
+                        max_generated_assets_per_clip=effective_generated_asset_cap,
+                        max_stock_assets_per_clip=effective_stock_asset_cap,
+                        cascade=(
+                            RemoteImageCascade.from_config(self.config.remote_image)
+                            if generated_asset_ids
+                            else None
+                        ),
+                        pexels=(pexels_client if stock_asset_ids else None),
+                        size=(
+                            generated_asset_size(self.config.remote_image)
+                            if generated_asset_ids
+                            else "1024x1024"
+                        ),
+                    )
+                except AssetResolutionError as exc:
+                    if not fallback_enabled:
+                        raise
+                    compilation = compile_baseline_plan(
+                        edit_plan,
+                        available_capabilities=REFRAME_RENDER_CAPABILITIES,
+                        omitted_asset_ids=planned_asset_ids,
+                        cause_code=exc.code,
+                    )
+                    edit_plan = compilation.plan
+                    fallback_entries = merge_fallback_entries(
+                        fallback_entries,
+                        compilation.entries,
+                    )
+                    planned_asset_ids = set()
+                    asset_result = write_asset_manifest(
+                        edit_plan,
+                        output_dir=output_dir,
+                        asset_policy=effective_asset_policy,
+                        stock_policy=effective_stock_policy,
+                        status=f"fallback_omitted:{exc.code}"[:80],
+                    )
                 await activity.emit_safely(
                     job_id,
                     stage="resolving_assets",
@@ -1288,21 +1407,30 @@ class MVPJobProcessor:
                     asset_count=len(planned_asset_ids),
                 )
 
-            asset_kinds = {
-                asset.id: asset.kind
-                for clip in edit_plan.clips
-                for asset in clip.asset_requests
+            edit_plan_path = output_dir / names.edit_plan
+            edit_plan_path.write_text(
+                json.dumps(edit_plan.to_dict(), ensure_ascii=False, indent=2),
+                encoding="utf-8",
+            )
+            await store.register_artifact(job_id, edit_plan_path, kind="edit_plan")
+            fallback_ledger_path = output_dir / names.fallback_ledger
+            fallback_ledger = {
+                "version": "fallback_ledger.v1",
+                "status": "with_limitations" if fallback_entries else "unchanged",
+                "summary": {
+                    "fallbacks": len(fallback_entries),
+                    "codes": sorted({entry.code for entry in fallback_entries}),
+                },
+                "entries": [entry.to_dict() for entry in fallback_entries],
             }
-            for asset_id, path in asset_result.paths.items():
-                await store.register_artifact(
-                    job_id,
-                    path,
-                    kind=asset_kinds[asset_id],
-                )
+            fallback_ledger_path.write_text(
+                json.dumps(fallback_ledger, ensure_ascii=False, indent=2),
+                encoding="utf-8",
+            )
             await store.register_artifact(
                 job_id,
-                asset_result.manifest_path,
-                kind="asset_manifest",
+                fallback_ledger_path,
+                kind="fallback_ledger",
             )
             preflight_path = output_dir / names.preflight
             preflight_path.write_text(
@@ -1325,6 +1453,8 @@ class MVPJobProcessor:
                 "visual_attempts": visual_attempts,
                 "shorts_attempts": shorts_attempts,
                 "edit_plan": names.edit_plan,
+                "proposed_edit_plan": names.proposed_edit_plan,
+                "fallback_ledger": names.fallback_ledger,
                 "edit_planner": {
                     "model": remote_client.model,
                     "schema_version": edit_plan.version,
@@ -1416,9 +1546,174 @@ class MVPJobProcessor:
                     stage="rendering",
                     error_code="RENDER_ACTIVITY_CALLBACK_FAILED",
                 )
+        agentic_renderer = None
+        if agentic_requested and server_mode == "render":
+            agentic_renderer = AgenticShortRenderer(render_settings)
+            if fallback_enabled:
+                try:
+                    ffmpeg_preflight = await asyncio.to_thread(
+                        agentic_renderer.preflight_plan,
+                        source=source,
+                        edit_plan=edit_plan,
+                        selected_clips=plan.clips,
+                        visual_understanding=visual_understanding,
+                        transcript_segments=transcript.segments,
+                        destination_dir=output_dir,
+                        source_media=media,
+                        crop_hysteresis_ratio=(
+                            self.config.agentic_editing.crop_hysteresis_ratio
+                        ),
+                        crop_smoothing_alpha=(
+                            self.config.agentic_editing.crop_smoothing_alpha
+                        ),
+                        max_crop_velocity_ratio_per_second=(
+                            self.config.agentic_editing.max_crop_velocity_ratio_per_second
+                        ),
+                        resolved_assets=asset_result.paths,
+                    )
+                except RenderError as exc:
+                    compilation = compile_baseline_plan(
+                        edit_plan,
+                        available_capabilities=REFRAME_RENDER_CAPABILITIES,
+                        force_minimal=True,
+                        cause_code=exc.code,
+                    )
+                    edit_plan = compilation.plan
+                    fallback_entries = merge_fallback_entries(
+                        fallback_entries,
+                        compilation.entries,
+                    )
+                    for path in asset_result.paths.values():
+                        Path(path).unlink(missing_ok=True)
+                    asset_result = write_asset_manifest(
+                        edit_plan,
+                        output_dir=output_dir,
+                        asset_policy=effective_asset_policy,
+                        stock_policy=effective_stock_policy,
+                        status=f"preflight_fallback:{exc.code}"[:80],
+                    )
+                    preflight = build_preflight(
+                        edit_plan,
+                        available_capabilities=REFRAME_RENDER_CAPABILITIES,
+                        asset_policy=effective_asset_policy,
+                        stock_policy=effective_stock_policy,
+                        known_region_ids=(
+                            region.id for region in visual_understanding.regions
+                        ),
+                        known_track_ids=(
+                            track.id for track in visual_understanding.tracks
+                        ),
+                        known_evidence_ids_by_clip={
+                            int(clip["clip_index"]): clip["evidence_ids"]
+                            for clip in shorts_plan_artifact["clips"]
+                        },
+                        visual_coverage=visual_coverage,
+                        max_segments_per_clip=(
+                            self.config.agentic_editing.max_segments_per_clip
+                        ),
+                        max_overlays_per_clip=(
+                            self.config.agentic_editing.max_overlays_per_clip
+                        ),
+                        max_assets_per_clip=(
+                            self.config.agentic_editing.max_assets_per_clip
+                        ),
+                    )
+                    if preflight.blocking:
+                        raise EditPlanError(
+                            "EDIT_PREFLIGHT_BLOCKED",
+                            "deterministic baseline preflight is blocked",
+                        )
+                    ffmpeg_preflight = await asyncio.to_thread(
+                        agentic_renderer.preflight_plan,
+                        source=source,
+                        edit_plan=edit_plan,
+                        selected_clips=plan.clips,
+                        visual_understanding=visual_understanding,
+                        transcript_segments=transcript.segments,
+                        destination_dir=output_dir,
+                        source_media=media,
+                        crop_hysteresis_ratio=(
+                            self.config.agentic_editing.crop_hysteresis_ratio
+                        ),
+                        crop_smoothing_alpha=(
+                            self.config.agentic_editing.crop_smoothing_alpha
+                        ),
+                        max_crop_velocity_ratio_per_second=(
+                            self.config.agentic_editing.max_crop_velocity_ratio_per_second
+                        ),
+                        resolved_assets=asset_result.paths,
+                    )
+                    ffmpeg_preflight["simplified_after"] = exc.code
+                    edit_plan_path.write_text(
+                        json.dumps(edit_plan.to_dict(), ensure_ascii=False, indent=2),
+                        encoding="utf-8",
+                    )
+                    fallback_ledger["status"] = "with_limitations"
+                    fallback_ledger["summary"] = {
+                        "fallbacks": len(fallback_entries),
+                        "codes": sorted({entry.code for entry in fallback_entries}),
+                    }
+                    fallback_ledger["entries"] = [
+                        entry.to_dict() for entry in fallback_entries
+                    ]
+                    fallback_ledger_path.write_text(
+                        json.dumps(fallback_ledger, ensure_ascii=False, indent=2),
+                        encoding="utf-8",
+                    )
+                    await store.register_artifact(job_id, edit_plan_path, kind="edit_plan")
+                    await store.register_artifact(
+                        job_id,
+                        fallback_ledger_path,
+                        kind="fallback_ledger",
+                    )
+                    preflight_path.write_text(
+                        json.dumps(preflight.to_dict(), ensure_ascii=False, indent=2),
+                        encoding="utf-8",
+                    )
+                    await store.register_artifact(
+                        job_id,
+                        preflight_path,
+                        kind="edit_preflight",
+                    )
+                    agentic_manifest["preflight_status"] = preflight.status
+                ffmpeg_preflight_path = output_dir / names.ffmpeg_preflight
+                ffmpeg_preflight_path.write_text(
+                    json.dumps(ffmpeg_preflight, ensure_ascii=False, indent=2),
+                    encoding="utf-8",
+                )
+                await store.register_artifact(
+                    job_id,
+                    ffmpeg_preflight_path,
+                    kind="ffmpeg_preflight",
+                )
+                agentic_manifest["ffmpeg_preflight"] = names.ffmpeg_preflight
+
+        if agentic_requested:
+            asset_kinds = {
+                asset.id: asset.kind
+                for clip in edit_plan.clips
+                for asset in clip.asset_requests
+            }
+            for asset_id, path in asset_result.paths.items():
+                await store.register_artifact(
+                    job_id,
+                    path,
+                    kind=asset_kinds[asset_id],
+                )
+            await store.register_artifact(
+                job_id,
+                asset_result.manifest_path,
+                kind="asset_manifest",
+            )
+            agentic_manifest["assets"] = {
+                "requested": int(asset_result.manifest["requested_count"]),
+                "resolved": int(asset_result.manifest["resolved_count"]),
+                "provider_calls": asset_result.provider_call_count,
+            }
+            agentic_manifest["fallbacks"] = fallback_ledger["summary"]
         if agentic_requested and server_mode == "render":
             agentic_result = await asyncio.to_thread(
-                AgenticShortRenderer(render_settings).render_plan,
+                agentic_renderer.render_plan,
                 source=source,
                 edit_plan=edit_plan,
                 selected_clips=plan.clips,
@@ -1481,17 +1776,33 @@ class MVPJobProcessor:
         ffmpega = None
         if ffmpega_enabled(self.config.ffmpega):
             await activity.stage(job_id, "planning_effects")
-            effects_plan = await EffectsPlanner(
-                NineRouterClient.from_config(self.config.ninerouter)
-            ).plan(
-                state["prompt"],
-                allowed_skills=(
-                    AGENTIC_FINISHING_SKILLS
-                    if agentic_requested
-                    else DETERMINISTIC_SKILLS
-                ),
-            )
-            if effects_plan.effects:
+            try:
+                effects_plan = await EffectsPlanner(
+                    NineRouterClient.from_config(self.config.ninerouter)
+                ).plan(
+                    state["prompt"],
+                    allowed_skills=(
+                        AGENTIC_FINISHING_SKILLS
+                        if agentic_requested
+                        else DETERMINISTIC_SKILLS
+                    ),
+                )
+            except (FFMPEGAError, NineRouterError) as exc:
+                if not fallback_enabled:
+                    raise
+                effects_plan = None
+                fallback_entries = merge_fallback_entries(
+                    fallback_entries,
+                    (FallbackEntry(
+                        code="EFFECT_OMITTED",
+                        clip_index=1,
+                        segment_id="finishing",
+                        requested="ffmpega_effect_plan",
+                        executed="native_ffmpeg_render",
+                        reason=str(getattr(exc, "code", "EFFECT_PLANNING_FAILED"))[:240],
+                    ),),
+                )
+            if effects_plan is not None and effects_plan.effects:
                 ffmpega = FFMPEGAClient.from_config(self.config.ffmpega)
             await activity.emit_safely(
                 job_id,
@@ -1516,12 +1827,29 @@ class MVPJobProcessor:
             final_video = item.video_path
             if ffmpega is not None and effects_plan is not None:
                 enhanced = item.video_path.with_name(f"{item.video_path.stem}-effects.mp4")
-                final_video = await ffmpega.apply(
-                    source=item.video_path,
-                    destination=enhanced,
-                    plan=effects_plan,
-                )
-                item.video_path.unlink(missing_ok=True)
+                try:
+                    final_video = await ffmpega.apply(
+                        source=item.video_path,
+                        destination=enhanced,
+                        plan=effects_plan,
+                    )
+                except FFMPEGAError as exc:
+                    if not fallback_enabled:
+                        raise
+                    fallback_entries = merge_fallback_entries(
+                        fallback_entries,
+                        (FallbackEntry(
+                            code="EFFECT_OMITTED",
+                            clip_index=len(final_outputs) + 1,
+                            segment_id="finishing",
+                            requested="ffmpega_finishing",
+                            executed="native_ffmpeg_render",
+                            reason=exc.code,
+                        ),),
+                    )
+                    enhanced.unlink(missing_ok=True)
+                else:
+                    item.video_path.unlink(missing_ok=True)
             pending_artifacts.append((final_video, "video"))
             if item.subtitle_path is not None:
                 pending_artifacts.append((item.subtitle_path, "subtitles"))
@@ -1543,6 +1871,7 @@ class MVPJobProcessor:
 
         render_qa_report: dict[str, Any] | None = None
         creative_conformance_report: dict[str, Any] | None = None
+        promotion_report: dict[str, Any] | None = None
         if agentic_requested and server_mode == "render":
             qa_manifest: dict[str, Any] = {"enabled": False, "status": "disabled"}
             try:
@@ -1734,6 +2063,57 @@ class MVPJobProcessor:
             )
             enforce_render_promotion(promotion_report)
 
+        if agentic_requested:
+            fallback_ledger["status"] = (
+                "with_limitations" if fallback_entries else "unchanged"
+            )
+            fallback_ledger["summary"] = {
+                "fallbacks": len(fallback_entries),
+                "codes": sorted({entry.code for entry in fallback_entries}),
+            }
+            fallback_ledger["entries"] = [
+                entry.to_dict() for entry in fallback_entries
+            ]
+            fallback_ledger_path.write_text(
+                json.dumps(fallback_ledger, ensure_ascii=False, indent=2),
+                encoding="utf-8",
+            )
+            await store.register_artifact(
+                job_id,
+                fallback_ledger_path,
+                kind="fallback_ledger",
+            )
+            agentic_manifest["fallbacks"] = fallback_ledger["summary"]
+
+        outcome_report = build_completed_outcome_report(
+            outputs=final_outputs,
+            fallback_entries=fallback_entries,
+            qa_blocker_codes=(promotion_report or {}).get("blocker_codes") or (),
+            fingerprints={
+                "source": source_hash,
+                "prompt": checkpoint_fingerprint({"prompt": state["prompt"]}),
+                "renderer": checkpoint_fingerprint({
+                    "profile": render_settings.quality_profile,
+                    "width": render_settings.width,
+                    "height": render_settings.height,
+                }),
+            },
+            reused_stages=checkpoint_summary["reused_stages"],
+            recomputed_stages=checkpoint_summary["recomputed_stages"],
+        )
+        outcome_report_path = output_dir / names.outcome_report
+        outcome_report_path.write_text(
+            json.dumps(outcome_report, ensure_ascii=False, indent=2),
+            encoding="utf-8",
+        )
+        await store.register_artifact(
+            job_id,
+            outcome_report_path,
+            kind="outcome_report",
+        )
+        if agentic_manifest is not None:
+            agentic_manifest["outcome_report"] = names.outcome_report
+
         for path, kind in pending_artifacts:
             await store.register_artifact(job_id, path, kind=kind)
 
@@ -1769,6 +2149,7 @@ class MVPJobProcessor:
             },
             "plan": plan.to_dict(),
             "agentic": agentic_manifest,
+            "outcome": outcome_report,
             "effects": effects_plan.to_dict() if effects_plan is not None else {"effects": []},
             "outputs": final_outputs,
         }, ensure_ascii=False, indent=2), encoding="utf-8")
@@ -1778,4 +2159,5 @@ class MVPJobProcessor:
             "stt_model": transcript.model,
             "clip_count": len(rendered),
             "checkpoints": checkpoint_summary,
+            "outcome": outcome_report,
         }
