@@ -114,6 +114,20 @@ class KamalConfigTests(unittest.TestCase):
             config["env"]["clear"]["OPENSTORYLINE_IMAGE_MODELS"],
             "cx/gpt-5.5-image",
         )
+        self.assertEqual(
+            config["env"]["clear"]["OPENSTORYLINE_STRUCTURED_OUTPUT_MODE"],
+            "json_object",
+        )
+        self.assertEqual(
+            config["env"]["clear"]["OPENSTORYLINE_STRUCTURED_OUTPUT_BOUNDARIES"],
+            "",
+        )
+        self.assertIs(
+            config["env"]["clear"][
+                "OPENSTORYLINE_STRUCTURED_OUTPUT_CAPABILITY_VERIFIED"
+            ],
+            False,
+        )
         self.assertNotIn("OPENSTORYLINE_STT_MODELS", config["env"]["clear"])
         self.assertEqual(config["env"]["clear"]["MISTRAL_STT_TIMEOUT"], 180)
         self.assertEqual(
@@ -216,6 +230,13 @@ class KamalConfigTests(unittest.TestCase):
         self.assertIn("MISTRAL_QA_STT_AUDIO=", kamal_env)
         self.assertIn("OPENSTORYLINE_SESSION_WORKSPACE_MODE=legacy", kamal_env)
         self.assertIn("OPENSTORYLINE_SESSION_WORKSPACE_MODE=legacy", local_env)
+        self.assertIn("OPENSTORYLINE_STRUCTURED_OUTPUT_MODE=json_object", kamal_env)
+        self.assertIn("OPENSTORYLINE_STRUCTURED_OUTPUT_MODE=json_object", local_env)
+        self.assertIn("OPENSTORYLINE_STRUCTURED_OUTPUT_BOUNDARIES=", kamal_env)
+        self.assertIn(
+            "OPENSTORYLINE_STRUCTURED_OUTPUT_CAPABILITY_VERIFIED=false",
+            kamal_env,
+        )
         self.assertIn("OPENSTORYLINE_INCOMPLETE_UPLOAD_HOURS=24", kamal_env)
         self.assertIn("OPENSTORYLINE_INCOMPLETE_UPLOAD_HOURS=24", local_env)
         self.assertIn("OPENSTORYLINE_PEXELS_ENABLED=false", kamal_env)

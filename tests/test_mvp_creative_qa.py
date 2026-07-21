@@ -89,7 +89,7 @@ class FakeSemanticClient:
         self.calls = 0
         self.last_attempts = ()
 
-    async def complete_json(self, **kwargs):
+    async def complete_structured(self, **kwargs):
         self.calls += 1
         self.last_attempts = (NineRouterAttempt(1, 200, "ok"),)
         if self.fail:

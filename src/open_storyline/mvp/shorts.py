@@ -7,6 +7,7 @@ import math
 import re
 
 from open_storyline.mvp.ninerouter import NineRouterClient
+from open_storyline.mvp.structured_outputs import SHORTS_SELECTION_SCHEMA
 
 
 MIN_SHORT_MS = 18_000
@@ -307,7 +308,8 @@ class ShortsPlanner:
             "candidate_budget": min(150, max(3, int(max_clips) * 3)),
             "transcript": transcript,
         }
-        response = await self.client.complete_json(
+        response = await self.client.complete_structured(
+            schema_name=SHORTS_SELECTION_SCHEMA,
             system_prompt=system_prompt,
             user_prompt=json.dumps(user_payload, ensure_ascii=False),
             image_data_urls=frame_data_urls,

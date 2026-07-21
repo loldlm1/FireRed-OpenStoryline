@@ -17,8 +17,8 @@ from open_storyline.mvp.ffmpega import (
 class EffectsPolicyTests(unittest.TestCase):
     def test_accepts_only_deterministic_effects(self):
         plan = validate_effects({"effects": [
-            {"skill": "vignette", "params": {}},
-            {"skill": "saturation", "params": {"amount": 1.2}},
+            {"skill": "vignette", "params": {"intensity": None}},
+            {"skill": "saturation", "params": {"value": 1.2}},
         ]})
         pipeline = plan.to_ffmpega_pipeline()
         self.assertEqual(pipeline["effects_mode"], "skills")
@@ -37,7 +37,7 @@ class EffectsPolicyTests(unittest.TestCase):
 
     def test_agentic_finishing_policy_excludes_structural_edits(self):
         plan = validate_effects(
-            {"effects": [{"skill": "vignette", "params": {}}]},
+            {"effects": [{"skill": "vignette", "params": {"intensity": None}}]},
             allowed_skills=AGENTIC_FINISHING_SKILLS,
         )
         self.assertEqual(plan.effects[0].skill, "vignette")
@@ -54,17 +54,23 @@ class FakePlannerClient:
     def __init__(self, response):
         self.response = response
 
-    async def complete_json(self, **kwargs):
+    async def complete_structured(self, **kwargs):
         self.kwargs = kwargs
         return self.response
 
 
 class EffectsPlannerTests(unittest.IsolatedAsyncioTestCase):
     async def test_remote_planner_is_followed_by_local_policy(self):
-        client = FakePlannerClient({"effects": [{"skill": "vignette", "params": {}}]})
+        client = FakePlannerClient({
+            "effects": [{"skill": "vignette", "params": {"intensity": None}}],
+        })
         plan = await EffectsPlanner(client).plan("make it cinematic")
         self.assertEqual(plan.effects[0].skill, "vignette")
         self.assertIn("allowlist", client.kwargs["system_prompt"])
+        self.assertEqual(
+            client.kwargs["schema_name"],
+            "ffmpega_deterministic_effects.v1",
+        )
 
     async def test_remote_planner_cannot_enable_local_model(self):
         planner = EffectsPlanner(FakePlannerClient({
@@ -81,6 +87,10 @@ class EffectsPlannerTests(unittest.IsolatedAsyncioTestCase):
             allowed_skills=AGENTIC_FINISHING_SKILLS,
         )
         prompt = client.kwargs["system_prompt"]
+        self.assertEqual(
+            client.kwargs["schema_name"],
+            "ffmpega_agentic_finishing.v1",
+        )
         self.assertIn("vignette", prompt)
         self.assertNotIn("letterbox", prompt)
         self.assertNotIn("fade,", prompt)
@@ -113,7 +123,9 @@ class FFMPEGAClientTests(unittest.IsolatedAsyncioTestCase):
             result = await client.apply(
                 source=source,
                 destination=destination,
-                plan=validate_effects({"effects": [{"skill": "vignette", "params": {}}]}),
+                plan=validate_effects({
+                    "effects": [{"skill": "vignette", "params": {"intensity": None}}],
+                }),
             )
 
             inputs = captured["prompt"]["1"]["inputs"]
@@ -152,7 +164,9 @@ class FFMPEGAClientTests(unittest.IsolatedAsyncioTestCase):
             await client.apply(
                 source=source,
                 destination=destination,
-                plan=validate_effects({"effects": [{"skill": "vignette", "params": {}}]}),
+                plan=validate_effects({
+                    "effects": [{"skill": "vignette", "params": {"intensity": None}}],
+                }),
             )
             inputs = captured["prompt"]["1"]["inputs"]
             self.assertEqual(inputs["video_path"], str(remote_root / "job" / "source.mp4"))

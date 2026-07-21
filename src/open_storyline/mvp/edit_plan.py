@@ -21,6 +21,10 @@ from open_storyline.mvp.prompts import EDIT_PLAN_PROMPT_VERSION, EDIT_PLAN_SYSTE
 from open_storyline.mvp.scene_boundaries import SceneBoundaryReport
 from open_storyline.mvp.shorts import ShortCandidate, ShortsPlan
 from open_storyline.mvp.visual_understanding import VisualUnderstanding
+from open_storyline.mvp.structured_outputs import (
+    EDIT_PLAN_REPAIR_SCHEMA,
+    EDIT_PLAN_SCHEMA,
+)
 
 
 EDIT_PLAN_VERSION = "edit_plan.v2"
@@ -560,7 +564,11 @@ def _valid_clip_plan_template(
     valid_tracks = [item for item in tracks if isinstance(item, dict) and item.get("id")]
     if valid_tracks:
         track = max(valid_tracks, key=lambda item: float(item.get("confidence") or 0))
-        focal_target = {"track_id": str(track["id"])}
+        focal_target = {
+            "region_id": None,
+            "track_id": str(track["id"]),
+            "semantic_role": None,
+        }
         evidence_ids.append(str(track["id"]))
     elif valid_regions:
         region = max(
@@ -570,15 +578,20 @@ def _valid_clip_plan_template(
                 float(item.get("confidence") or 0),
             ),
         )
-        focal_target = {"region_id": str(region["id"])}
+        focal_target = {
+            "region_id": str(region["id"]),
+            "track_id": None,
+            "semantic_role": None,
+        }
         evidence_ids.append(str(region["id"]))
     layout = {
         "mode": "crop" if focal_target else "fit",
+        "focal_target": focal_target,
         "fallback": "crop",
         "allow_full_frame_fallback": False,
+        "safe_margin_ratio": 0.08,
+        "max_zoom": 1.0,
     }
-    if focal_target:
-        layout["focal_target"] = focal_target
     catalog_defaults = _catalog_template(catalog_snapshot)
     return {
         "requested_capabilities": [
@@ -813,6 +826,15 @@ def _normalize_edit_plan_response(
             for decision in intent_decisions:
                 if isinstance(decision, dict) and decision.get("omission_reason") is None:
                     decision["omission_reason"] = ""
+        catalog_selection = clip.get("catalog_selection")
+        if isinstance(catalog_selection, dict):
+            for field in (
+                "style_profile_id",
+                "caption_treatment_id",
+                "color_treatment_id",
+            ):
+                if catalog_selection.get(field) is None:
+                    catalog_selection[field] = ""
         segments = clip.get("segments")
         if not isinstance(segments, list):
             continue
@@ -826,6 +848,8 @@ def _normalize_edit_plan_response(
             transition = segment.get("transition_in")
             if isinstance(transition, dict) and transition.get("kind") == "hard_cut":
                 transition["kind"] = "cut"
+            if isinstance(transition, dict) and transition.get("catalog_id") is None:
+                transition["catalog_id"] = ""
             layout = segment.get("layout")
             focal_target = layout.get("focal_target") if isinstance(layout, dict) else None
             if isinstance(focal_target, dict):
@@ -1397,7 +1421,7 @@ class AgenticEditPlanner:
 
         async def complete(**kwargs: Any) -> dict[str, Any]:
             try:
-                return await self.client.complete_json(**kwargs)
+                return await self.client.complete_structured(**kwargs)
             finally:
                 all_attempts.extend(tuple(getattr(self.client, "last_attempts", ())))
                 if hasattr(self.client, "last_attempts"):
@@ -1530,6 +1554,7 @@ class AgenticEditPlanner:
                 return clip_plan
 
             response = await complete(
+                schema_name=EDIT_PLAN_SCHEMA,
                 system_prompt=EDIT_PLAN_SYSTEM_PROMPT,
                 user_prompt=json.dumps(user_payload, ensure_ascii=False),
                 reasoning_effort=getattr(self.client, "reasoning_effort", "medium"),
@@ -1553,6 +1578,7 @@ class AgenticEditPlanner:
                     "invalid_response": response,
                 }
                 repaired = await complete(
+                    schema_name=EDIT_PLAN_REPAIR_SCHEMA,
                     system_prompt=EDIT_PLAN_SYSTEM_PROMPT,
                     user_prompt=json.dumps(repair_payload, ensure_ascii=False),
                     reasoning_effort=getattr(self.client, "reasoning_effort", "medium"),

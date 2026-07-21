@@ -27,8 +27,16 @@ class FakeVisionClient:
         self.user_prompt = ""
         self.images = ()
 
-    async def complete_json(self, *, system_prompt, user_prompt, image_data_urls=()):
+    async def complete_structured(
+        self,
+        *,
+        schema_name,
+        system_prompt,
+        user_prompt,
+        image_data_urls=(),
+    ):
         self.user_prompt = user_prompt
+        self.schema_name = schema_name
         self.images = tuple(image_data_urls)
         frame = json.loads(user_prompt)["attached_images_in_exact_order"][0]
         return {
@@ -66,11 +74,19 @@ class RepairingVisionClient(FakeVisionClient):
         self.calls = 0
         self.user_prompts = []
 
-    async def complete_json(self, *, system_prompt, user_prompt, image_data_urls=()):
+    async def complete_structured(
+        self,
+        *,
+        schema_name,
+        system_prompt,
+        user_prompt,
+        image_data_urls=(),
+    ):
         self.calls += 1
         self.last_attempts = (NineRouterAttempt(1, 200, "ok"),)
         self.user_prompts.append(json.loads(user_prompt))
-        response = await super().complete_json(
+        response = await super().complete_structured(
+            schema_name=schema_name,
             system_prompt=system_prompt,
             user_prompt=user_prompt,
             image_data_urls=image_data_urls,
@@ -216,6 +232,7 @@ class VisualUnderstandingTests(unittest.IsolatedAsyncioTestCase):
         )
 
         payload = json.loads(client.user_prompt)
+        self.assertEqual(client.schema_name, "visual_understanding.v1")
         self.assertEqual(
             [item["frame_id"] for item in payload["attached_images_in_exact_order"]],
             [frame.id for frame in manifest.frames],

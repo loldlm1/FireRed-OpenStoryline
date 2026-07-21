@@ -14,6 +14,7 @@ from open_storyline.mvp.prompts import (
     VISUAL_UNDERSTANDING_SYSTEM_PROMPT,
 )
 from open_storyline.mvp.scene_boundaries import SceneBoundaryReport
+from open_storyline.mvp.structured_outputs import VISUAL_UNDERSTANDING_SCHEMA
 
 
 VISUAL_UNDERSTANDING_VERSION = "visual_understanding.v1"
@@ -675,7 +676,8 @@ class VisualUnderstandingPlanner:
                 "warnings": ["bounded warning text"],
             },
         }
-        response = await self.client.complete_json(
+        response = await self.client.complete_structured(
+            schema_name=VISUAL_UNDERSTANDING_SCHEMA,
             system_prompt=VISUAL_UNDERSTANDING_SYSTEM_PROMPT,
             user_prompt=json.dumps(user_payload, ensure_ascii=False),
             image_data_urls=frame_manifest.image_data_urls,
@@ -701,7 +703,8 @@ class VisualUnderstandingPlanner:
                     ),
                 },
             }
-            repaired = await self.client.complete_json(
+            repaired = await self.client.complete_structured(
+                schema_name=VISUAL_UNDERSTANDING_SCHEMA,
                 system_prompt=VISUAL_UNDERSTANDING_SYSTEM_PROMPT,
                 user_prompt=json.dumps(repair_payload, ensure_ascii=False),
                 image_data_urls=frame_manifest.image_data_urls,

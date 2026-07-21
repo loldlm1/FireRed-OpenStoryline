@@ -10,45 +10,20 @@ import re
 import uuid
 
 import httpx
+from pydantic import ValidationError
 
+from open_storyline.mvp.ffmpega_contracts import (
+    AGENTIC_FINISHING_SKILLS,
+    DETERMINISTIC_SKILLS,
+    validate_typed_effects,
+)
 from open_storyline.mvp.ninerouter import NineRouterClient
+from open_storyline.mvp.structured_outputs import (
+    FFMPEGA_AGENTIC_SCHEMA,
+    FFMPEGA_DETERMINISTIC_SCHEMA,
+)
 
 
-DETERMINISTIC_SKILLS = frozenset({
-    "black_and_white",
-    "blur",
-    "brightness",
-    "chromatic_aberration",
-    "color_grade",
-    "contrast",
-    "deband",
-    "denoise",
-    "deshake",
-    "fade",
-    "film_grain",
-    "gamma",
-    "glow",
-    "hue",
-    "letterbox",
-    "mirror",
-    "noise_reduction",
-    "normalize",
-    "pixelate",
-    "quality",
-    "rotate",
-    "saturation",
-    "sharpen",
-    "vignette",
-    "vintage",
-    "volume",
-})
-AGENTIC_FINISHING_SKILLS = DETERMINISTIC_SKILLS - {
-    "deshake",
-    "fade",
-    "letterbox",
-    "mirror",
-    "rotate",
-}
 BLOCKED_PARAM_PARTS = {"command", "device", "filter", "model", "path", "script", "target", "url"}
 
 
@@ -86,23 +61,6 @@ class EffectsPlan:
         return {"effects": [effect.to_dict() for effect in self.effects]}
 
 
-def _simple_value(value: Any, depth: int = 0) -> bool:
-    if depth > 3:
-        return False
-    if value is None or isinstance(value, (bool, int, float)):
-        return True
-    if isinstance(value, str):
-        return len(value) <= 500
-    if isinstance(value, list):
-        return len(value) <= 20 and all(_simple_value(item, depth + 1) for item in value)
-    if isinstance(value, dict):
-        return len(value) <= 20 and all(
-            isinstance(key, str) and _simple_value(item, depth + 1)
-            for key, item in value.items()
-        )
-    return False
-
-
 def validate_effects(
     value: Any,
     *,
@@ -113,21 +71,33 @@ def validate_effects(
         raise FFMPEGAError("FFMPEGA_PLAN_INVALID", "effects must be an array")
     if len(raw_effects) > 5:
         raise FFMPEGAError("FFMPEGA_PLAN_INVALID", "at most five effects are allowed")
-    effects: list[EffectStep] = []
     for raw in raw_effects:
         if not isinstance(raw, dict):
             raise FFMPEGAError("FFMPEGA_PLAN_INVALID", "each effect must be an object")
         skill = str(raw.get("skill") or "").strip()
         if skill not in allowed_skills:
             raise FFMPEGAError("FFMPEGA_SKILL_BLOCKED", f"skill is not deterministic or allowed: {skill}")
-        params = raw.get("params") or {}
-        if not isinstance(params, dict) or not _simple_value(params):
+        params = raw.get("params")
+        if not isinstance(params, dict):
             raise FFMPEGAError("FFMPEGA_PLAN_INVALID", f"invalid parameters for {skill}")
         for key in params:
             normalized = str(key).lower()
             if any(part in normalized for part in BLOCKED_PARAM_PARTS):
                 raise FFMPEGAError("FFMPEGA_PARAMETER_BLOCKED", f"blocked parameter for {skill}: {key}")
-        effects.append(EffectStep(skill=skill, params=params))
+    try:
+        typed_effects = validate_typed_effects(
+            value,
+            allowed_skills=allowed_skills,
+        )
+    except (ValidationError, ValueError) as exc:
+        raise FFMPEGAError(
+            "FFMPEGA_PLAN_INVALID",
+            "effect parameters do not match the pinned typed contract",
+        ) from exc
+    effects = [
+        EffectStep(skill=effect["skill"], params=effect["params"])
+        for effect in typed_effects
+    ]
     return EffectsPlan(effects=effects)
 
 
@@ -142,10 +112,17 @@ class EffectsPlanner:
         allowed_skills: frozenset[str] = DETERMINISTIC_SKILLS,
     ) -> EffectsPlan:
         allowed = ", ".join(sorted(allowed_skills))
-        response = await self.client.complete_json(
+        schema_name = (
+            FFMPEGA_AGENTIC_SCHEMA
+            if allowed_skills == AGENTIC_FINISHING_SKILLS
+            else FFMPEGA_DETERMINISTIC_SCHEMA
+        )
+        response = await self.client.complete_structured(
+            schema_name=schema_name,
             system_prompt=(
                 "Select zero to five deterministic visual/audio finishing effects for a social video. "
-                "Return only {\"effects\":[{\"skill\":string,\"params\":object}]}. "
+                "Return the registered typed effects object and include every parameter key; "
+                "use null only when the schema permits the authoritative upstream default. "
                 "Use an empty array if the user did not request a relevant finishing effect. "
                 "Never request transcription, segmentation, generation, upscaling, masking, raw FFmpeg, "
                 f"or any skill outside this allowlist: {allowed}."

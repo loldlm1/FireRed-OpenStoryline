@@ -1,7 +1,7 @@
 # Plan: Centralized Agentic Defect Registry And Bounded Repair Loop
 
 **Generated**: 2026-07-21
-**Status**: Planning only; clarified and awaiting user approval of sprint titles
+**Status**: Implementation in progress; Sprints 1-2 complete
 **Estimated Complexity**: High
 
 ## Overview
@@ -56,8 +56,9 @@ preserves an unavailable enhancement itself.
   `docs/mvp/implementation-history.md` and `docs/mvp/creative-catalog.md`.
 - The current approved 9Router text/vision route remains
   `cx/gpt-5.6-sol`. This plan does not change the model or provider.
-- This planning file is the only intended branch change. Sprint 1 implementation
-  has not started.
+- The approved plan bootstrap and Sprint 1 implementation are committed on the
+  feature branch. Sprint 2 is implemented and validated at the checkpoint
+  recorded below; Sprints 3-6 remain sequentially gated.
 
 No provider call, deployment, production database mutation, or production media
 mutation was performed while closing PR #11 and preparing this branch.
@@ -512,12 +513,19 @@ Sprint 1 commit must contain only Sprint 1 implementation and supporting tests.
 
 ### Sprint 1 Gate
 
-- [ ] All Sprint 1 tasks complete.
-- [ ] Sprint 1 validation passes and evidence is recorded.
-- [ ] Residual risks are documented.
-- [ ] Exactly one Sprint 1 commit is created with the proposed sprint message.
-- [ ] The rollback point is recorded.
-- [ ] Sprint 2 has not started before this gate completes.
+- [x] All Sprint 1 tasks complete.
+- [x] Sprint 1 validation passes and evidence is recorded.
+- [x] Residual risks are documented.
+- [x] Exactly one Sprint 1 commit is created with the proposed sprint message.
+- [x] The rollback point is recorded.
+- [x] Sprint 2 has not started before this gate completes.
+
+**Recorded evidence**: 37 focused tests passed with five expected database
+skips; 29 connected PostgreSQL tests passed; JavaScript syntax checks and the
+single-worker Chromium smoke passed. Optional FFMPEGA failures remain a typed
+`EFFECT_OMITTED` fallback, while measured caption and asset findings remain
+post-render limitations. Roll back by reverting `0c812f2`; no migration or
+provider-mode change was introduced.
 
 ## Sprint 2: Enforce Progressive Strict Structured Outputs And Typed Effects
 
@@ -671,12 +679,21 @@ if necessary. Domain validators remain unchanged.
 
 ### Sprint 2 Gate
 
-- [ ] All Sprint 2 tasks complete.
-- [ ] Sprint 2 validation passes and evidence is recorded.
-- [ ] Residual risks are documented.
-- [ ] Exactly one Sprint 2 commit is created with the proposed sprint message.
-- [ ] The rollback point is recorded.
-- [ ] Sprint 3 has not started before this gate completes.
+- [x] All Sprint 2 tasks complete.
+- [x] Sprint 2 validation passes and evidence is recorded.
+- [x] Residual risks are documented.
+- [x] Exactly one Sprint 2 commit is created with the proposed sprint message.
+- [x] The rollback point is recorded.
+- [x] Sprint 3 has not started before this gate completes.
+
+**Recorded evidence**: 100 focused Sprint 2 tests passed, the full local suite
+passed 403 tests with 74 expected database skips, and the same 403 tests passed
+against the isolated PostgreSQL database. Python compilation, shell syntax,
+schema snapshots, configuration rendering, diff checks, and private-free mock
+capability cases passed. The live strict-schema probe intentionally remains a
+Sprint 6 authorized rollout gate; production defaults to `json_object`. Roll
+back by setting `OPENSTORYLINE_STRUCTURED_OUTPUT_MODE=json_object` and reverting
+the Sprint 2 commit; no migration was added.
 
 ## Sprint 3: Define Stage-Bounded Evidence-Driven Repair Policy And Contracts
 

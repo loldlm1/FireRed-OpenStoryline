@@ -14,6 +14,7 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from open_storyline.mvp.frame_sampling import sample_frames
 from open_storyline.mvp.scene_boundaries import build_scene_boundaries
+from open_storyline.mvp.structured_outputs import SEMANTIC_QA_SCHEMA
 
 
 RENDER_QA_VERSION = "render_qa.v1"
@@ -1239,7 +1240,8 @@ async def build_semantic_review(
             data_urls.append(sampled.data_url)
         if not data_urls:
             raise CreativeQAError("SEMANTIC_QA_FRAMES_MISSING", "no review frames were available")
-        raw = await client.complete_json(
+        raw = await client.complete_structured(
+            schema_name=SEMANTIC_QA_SCHEMA,
             system_prompt=(
                 "You are a bounded, non-mutating video QA reviewer. Evaluate only the "
                 "ordered rendered frames against the supplied visibility task. Return one JSON object."

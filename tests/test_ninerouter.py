@@ -7,9 +7,23 @@ from unittest.mock import patch
 import httpx
 
 from open_storyline.mvp.ninerouter import NineRouterClient, NineRouterError
+from open_storyline.mvp.structured_outputs import SHORTS_SELECTION_SCHEMA
 
 
 class NineRouterClientTests(unittest.IsolatedAsyncioTestCase):
+    @staticmethod
+    def _shorts_payload():
+        return {
+            "clips": [{
+                "start_ms": 0,
+                "end_ms": 20_000,
+                "title": "Title",
+                "hook": "Hook",
+                "reason": "Reason",
+                "score": 0.9,
+            }],
+        }
+
     async def test_sends_sol_medium_and_returns_structured_output(self):
         captured = {}
 
@@ -158,7 +172,7 @@ class NineRouterClientTests(unittest.IsolatedAsyncioTestCase):
 
         serialized = json.dumps(caught.exception.to_dict())
         self.assertNotIn("top-secret", serialized)
-        self.assertIn("Bearer ***", serialized)
+        self.assertNotIn("Bearer", serialized)
         self.assertEqual(len(caught.exception.attempts), 1)
 
     async def test_forbidden_fails_without_retry(self):
@@ -200,6 +214,168 @@ class NineRouterClientTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(calls, 2)
         self.assertEqual(len(caught.exception.attempts), 2)
+
+    async def test_strict_schema_is_sent_and_locally_validated(self):
+        captured = {}
+        payload = self._shorts_payload()
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            captured.update(json.loads(request.content))
+            return httpx.Response(200, json={
+                "choices": [{
+                    "finish_reason": "stop",
+                    "message": {"content": json.dumps(payload)},
+                }],
+            })
+
+        client = NineRouterClient(
+            base_url="https://router.test",
+            api_key="secret",
+            max_retries=0,
+            transport=httpx.MockTransport(handler),
+            structured_output_mode="json_schema",
+            structured_output_boundaries=SHORTS_SELECTION_SCHEMA,
+            structured_output_capability_verified=True,
+        )
+        result = await client.complete_structured(
+            schema_name=SHORTS_SELECTION_SCHEMA,
+            system_prompt="system",
+            user_prompt="user",
+        )
+
+        self.assertEqual(result, payload)
+        response_format = captured["response_format"]
+        self.assertEqual(response_format["type"], "json_schema")
+        self.assertTrue(response_format["json_schema"]["strict"])
+        self.assertEqual(response_format["json_schema"]["name"], "shorts_selection_v1")
+
+    async def test_strict_schema_never_accepts_fences_or_prose(self):
+        payload = json.dumps(self._shorts_payload())
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            return httpx.Response(200, json={
+                "choices": [{"message": {"content": f"```json\n{payload}\n```"}}],
+            })
+
+        client = NineRouterClient(
+            base_url="https://router.test",
+            api_key="secret",
+            max_retries=0,
+            transport=httpx.MockTransport(handler),
+            structured_output_mode="json_schema",
+            structured_output_boundaries=SHORTS_SELECTION_SCHEMA,
+            structured_output_capability_verified=True,
+        )
+        with self.assertRaises(NineRouterError) as caught:
+            await client.complete_structured(
+                schema_name=SHORTS_SELECTION_SCHEMA,
+                system_prompt="system",
+                user_prompt="user",
+            )
+        self.assertEqual(caught.exception.code, "NINEROUTER_RESPONSE_INVALID")
+
+    async def test_structured_output_handles_schema_mismatch_refusal_and_incomplete(self):
+        cases = (
+            (
+                {"choices": [{"message": {"content": '{"clips":[] ,"extra":true}'}}]},
+                "NINEROUTER_SCHEMA_MISMATCH",
+            ),
+            (
+                {"choices": [{"message": {"content": "", "refusal": "no"}}]},
+                "NINEROUTER_RESPONSE_REFUSED",
+            ),
+            (
+                {"choices": [{"finish_reason": "length", "message": {"content": "{}"}}]},
+                "NINEROUTER_RESPONSE_INCOMPLETE",
+            ),
+        )
+        for response_payload, code in cases:
+            with self.subTest(code=code):
+                client = NineRouterClient(
+                    base_url="https://router.test",
+                    api_key="secret",
+                    max_retries=0,
+                    transport=httpx.MockTransport(
+                        lambda request, response_payload=response_payload: httpx.Response(
+                            200,
+                            json=response_payload,
+                        )
+                    ),
+                    structured_output_mode="json_schema",
+                    structured_output_boundaries=SHORTS_SELECTION_SCHEMA,
+                    structured_output_capability_verified=True,
+                )
+                with self.assertRaises(NineRouterError) as caught:
+                    await client.complete_structured(
+                        schema_name=SHORTS_SELECTION_SCHEMA,
+                        system_prompt="system",
+                        user_prompt="user",
+                    )
+                self.assertEqual(caught.exception.code, code)
+
+    async def test_provider_schema_rejection_has_a_safe_code(self):
+        client = NineRouterClient(
+            base_url="https://router.test",
+            api_key="secret",
+            max_retries=0,
+            transport=httpx.MockTransport(
+                lambda request: httpx.Response(400, json={"private": "provider body"})
+            ),
+            structured_output_mode="json_schema",
+            structured_output_boundaries=SHORTS_SELECTION_SCHEMA,
+            structured_output_capability_verified=True,
+        )
+        with self.assertRaises(NineRouterError) as caught:
+            await client.complete_structured(
+                schema_name=SHORTS_SELECTION_SCHEMA,
+                system_prompt="system",
+                user_prompt="user",
+            )
+        self.assertEqual(caught.exception.code, "NINEROUTER_SCHEMA_UNSUPPORTED")
+        self.assertNotIn("provider body", json.dumps(caught.exception.to_dict()))
+
+    async def test_unallowlisted_boundary_stays_rollback_compatible_json_object(self):
+        captured = {}
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            captured.update(json.loads(request.content))
+            return httpx.Response(200, json={
+                "choices": [{"message": {"content": json.dumps(self._shorts_payload())}}],
+            })
+
+        client = NineRouterClient(
+            base_url="https://router.test",
+            api_key="secret",
+            max_retries=0,
+            transport=httpx.MockTransport(handler),
+            structured_output_mode="json_schema",
+            structured_output_boundaries="",
+            structured_output_capability_verified=False,
+        )
+        await client.complete_structured(
+            schema_name=SHORTS_SELECTION_SCHEMA,
+            system_prompt="system",
+            user_prompt="user",
+        )
+        self.assertEqual(captured["response_format"], {"type": "json_object"})
+
+    def test_strict_configuration_requires_probe_and_known_boundaries(self):
+        with self.assertRaises(NineRouterError) as caught:
+            NineRouterClient(
+                base_url="https://router.test",
+                api_key="secret",
+                structured_output_mode="json_schema",
+                structured_output_boundaries=SHORTS_SELECTION_SCHEMA,
+                structured_output_capability_verified=False,
+            )
+        self.assertEqual(caught.exception.code, "NINEROUTER_SCHEMA_CAPABILITY_UNVERIFIED")
+        with self.assertRaises(NineRouterError) as caught:
+            NineRouterClient(
+                base_url="https://router.test",
+                api_key="secret",
+                structured_output_boundaries="unknown.v1",
+            )
+        self.assertEqual(caught.exception.code, "NINEROUTER_CONFIG_INVALID")
 
     def test_environment_overrides_config(self):
         config = SimpleNamespace(

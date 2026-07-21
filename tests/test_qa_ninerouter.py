@@ -134,11 +134,68 @@ class NineRouterPreflightTests(unittest.TestCase):
 
         self.assertEqual(
             [check.name for check in checks],
-            ["text_contract", "vision_contract", "image_contract"],
+            [
+                "text_contract",
+                "vision_contract",
+                "strict_schema_acceptance",
+                "strict_schema_extra_field_rejection",
+                "image_contract",
+            ],
         )
         self.assertTrue(all(check.category == "skipped" for check in checks))
         post_json.assert_not_called()
         http_request.assert_not_called()
+
+    def test_strict_schema_probe_accepts_valid_and_rejects_extra_fields(self):
+        captured = []
+
+        def fake_post(url, payload, *, api_key, timeout):
+            captured.append(payload)
+            return (
+                200,
+                {"choices": [{"message": {"content": '{"ok":true}'}}]},
+                b"redacted",
+                "ok",
+            )
+
+        with patch.object(qa_ninerouter, "post_json", side_effect=fake_post):
+            checks = qa_ninerouter.strict_schema_checks(
+                "https://router.test/v1/chat/completions",
+                model="cx/gpt-5.6-sol",
+                api_key="secret",
+                timeout=1,
+            )
+
+        self.assertTrue(all(check.ok for check in checks))
+        self.assertEqual(len(captured), 2)
+        response_format = captured[0]["response_format"]
+        self.assertEqual(response_format["type"], "json_schema")
+        self.assertTrue(response_format["json_schema"]["strict"])
+        self.assertFalse(
+            response_format["json_schema"]["schema"]["additionalProperties"]
+        )
+
+    def test_strict_schema_probe_fails_on_unsupported_or_extra_output(self):
+        responses = [
+            (400, None, b"", "http"),
+            (
+                200,
+                {"choices": [{"message": {"content": '{"ok":true,"extra":1}'}}]},
+                b"redacted",
+                "ok",
+            ),
+        ]
+        with patch.object(qa_ninerouter, "post_json", side_effect=responses):
+            checks = qa_ninerouter.strict_schema_checks(
+                "https://router.test/v1/chat/completions",
+                model="cx/gpt-5.6-sol",
+                api_key="secret",
+                timeout=1,
+            )
+
+        self.assertEqual(checks[0].category, "schema_unsupported")
+        self.assertEqual(checks[1].category, "contract_invalid")
+        self.assertFalse(any(check.ok for check in checks))
 
     def test_container_probe_rejects_unsafe_image_name(self):
         check = qa_ninerouter.container_host_checks(
