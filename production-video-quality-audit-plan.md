@@ -29,13 +29,13 @@ user requirements
   -> advisory semantic and human review
 ```
 
-**Plan status**: Implemented and production-validated; pull request pending.
+**Plan status**: Implemented and production-validated; pull request #10 open.
 
 **Created**: 2026-07-20.
 
 **Implementation branch**: `fix/production-video-quality-hardening`.
 
-**Current implementation head and deployed revision**: `824886c`.
+**Production-deployed code revision**: `824886c`.
 
 **Current local baseline**: `8e2a71e`.
 
