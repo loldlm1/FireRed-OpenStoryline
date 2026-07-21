@@ -3,6 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from types import SimpleNamespace
+from copy import deepcopy
 import json
 import os
 import shutil
@@ -11,11 +12,13 @@ import unittest
 from unittest.mock import patch
 
 from open_storyline.mvp.creative_qa import (
+    ASSET_VISIBILITY_VERSION,
     CREATIVE_CONFORMANCE_VERSION,
     QAInput,
     RENDER_QA_VERSION,
     RETENTION_RHYTHM_QA_VERSION,
     build_creative_conformance_report,
+    build_asset_visibility_report,
     build_render_qa_report,
     build_retention_rhythm_report,
     build_semantic_review,
@@ -139,6 +142,44 @@ class CreativeQATests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(report["operations"]["missing"], [])
         self.assertEqual(report["assets"]["missing"], [])
 
+    def test_duplicate_asset_visibility_blocks_conformance(self):
+        rendered = execution(with_asset=True)
+        duplicate = deepcopy(rendered["clips"][0]["segments"][0]["overlays"][0])
+        duplicate["id"] = "overlay-2"
+        duplicate["timeline_window"] = {"start_ms": 1500, "end_ms": 3000}
+        rendered["clips"][0]["segments"][0]["overlays"].append(duplicate)
+        with (
+            patch(
+                "open_storyline.mvp.creative_qa._probe_visual_asset",
+                return_value={"width": 60, "height": 80, "duration_seconds": 0},
+            ),
+            patch(
+                "open_storyline.mvp.creative_qa._measure_asset_visibility",
+                return_value=0.99,
+            ),
+        ):
+            visibility = build_asset_visibility_report(
+                [QAInput(1, Path("short-01.mp4"), 8000)],
+                render_execution=rendered,
+                resolved_assets={"asset-1": Path(__file__)},
+                expected_width=180,
+                expected_height=320,
+                strict=True,
+            )
+        report = build_creative_conformance_report(
+            edit_plan=edit_plan(with_asset=True),
+            render_execution=rendered,
+            strict=True,
+            asset_visibility=visibility,
+        )
+
+        self.assertEqual(visibility["version"], ASSET_VISIBILITY_VERSION)
+        self.assertEqual(report["status"], "blocker")
+        self.assertIn(
+            "asset_overlay_duplicated",
+            {item["code"] for item in report["findings"]},
+        )
+
     def test_rhythm_report_measures_hook_holds_attention_and_subtitles(self):
         with TemporaryDirectory() as tmpdir:
             root = Path(tmpdir)
@@ -229,6 +270,7 @@ class CreativeQATests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(json.loads(result.rhythm_qa_path.read_text())["version"], RETENTION_RHYTHM_QA_VERSION)
             conformance = json.loads(result.conformance_path.read_text())
             self.assertEqual(conformance["version"], CREATIVE_CONFORMANCE_VERSION)
+            self.assertEqual(conformance["asset_visibility"]["status"], "pass")
             self.assertEqual(conformance["semantic_review"]["status"], "disabled")
 
     def test_environment_controls_are_strict_and_bounded(self):
@@ -283,6 +325,74 @@ class CreativeQATests(unittest.IsolatedAsyncioTestCase):
 
 @unittest.skipUnless(shutil.which("ffmpeg") and shutil.which("ffprobe"), "FFmpeg is required")
 class CreativeQARenderTests(unittest.TestCase):
+    def _asset_visibility_fixture(self, root: Path) -> tuple[Path, Path, Path]:
+        asset = root / "asset.png"
+        visible = root / "visible.mp4"
+        invisible = root / "invisible.mp4"
+        commands = [
+            [
+                "ffmpeg", "-y", "-v", "error", "-f", "lavfi", "-i",
+                "color=c=red:size=60x80", "-frames:v", "1", str(asset),
+            ],
+            [
+                "ffmpeg", "-y", "-v", "error", "-f", "lavfi", "-i",
+                "color=c=blue:size=180x320:rate=24:duration=3",
+                "-loop", "1", "-i", str(asset), "-filter_complex",
+                "[0:v][1:v]overlay=60:120:enable='between(t,1,2)'",
+                "-t", "3", "-c:v", "libx264", "-preset", "ultrafast",
+                "-pix_fmt", "yuv420p", str(visible),
+            ],
+            [
+                "ffmpeg", "-y", "-v", "error", "-f", "lavfi", "-i",
+                "color=c=black:size=180x320:rate=24:duration=3",
+                "-c:v", "libx264", "-preset", "ultrafast",
+                "-pix_fmt", "yuv420p", str(invisible),
+            ],
+        ]
+        for command in commands:
+            completed = subprocess.run(
+                command,
+                capture_output=True,
+                text=True,
+                check=False,
+                timeout=120,
+            )
+            self.assertEqual(completed.returncode, 0, completed.stderr)
+        return asset, visible, invisible
+
+    def test_asset_visibility_passes_only_when_declared_pixels_are_rendered(self):
+        with TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            asset, visible, invisible = self._asset_visibility_fixture(root)
+            rendered = execution(with_asset=True)
+            overlay = rendered["clips"][0]["segments"][0]["overlays"][0]
+            overlay.update({
+                "timeline_window": {"start_ms": 1000, "end_ms": 2000},
+                "width_ratio": 1 / 3,
+                "position": "center",
+                "opacity": 1.0,
+            })
+            reports = [
+                build_asset_visibility_report(
+                    [QAInput(1, video, 3000)],
+                    render_execution=rendered,
+                    resolved_assets={"asset-1": asset},
+                    expected_width=180,
+                    expected_height=320,
+                    strict=True,
+                    timeout=60,
+                )
+                for video in (visible, invisible)
+            ]
+
+        self.assertEqual(reports[0]["status"], "pass")
+        self.assertGreaterEqual(reports[0]["observations"][0]["ssim"], 0.6)
+        self.assertEqual(reports[1]["status"], "blocker")
+        self.assertIn(
+            "asset_overlay_not_visible",
+            {item["code"] for item in reports[1]["findings"]},
+        )
+
     def test_structural_qa_probes_real_synthetic_output(self):
         with TemporaryDirectory() as tmpdir:
             root = Path(tmpdir)

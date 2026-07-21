@@ -400,6 +400,11 @@ class CPUShortRendererTests(unittest.TestCase):
             json.dumps(result.execution)
             for expected in ("drawtext=", "overlay=", "xfade=", "acrossfade=", "fade=t=in"):
                 self.assertIn(expected, execution["filtergraph"])
+            asset_chain = execution["filtergraph"].split("[1:v]", 1)[1].split("[ov2_0]", 1)[0]
+            self.assertLess(
+                asset_chain.index("fade=t=in"),
+                asset_chain.index("setpts=PTS+0.600/TB"),
+            )
             self.assertLess(execution["filtergraph_length"], 10_000)
             self.assertEqual(execution["asset_ids"], ["asset-1"])
 

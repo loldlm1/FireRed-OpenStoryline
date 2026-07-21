@@ -65,6 +65,15 @@ def build_render_promotion_report(
     if (creative_conformance or {}).get("status") in {None, "unavailable"} and mode != "off":
         blockers.append("CREATIVE_CONFORMANCE_UNAVAILABLE")
     conformance_blockers = {
+        "asset_overlay_duplicated",
+        "asset_overlay_not_visible",
+        "asset_overlay_opacity_too_low",
+        "asset_visibility_analysis_unavailable",
+        "asset_visibility_asset_invalid",
+        "asset_visibility_asset_unresolved",
+        "asset_visibility_geometry_invalid",
+        "asset_visibility_limit_reached",
+        "asset_visibility_timing_invalid",
         "planned_operations_missing",
         "requested_assets_missing",
         "unrequested_assets_used",
@@ -74,6 +83,8 @@ def build_render_promotion_report(
         code = str(finding.get("code") or "")
         if code in conformance_blockers:
             blockers.append(code.upper())
+        elif finding.get("severity") == "blocker" and code:
+            blockers.append(code[:80])
     for footprint in caption_footprints:
         if footprint.get("status") == "blocked":
             blockers.extend(

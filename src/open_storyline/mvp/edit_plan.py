@@ -638,6 +638,11 @@ def _normalize_edit_plan_response(
         if not isinstance(clip, dict):
             continue
         asset_requests = clip.get("asset_requests")
+        external_asset_ids = {
+            str(asset.get("id"))
+            for asset in asset_requests or []
+            if isinstance(asset, dict) and asset.get("id")
+        }
         if isinstance(asset_requests, list):
             for asset in asset_requests:
                 if not isinstance(asset, dict):
@@ -710,6 +715,11 @@ def _normalize_edit_plan_response(
                     overlay.get("kind") == "image_overlay"
                     and isinstance(overlay.get("asset_id"), str)
                     and overlay["asset_id"]
+                ):
+                    overlay["kind"] = "image"
+                if (
+                    overlay.get("kind") in {"source", "pip"}
+                    and overlay.get("asset_id") in external_asset_ids
                 ):
                     overlay["kind"] = "image"
                 for field in ("text", "asset_id"):
