@@ -409,6 +409,39 @@ function durationLabel(run) {
   return formatElapsed(ended - started).replace(' transcurridos', '');
 }
 
+function outcomePresentation(run) {
+  const grade = run?.outcome?.grade;
+  if (grade === 'enhanced') return { label: 'Mejorado', className: 'outcome-enhanced', symbol: '✓' };
+  if (grade === 'with_limitations') {
+    return { label: 'Completado con limitaciones', className: 'outcome-limited', symbol: '!' };
+  }
+  if (grade === 'retryable_failure') {
+    return { label: 'Fallo reintentable', className: 'outcome-retryable', symbol: '↻' };
+  }
+  if (grade === 'terminal_failure') {
+    return { label: 'Fallo no recuperable', className: 'outcome-failed', symbol: '×' };
+  }
+  return {
+    label: stateLabel(run?.state),
+    className: run?.state === 'failed' ? 'outcome-failed' : 'outcome-neutral',
+    symbol: run?.state === 'failed' ? '×' : '•',
+  };
+}
+
+function codeLabel(code) {
+  return String(code || '').replaceAll('_', ' ').toLocaleLowerCase('es');
+}
+
+function stageNames(values = []) {
+  return values.length ? values.map((value) => codeLabel(value)).join(', ') : 'ninguna';
+}
+
+function outcomeCodes(outcome, field, recordsField) {
+  const explicit = outcome?.[field] || [];
+  const records = (outcome?.[recordsField] || []).map((item) => item.code);
+  return [...new Set([...explicit, ...records].filter(Boolean))];
+}
+
 function settingsLabels(settings = {}) {
   const labels = [];
   labels.push(settings.edit_mode === 'agentic' ? 'Edición agéntica' : 'Edición esencial');
@@ -502,6 +535,60 @@ function createRunDetail(run) {
     evidence.append(badge);
   }
   detail.append(evidence);
+  if (run.outcome) {
+    const outcome = document.createElement('section');
+    outcome.className = 'outcome-detail';
+    const presentation = outcomePresentation(run);
+    const heading = document.createElement('h4');
+    heading.textContent = `${presentation.symbol} ${presentation.label}`;
+    const retry = run.outcome.retry || {};
+    const checkpointCopy = document.createElement('p');
+    checkpointCopy.textContent = `Etapas reutilizadas: ${stageNames(retry.reused_stage_names)}. Recalculadas: ${stageNames(retry.recomputed_stage_names)}.`;
+    outcome.append(heading, checkpointCopy);
+    const limitations = [
+      ...(run.outcome.limitations || []),
+      ...(run.outcome.fatal_errors || []),
+    ];
+    if (limitations.length) {
+      const disclosure = document.createElement('details');
+      disclosure.className = 'limitation-disclosure';
+      const summary = document.createElement('summary');
+      summary.textContent = `${limitations.length} hallazgo${limitations.length === 1 ? '' : 's'} verificable${limitations.length === 1 ? '' : 's'}`;
+      const list = document.createElement('ul');
+      for (const limitation of limitations) {
+        const item = document.createElement('li');
+        const title = document.createElement('strong');
+        title.textContent = limitation.code;
+        const copy = document.createElement('span');
+        const execution = limitation.executed
+          ? `Se ejecutó ${codeLabel(limitation.executed)}${limitation.requested ? ` en lugar de ${codeLabel(limitation.requested)}` : ''}.`
+          : limitation.description || `Hallazgo en ${codeLabel(limitation.stage || 'qa')}.`;
+        copy.textContent = execution;
+        item.append(title, copy);
+        list.append(item);
+      }
+      disclosure.append(summary, list);
+      outcome.append(disclosure);
+    }
+    const comparison = [
+      retry.resolved_limitation_codes?.length
+        ? `Resueltas: ${retry.resolved_limitation_codes.join(', ')}.`
+        : null,
+      retry.remaining_limitation_codes?.length
+        ? `Persisten: ${retry.remaining_limitation_codes.join(', ')}.`
+        : null,
+      retry.new_limitation_codes?.length
+        ? `Nuevas: ${retry.new_limitation_codes.join(', ')}.`
+        : null,
+    ].filter(Boolean).join(' ');
+    if (comparison) {
+      const comparisonCopy = document.createElement('p');
+      comparisonCopy.className = 'outcome-comparison';
+      comparisonCopy.textContent = comparison;
+      outcome.append(comparisonCopy);
+    }
+    detail.append(outcome);
+  }
   if (outputs.length) {
     const previews = document.createElement('div');
     previews.className = 'preview-grid';
@@ -552,6 +639,8 @@ export function renderVersionHistory({
   activeJobId,
   nextCursor,
   favoritePending,
+  retryPendingIds,
+  retryUxEnabled,
 }, callbacks) {
   elements.recentJobs.replaceChildren();
   elements.recentEmpty.hidden = versions.length > 0;
@@ -620,7 +709,11 @@ export function renderVersionHistory({
       const summaryCopy = document.createElement('div');
       summaryCopy.className = 'attempt-summary';
       const runTitle = document.createElement('strong');
-      runTitle.textContent = `Intento ${run.attempt_number} · ${stateLabel(run.state)}`;
+      const presentation = outcomePresentation(run);
+      runTitle.textContent = `Intento ${run.attempt_number} · ${presentation.label}`;
+      const outcomeBadge = document.createElement('span');
+      outcomeBadge.className = `outcome-badge ${presentation.className}`;
+      outcomeBadge.textContent = `${presentation.symbol} ${presentation.label}`;
       const meta = document.createElement('span');
       const outputs = run.artifacts ? outputArtifacts(run).length : null;
       meta.textContent = [
@@ -628,7 +721,7 @@ export function renderVersionHistory({
         outputs === null ? 'Detalles bajo demanda' : `${outputs} salida${outputs === 1 ? '' : 's'}`,
         run.error_code ? errorMessage(run.error_code) : null,
       ].filter(Boolean).join(' · ');
-      summaryCopy.append(runTitle, meta);
+      summaryCopy.append(runTitle, outcomeBadge, meta);
       const actions = document.createElement('div');
       actions.className = 'attempt-actions';
       const open = document.createElement('button');
@@ -660,6 +753,26 @@ export function renderVersionHistory({
         favoriteButton.disabled = favoritePending;
         favoriteButton.addEventListener('click', () => callbacks.onFavorite(run));
         actions.append(favoriteButton);
+      }
+      if (
+        retryUxEnabled
+        && ['completed', 'failed'].includes(run.state)
+        && run.outcome?.retry?.supported
+      ) {
+        const retryButton = document.createElement('button');
+        retryButton.type = 'button';
+        retryButton.className = 'button button-secondary';
+        retryButton.textContent = retryPendingIds.has(run.id)
+          ? 'Preparando reintento…'
+          : 'Reintentar defectos';
+        retryButton.disabled = retryPendingIds.has(run.id);
+        retryButton.addEventListener('click', () => callbacks.onRetryDefects(version, run));
+        const improveButton = document.createElement('button');
+        improveButton.type = 'button';
+        improveButton.className = 'button button-quiet';
+        improveButton.textContent = 'Crear versión mejorada';
+        improveButton.addEventListener('click', () => callbacks.onCreateImprovedVersion(version, run));
+        actions.append(retryButton, improveButton);
       }
       row.append(summaryCopy, actions);
       if (expandedRunIds.has(run.id)) {
@@ -737,7 +850,22 @@ export function renderComparison(entries) {
     column.append(title);
     column.append(comparisonSection('Instrucción', version.prompt));
     column.append(comparisonSection('Configuración', settingsLabels(version.settings).join(' · ')));
-    column.append(comparisonSection('Estado y tiempo', `${stateLabel(run.state)} · ${durationLabel(run)}`));
+    column.append(comparisonSection('Estado y tiempo', `${outcomePresentation(run).label} · ${durationLabel(run)}`));
+    const retry = run.outcome?.retry || {};
+    column.append(comparisonSection(
+      'Limitaciones',
+      outcomeCodes(run.outcome, 'limitation_codes', 'limitations').length
+        ? outcomeCodes(run.outcome, 'limitation_codes', 'limitations').join(', ')
+        : 'Sin limitaciones declaradas.',
+    ));
+    column.append(comparisonSection(
+      'Cambio frente al intento anterior',
+      [
+        retry.resolved_limitation_codes?.length ? `Resueltas: ${retry.resolved_limitation_codes.join(', ')}` : null,
+        retry.remaining_limitation_codes?.length ? `Persisten: ${retry.remaining_limitation_codes.join(', ')}` : null,
+        retry.new_limitation_codes?.length ? `Nuevas: ${retry.new_limitation_codes.join(', ')}` : null,
+      ].filter(Boolean).join(' · ') || 'Este intento no declara una comparación de defectos.',
+    ));
     const outputs = outputArtifacts(run);
     const qa = qaArtifacts(run);
     column.append(comparisonSection(

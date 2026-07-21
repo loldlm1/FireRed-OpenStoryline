@@ -41,6 +41,7 @@ from open_storyline.mvp.models import (
     VideoJob,
 )
 from open_storyline.mvp.observability import compact_prior_attempt_quality_feedback
+from open_storyline.mvp.outcomes import outcome_summary
 from open_storyline.mvp.session_media import SessionMediaStore
 
 
@@ -325,6 +326,16 @@ class PromptVersionService:
                                 ),
                                 "quality_feedback_version": (
                                     quality_feedback.get("version")
+                                    if quality_feedback
+                                    else None
+                                ),
+                                "retry_reason_codes": (
+                                    quality_feedback.get("retry_reason_codes", [])
+                                    if quality_feedback
+                                    else []
+                                ),
+                                "resume_policy": (
+                                    "reuse_compatible_checkpoints"
                                     if quality_feedback
                                     else None
                                 ),
@@ -670,6 +681,12 @@ class PromptVersionService:
         request_data = dict(version.settings_data or {})
         if quality_feedback:
             request_data["prior_attempt_quality_feedback"] = quality_feedback
+            request_data.update({
+                "retry_of_attempt_id": quality_feedback.get("prior_attempt_id"),
+                "retry_reason_codes": quality_feedback.get("retry_reason_codes", []),
+                "resume_policy": "reuse_compatible_checkpoints",
+                "prior_outcome_grade": quality_feedback.get("prior_outcome_grade"),
+            })
         return VideoJob(
             id=job_id,
             editing_session_id=owner.id,
@@ -734,6 +751,8 @@ class PromptVersionService:
                 "frame_quality_qa.json",
                 "clip_visual_coverage.json",
                 "creative_conformance.json",
+                "outcome_report.json",
+                "fallback_ledger.json",
             } or row.source_name.endswith(".caption-footprint.json"):
                 documents[row.source_name] = dict(row.parsed_data)
         if not documents:
@@ -816,6 +835,8 @@ class PromptVersionService:
 
     @staticmethod
     def _run_summary(row: VideoJob) -> dict[str, Any]:
+        result_data = row.result_data if isinstance(row.result_data, dict) else {}
+        request_data = row.request_data if isinstance(row.request_data, dict) else {}
         return {
             "id": row.id,
             "attempt_number": row.attempt_number,
@@ -828,6 +849,8 @@ class PromptVersionService:
                 if isinstance(row.error_data, dict)
                 else None
             ),
+            "outcome": outcome_summary(result_data.get("outcome")),
+            "retry_of_attempt_id": request_data.get("retry_of_attempt_id"),
             "created_at": _iso(row.created_at),
             "completed_at": _iso(row.completed_at),
             "media_expires_at": _iso(row.media_expires_at),

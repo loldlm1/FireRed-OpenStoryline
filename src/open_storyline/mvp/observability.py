@@ -81,7 +81,45 @@ def compact_prior_attempt_quality_feedback(
     frame_quality = _mapping(documents.get("frame_quality_qa.json"))
     visual_coverage = _mapping(documents.get("clip_visual_coverage.json"))
     conformance = _mapping(documents.get("creative_conformance.json"))
+    outcome_report = _mapping(documents.get("outcome_report.json"))
+    fallback_ledger = _mapping(documents.get("fallback_ledger.json"))
     blocker_codes = set(_codes(promotion.get("blocker_codes")))
+    limitations: list[dict[str, Any]] = []
+    for limitation in _records(outcome_report.get("limitations"), limit=64):
+        code = str(limitation.get("code") or "")
+        if not SAFE_CODE.fullmatch(code):
+            continue
+        blocker_codes.add(code)
+        limitations.append({
+            "code": code,
+            "stage": _token(limitation.get("stage"), limit=40),
+            "clip_index": _integer(limitation.get("clip_index"), maximum=50),
+            "segment_id": _token(limitation.get("segment_id")),
+            "requested": _token(limitation.get("requested"), limit=120),
+            "executed": _token(limitation.get("executed"), limit=120),
+            "recommended_retry_action": _token(
+                limitation.get("recommended_retry_action"),
+                limit=40,
+            ),
+        })
+    for entry in _records(fallback_ledger.get("entries"), limit=64):
+        code = str(entry.get("code") or "")
+        if not SAFE_CODE.fullmatch(code) or any(
+            item["code"] == code
+            and item["segment_id"] == _token(entry.get("segment_id"))
+            for item in limitations
+        ):
+            continue
+        blocker_codes.add(code)
+        limitations.append({
+            "code": code,
+            "stage": "compile",
+            "clip_index": _integer(entry.get("clip_index"), maximum=50),
+            "segment_id": _token(entry.get("segment_id")),
+            "requested": _token(entry.get("requested"), limit=120),
+            "executed": _token(entry.get("executed"), limit=120),
+            "recommended_retry_action": _token(entry.get("retry_action"), limit=40),
+        })
     asset_findings: list[dict[str, str]] = []
     for finding in _records(conformance.get("findings"), limit=64):
         code = str(finding.get("code") or "")
@@ -166,8 +204,13 @@ def compact_prior_attempt_quality_feedback(
             frame_quality.get("version"),
             visual_coverage.get("version"),
             conformance.get("version"),
+            outcome_report.get("version"),
+            fallback_ledger.get("version"),
         ]),
         "blocker_codes": sorted(blocker_codes)[:32],
+        "retry_reason_codes": sorted({item["code"] for item in limitations})[:32],
+        "prior_outcome_grade": _token(outcome_report.get("grade"), limit=40),
+        "limitations": limitations[:24],
         "asset_findings": asset_findings[:16],
         "crop_windows": crop_windows[:16],
         "active_picture": active_picture,

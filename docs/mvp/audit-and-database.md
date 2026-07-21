@@ -39,10 +39,12 @@ them as the live source of truth.
 
 The additive `20260719_0002` revision introduces workflow versions,
 `session_input_videos`, `prompt_versions`, run attempts, favorites, and public
-activity without removing legacy job columns. `/up` accepts both
-`20260717_0001` and `20260719_0002` for the compatibility bridge and fails
-closed on unknown revisions. Apply the bridge before the migration; do not
-enable reusable sessions until migration, backup, restore, and canary gates pass.
+activity without removing legacy job columns. The additive `20260721_0003`
+revision adds session-analysis and job-stage checkpoints without removing or
+rewriting existing rows. `/up` accepts `20260717_0001`, `20260719_0002`, and
+`20260721_0003` for the compatibility bridge and fails closed on unknown
+revisions. Apply migrations in order; do not enable reusable sessions or
+checkpoint reads until migration, backup, restore, and canary gates pass.
 
 Create or inspect the schema with:
 
@@ -155,9 +157,12 @@ Agentic render candidates also produce bounded `frame_quality_qa.json` and
 ratios, decoded frame counts, bounded blur/blockiness signal summaries, and
 caption-masked aligned SSIM/PSNR samples without retaining sampled frames or
 private paths. `OPENSTORYLINE_RENDER_PROMOTION_MODE=report` preserves completion
-while exposing blocker codes; `enforce` removes the candidate video before it
-can be registered when deterministic geometry, media structure, caption, or
-asset-conformance evidence blocks promotion. `off` is a rollback-only mode.
+while exposing blocker codes. In `enforce`, the default `strict` completion
+policy removes a candidate for any blocker. `baseline_guaranteed` may publish
+creative-only limitations only when
+`OPENSTORYLINE_LIMITED_OUTPUT_PROMOTION_ENABLED=true`; missing or invalid core
+media/QA evidence still blocks. Every report preserves strict and baseline
+decisions for comparison. `off` is a rollback-only mode.
 Optional offline VMAF/XPSNR analysis remains a read-only operator action in the
 separate [quality sidecar](quality-sidecar.md). Its metrics do not change job
 state or promotion decisions. A later run can explicitly reuse only the
@@ -180,6 +185,7 @@ Use bounded JSON or NDJSON output when another agent will inspect the result:
 
 ```bash
 ./bin/kamal-mvp audit list --since 24h --limit 50 --format json
+./bin/kamal-mvp audit outcomes --since 24h --limit 5000 --format json
 ./bin/kamal-mvp audit show JOB_ID --limit 200 --format json
 ./bin/kamal-mvp audit events JOB_ID --limit 200 --format json
 ./bin/kamal-mvp audit documents JOB_ID --limit 200 --format ndjson
@@ -188,7 +194,12 @@ Use bounded JSON or NDJSON output when another agent will inspect the result:
 
 `audit list` also filters by editing session, state, stage, latest verdict,
 error code, media availability, and audit hold. Follow its `next_cursor` for
-the next bounded page. `audit verify` uses FFprobe plus manifest/subtitle checks
+the next bounded page. `audit outcomes` reports classified sample size, playable
+output rate, a 95% Wilson interval, outcome counts, top limitation codes, retry
+success, checkpoint reuse, and time to playable output. It sets `claim_ready`
+only when the lower confidence bound reaches the 99% target with at least 100
+classified attempts; unclassified historical attempts remain explicit.
+`audit verify` uses FFprobe plus manifest/subtitle checks
 to assess decodability, stream metadata, duration/count agreement, cue ordering,
 and the recorded promotion/frame-quality documents. Its verdict confirms
 evidence integrity and structure; it does not claim engagement, semantic
@@ -301,11 +312,12 @@ Real server commands require a separately authorized maintenance window. Keep
 The normal emergency action is to set
 `OPENSTORYLINE_SESSION_WORKSPACE_MODE=legacy` and redeploy/restart, preserving
 all workflow-v2 rows and files. If code rollback is required, return to the
-compatibility bridge image (`71c9082`), not a pre-bridge image. Keep schema
-`20260719_0002`; do not downgrade after workflow-v2 data exists. Disable
-retention before investigating inconsistent state, preserve the output volume
-and restore-checked `openstoryline.latest.dump`, and repair bounded records
-idempotently. Restore only with writes stopped and an empty/isolated target.
+compatibility bridge image (`71c9082`), not a pre-bridge image. Keep the current
+additive schema, including `20260721_0003` after checkpoint rollout; do not
+downgrade after workflow-v2 or checkpoint data exists. Disable retention before
+investigating inconsistent state, preserve the output volume and restore-checked
+`openstoryline.latest.dump`, and repair bounded records idempotently. Restore
+only with writes stopped and an empty/isolated target.
 Media already purged by expiry or session deletion is irreversible and cannot
 be recovered from the database dump.
 

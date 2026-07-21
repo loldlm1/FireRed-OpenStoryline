@@ -28,6 +28,7 @@ from open_storyline.mvp.models import (
     SessionInputVideo,
     VideoJob,
 )
+from open_storyline.mvp.outcomes import build_completed_outcome_report
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -62,7 +63,8 @@ class AuditPostgresTestCase(unittest.IsolatedAsyncioTestCase):
         async with self.database.engine.begin() as connection:
             await connection.execute(
                 text(
-                    "TRUNCATE audit_reviews, audit_documents, artifacts, job_events, "
+                    "TRUNCATE job_stage_checkpoints, session_analysis_cache, "
+                    "audit_reviews, audit_documents, artifacts, job_events, "
                     "video_jobs, prompt_versions, session_input_videos, editing_sessions, "
                     "auth_sessions, login_attempt_buckets"
                 )
@@ -91,6 +93,83 @@ class AuditPostgresTestCase(unittest.IsolatedAsyncioTestCase):
 
 @unittest.skipUnless(os.getenv("TEST_DATABASE_URL"), "TEST_DATABASE_URL is not configured")
 class AuditDocumentTests(AuditPostgresTestCase):
+    async def test_outcome_slo_summary_is_bounded_and_tracks_retry_success(self):
+        editing_session = await self.store.create_session(
+            "Outcome audit",
+            workflow_version=2,
+        )
+        version = PromptVersion(
+            id=uuid.uuid4().hex,
+            editing_session_id=editing_session["id"],
+            version_number=1,
+            prompt="auditable outcome prompt",
+            settings_data={"settings_version": 1, "max_clips": 1},
+        )
+        now = datetime.now(UTC)
+        first_id = uuid.uuid4().hex
+        retry_id = uuid.uuid4().hex
+        enhanced = build_completed_outcome_report(
+            outputs=[{"video": "short-01.mp4", "subtitles": None}],
+        )
+        limited = build_completed_outcome_report(
+            outputs=[{"video": "short-02.mp4", "subtitles": None}],
+            promotion_report={
+                "technical_blocker_codes": [],
+                "creative_limitation_codes": ["CAPTION_WIDTH_EXCEEDED"],
+            },
+            reused_stages=("transcript",),
+        )
+        async with self.database.sessions() as session:
+            async with session.begin():
+                session.add(version)
+        async with self.database.sessions() as session:
+            async with session.begin():
+                session.add_all((
+                    VideoJob(
+                        id=first_id,
+                        editing_session_id=editing_session["id"],
+                        prompt_version_id=version.id,
+                        attempt_number=1,
+                        state="completed",
+                        progress=Decimal("1"),
+                        prompt=version.prompt,
+                        request_data={"settings_version": 1},
+                        result_data={"outcome": enhanced},
+                        started_at=now - timedelta(minutes=3),
+                        completed_at=now - timedelta(minutes=2),
+                        audit_expires_at=now + timedelta(days=30),
+                    ),
+                    VideoJob(
+                        id=retry_id,
+                        editing_session_id=editing_session["id"],
+                        prompt_version_id=version.id,
+                        attempt_number=2,
+                        state="completed",
+                        progress=Decimal("1"),
+                        prompt=version.prompt,
+                        request_data={
+                            "settings_version": 1,
+                            "retry_of_attempt_id": first_id,
+                            "prior_attempt_quality_feedback": {
+                                "retry_reason_codes": ["CAPTION_WIDTH_EXCEEDED"],
+                            },
+                        },
+                        result_data={"outcome": limited},
+                        started_at=now - timedelta(minutes=1),
+                        completed_at=now,
+                        audit_expires_at=now + timedelta(days=30),
+                    ),
+                ))
+
+        summary = await self.audit.outcome_slo_summary(limit=10)
+
+        self.assertEqual(summary["sample_size"], 2)
+        self.assertEqual(summary["playable_outputs"], 2)
+        self.assertEqual(summary["retry"]["attempts"], 1)
+        self.assertEqual(summary["retry"]["playable_successes"], 1)
+        self.assertEqual(summary["checkpoints"]["reused_stage_count"], 1)
+        self.assertFalse(summary["truncated"])
+
     async def test_version_attempt_source_and_human_favorite_are_attributable(self):
         editing_session = await self.store.create_session(
             "Versioned audit",

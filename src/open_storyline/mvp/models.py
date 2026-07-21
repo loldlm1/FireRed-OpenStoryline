@@ -289,6 +289,118 @@ class VideoJob(Base):
     )
 
 
+class SessionAnalysisCache(Base):
+    __tablename__ = "session_analysis_cache"
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
+    editing_session_id: Mapped[str] = mapped_column(
+        ForeignKey("editing_sessions.id", ondelete="CASCADE"), nullable=False
+    )
+    input_video_id: Mapped[str] = mapped_column(
+        ForeignKey("session_input_videos.id", ondelete="CASCADE"), nullable=False
+    )
+    stage: Mapped[str] = mapped_column(String(64), nullable=False)
+    contract_version: Mapped[str] = mapped_column(String(64), nullable=False)
+    fingerprint: Mapped[str] = mapped_column(String(64), nullable=False)
+    relative_path: Mapped[str] = mapped_column(String(1024), nullable=False)
+    sha256: Mapped[str] = mapped_column(String(64), nullable=False)
+    byte_size: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    status: Mapped[str] = mapped_column(String(16), nullable=False)
+    metadata_data: Mapped[dict[str, Any]] = mapped_column(
+        JSONB, nullable=False, server_default=text("'{}'::jsonb")
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+    __table_args__ = (
+        UniqueConstraint(
+            "input_video_id",
+            "stage",
+            "fingerprint",
+            name="uq_session_analysis_cache_fingerprint",
+        ),
+        CheckConstraint(
+            "stage ~ '^[a-z0-9_]{1,64}$'",
+            name="ck_session_analysis_cache_stage",
+        ),
+        CheckConstraint(
+            "length(fingerprint) = 64 AND length(sha256) = 64",
+            name="ck_session_analysis_cache_hashes",
+        ),
+        CheckConstraint(
+            "byte_size >= 0", name="ck_session_analysis_cache_size_nonnegative"
+        ),
+        CheckConstraint(
+            "status IN ('available', 'quarantined')",
+            name="ck_session_analysis_cache_status",
+        ),
+        Index(
+            "ix_session_analysis_cache_lookup",
+            "editing_session_id",
+            "input_video_id",
+            "stage",
+            "fingerprint",
+        ),
+        Index("ix_session_analysis_cache_expiry", "expires_at"),
+    )
+
+
+class JobStageCheckpoint(Base):
+    __tablename__ = "job_stage_checkpoints"
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
+    job_id: Mapped[str] = mapped_column(
+        ForeignKey("video_jobs.id", ondelete="CASCADE"), nullable=False
+    )
+    stage: Mapped[str] = mapped_column(String(64), nullable=False)
+    contract_version: Mapped[str] = mapped_column(String(64), nullable=False)
+    fingerprint: Mapped[str] = mapped_column(String(64), nullable=False)
+    relative_path: Mapped[str] = mapped_column(String(1024), nullable=False)
+    sha256: Mapped[str] = mapped_column(String(64), nullable=False)
+    byte_size: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    status: Mapped[str] = mapped_column(String(16), nullable=False)
+    reused_from_job_id: Mapped[str | None] = mapped_column(
+        ForeignKey("video_jobs.id", ondelete="SET NULL")
+    )
+    metadata_data: Mapped[dict[str, Any]] = mapped_column(
+        JSONB, nullable=False, server_default=text("'{}'::jsonb")
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+    __table_args__ = (
+        UniqueConstraint(
+            "job_id", "stage", "fingerprint", name="uq_job_stage_checkpoint_fingerprint"
+        ),
+        CheckConstraint(
+            "stage ~ '^[a-z0-9_]{1,64}$'", name="ck_job_stage_checkpoint_stage"
+        ),
+        CheckConstraint(
+            "length(fingerprint) = 64 AND length(sha256) = 64",
+            name="ck_job_stage_checkpoint_hashes",
+        ),
+        CheckConstraint(
+            "byte_size >= 0", name="ck_job_stage_checkpoint_size_nonnegative"
+        ),
+        CheckConstraint(
+            "status IN ('available', 'quarantined')",
+            name="ck_job_stage_checkpoint_status",
+        ),
+        Index("ix_job_stage_checkpoint_lookup", "job_id", "stage", "fingerprint"),
+        Index("ix_job_stage_checkpoint_expiry", "expires_at"),
+    )
+
+
 class JobEvent(Base):
     __tablename__ = "job_events"
 

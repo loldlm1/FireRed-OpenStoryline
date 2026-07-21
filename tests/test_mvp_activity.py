@@ -14,7 +14,12 @@ from fastapi import FastAPI
 from sqlalchemy import text
 from sqlalchemy.engine import make_url
 
-from open_storyline.mvp.activity import ActivityService, encode_sse, normalize_activity
+from open_storyline.mvp.activity import (
+    ActivityService,
+    encode_sse,
+    normalize_activity,
+    retryable_error,
+)
 from open_storyline.mvp.api import create_mvp_router
 from open_storyline.mvp.database import Database, normalize_database_url
 from open_storyline.mvp.jobs import JobManager, JobStore, JobStoreError
@@ -86,6 +91,7 @@ class ActivityValidationTests(unittest.TestCase):
             }
         )
         self.assertEqual(event["error_code"], "DATABASE_UNAVAILABLE")
+        self.assertTrue(retryable_error("EDIT_PLAN_VISUAL_COVERAGE_INSUFFICIENT"))
 
     def test_sse_encoding_is_compact_and_does_not_add_private_fields(self):
         encoded = encode_sse(
@@ -124,7 +130,8 @@ class ActivityPostgresTests(unittest.IsolatedAsyncioTestCase):
         async with self.database.engine.begin() as connection:
             await connection.execute(
                 text(
-                    "TRUNCATE audit_reviews, audit_documents, artifacts, job_events, "
+                    "TRUNCATE job_stage_checkpoints, session_analysis_cache, "
+                    "audit_reviews, audit_documents, artifacts, job_events, "
                     "video_jobs, prompt_versions, session_input_videos, editing_sessions, "
                     "auth_sessions, login_attempt_buckets"
                 )

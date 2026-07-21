@@ -2,8 +2,10 @@ from __future__ import annotations
 
 from dataclasses import asdict, dataclass
 from pathlib import Path
+from tempfile import TemporaryDirectory
 from typing import Any, Callable, Sequence
 import base64
+import hashlib
 import json
 import os
 import re
@@ -11,6 +13,12 @@ import subprocess
 import time
 
 from open_storyline.mvp.shorts import ShortCandidate
+from open_storyline.mvp.catalog import (
+    CreativeCatalog,
+    catalog_caption_font,
+    catalog_color_filter,
+    catalog_transition_presets,
+)
 from open_storyline.mvp.compositor import (
     RENDER_EXECUTION_VERSION,
     ClipComposition,
@@ -95,6 +103,7 @@ class RenderSettings:
     preset: str | None = None
     crf: int | None = None
     timeout: float = 1800.0
+    caption_font_family: str = "DejaVu Sans"
 
     def resolve(self, source_frame_rate: float) -> dict[str, Any]:
         try:
@@ -140,7 +149,11 @@ class RenderSettings:
         }
 
 
-def render_settings_from_config(config: Any) -> RenderSettings:
+def render_settings_from_config(
+    config: Any,
+    *,
+    caption_font_family: str = "DejaVu Sans",
+) -> RenderSettings:
     quality_profile = os.getenv(
         "OPENSTORYLINE_RENDER_QUALITY_PROFILE",
         str(getattr(config, "render_quality_profile", "high")),
@@ -161,6 +174,7 @@ def render_settings_from_config(config: Any) -> RenderSettings:
         height=int(getattr(config, "render_height", 1920)),
         quality_profile=quality_profile,
         fps_cap=fps_cap,
+        caption_font_family=caption_font_family,
     )
     settings.resolve(30.0)
     return settings
@@ -276,6 +290,7 @@ def _write_caption_evidence(
     transcript_segments: Sequence[dict[str, Any]],
     width: int,
     height: int,
+    font_family: str,
 ) -> tuple[SubtitleArtifacts, Path, Path, CaptionFootprintReport]:
     try:
         artifacts = write_subtitle_artifacts(
@@ -284,6 +299,7 @@ def _write_caption_evidence(
             transcript_segments=transcript_segments,
             width=width,
             height=height,
+            font_family=font_family,
         )
         footprint = measure_caption_footprint(
             artifacts,
@@ -363,6 +379,7 @@ class CPUShortRenderer:
             transcript_segments=transcript_segments,
             width=settings.width,
             height=settings.height,
+            font_family=settings.caption_font_family,
         )
         filters = [
             f"scale={settings.width}:{settings.height}:force_original_aspect_ratio=increase",
@@ -437,8 +454,164 @@ class CPUShortRenderer:
 
 
 class AgenticShortRenderer:
-    def __init__(self, settings: RenderSettings | None = None) -> None:
+    def __init__(
+        self,
+        settings: RenderSettings | None = None,
+        *,
+        creative_catalog: CreativeCatalog | None = None,
+    ) -> None:
         self.settings = settings or RenderSettings()
+        self.creative_catalog = creative_catalog
+        self.transition_presets = (
+            catalog_transition_presets(creative_catalog)
+            if creative_catalog is not None
+            else {}
+        )
+
+    def _catalog_rendering(self, clip_plan: Any) -> tuple[str, str]:
+        if self.creative_catalog is None:
+            return self.settings.caption_font_family, ""
+        selection = clip_plan.catalog_selection
+        caption_id = selection.caption_treatment_id or "caption.clean"
+        font_family = catalog_caption_font(self.creative_catalog, caption_id)
+        color = (
+            catalog_color_filter(
+                self.creative_catalog,
+                selection.color_treatment_id,
+            )
+            if selection.color_treatment_id
+            else ""
+        )
+        return font_family, color
+
+    def preflight_plan(
+        self,
+        *,
+        source: str | Path,
+        edit_plan: EditPlan,
+        selected_clips: Sequence[ShortCandidate],
+        visual_understanding: VisualUnderstanding,
+        transcript_segments: Sequence[dict[str, Any]],
+        destination_dir: str | Path,
+        source_media: MediaInfo | None = None,
+        crop_hysteresis_ratio: float = 0.03,
+        crop_smoothing_alpha: float = 0.65,
+        max_crop_velocity_ratio_per_second: float = 0.45,
+        resolved_assets: dict[str, str | Path] | None = None,
+    ) -> dict[str, Any]:
+        if len(edit_plan.clips) != len(selected_clips):
+            raise RenderError(
+                "AGENTIC_RENDER_CLIP_MISMATCH",
+                "edit plan and selected clip counts do not match",
+            )
+        output_dir = Path(destination_dir).resolve()
+        output_dir.mkdir(parents=True, exist_ok=True)
+        media = source_media or probe_media(source)
+        asset_paths = {
+            str(asset_id): Path(path).resolve()
+            for asset_id, path in (resolved_assets or {}).items()
+        }
+        reports = []
+        with TemporaryDirectory(prefix=".ffmpeg-preflight-", dir=output_dir) as directory:
+            temporary = Path(directory)
+            for clip_plan, selected_clip in zip(edit_plan.clips, selected_clips):
+                caption_font_family, color_filter = self._catalog_rendering(clip_plan)
+                subtitles, _layout, _footprint_path, _footprint = _write_caption_evidence(
+                    temporary / f"{clip_plan.output_name}.srt",
+                    clip=selected_clip,
+                    transcript_segments=transcript_segments,
+                    width=self.settings.width,
+                    height=self.settings.height,
+                    font_family=caption_font_family,
+                )
+                composition = resolve_clip_composition(
+                    clip_plan,
+                    visual=visual_understanding,
+                    source_media=media,
+                    output_width=self.settings.width,
+                    output_height=self.settings.height,
+                    hysteresis_ratio=crop_hysteresis_ratio,
+                    smoothing_alpha=crop_smoothing_alpha,
+                    max_crop_velocity_ratio_per_second=(
+                        max_crop_velocity_ratio_per_second
+                    ),
+                    transition_presets=self.transition_presets,
+                )
+                used_asset_ids = sorted({
+                    overlay.asset_id
+                    for segment in composition.segments
+                    for overlay in segment.overlays
+                    if overlay.kind == "image"
+                })
+                missing_assets = sorted(set(used_asset_ids) - set(asset_paths))
+                if missing_assets:
+                    raise RenderError(
+                        "AGENTIC_RENDER_ASSET_MISSING",
+                        f"resolved image assets are missing: {', '.join(missing_assets)}",
+                    )
+                asset_input_indexes = {
+                    asset_id: index
+                    for index, asset_id in enumerate(used_asset_ids, start=1)
+                }
+                asset_kinds = {
+                    request.id: request.kind
+                    for request in clip_plan.asset_requests
+                    if request.id in used_asset_ids
+                }
+                filtergraph, video_label, audio_label = build_reframe_filtergraph(
+                    composition.segments,
+                    output_width=self.settings.width,
+                    output_height=self.settings.height,
+                    subtitle_filename=(
+                        subtitles.ass_path.name if subtitles.ass_path is not None else None
+                    ),
+                    has_audio=media.has_audio,
+                    asset_input_indexes=asset_input_indexes,
+                    asset_input_kinds=asset_kinds,
+                    color_filter=color_filter,
+                )
+                command = [
+                    "ffmpeg", "-v", "error", "-i", str(Path(source).resolve()),
+                ]
+                for asset_id in used_asset_ids:
+                    if asset_kinds[asset_id] == "stock_video":
+                        command.extend(
+                            ["-stream_loop", "-1", "-i", str(asset_paths[asset_id])]
+                        )
+                    else:
+                        command.extend(["-loop", "1", "-i", str(asset_paths[asset_id])])
+                command.extend([
+                    "-filter_complex", filtergraph,
+                    "-map", f"[{video_label}]", "-map", f"[{audio_label}]",
+                    "-t", "0.750", "-frames:v", "2", "-shortest", "-f", "null", "-",
+                ])
+                try:
+                    result = subprocess.run(
+                        command,
+                        cwd=temporary,
+                        capture_output=True,
+                        text=True,
+                        check=False,
+                        timeout=min(float(self.settings.timeout), 120.0),
+                    )
+                except (FileNotFoundError, subprocess.TimeoutExpired) as exc:
+                    raise RenderError("AGENTIC_PREFLIGHT_FAILED", str(exc)) from exc
+                if result.returncode != 0:
+                    raise RenderError("AGENTIC_PREFLIGHT_FAILED", _reason(result.stderr))
+                reports.append({
+                    "clip_index": clip_plan.clip_index,
+                    "status": "pass",
+                    "filtergraph_sha256": hashlib.sha256(
+                        filtergraph.encode("utf-8")
+                    ).hexdigest(),
+                    "filtergraph_length": len(filtergraph),
+                    "asset_ids": used_asset_ids,
+                })
+        return {
+            "version": "ffmpeg_preflight.v1",
+            "status": "pass",
+            "clips": reports,
+        }
 
     def render_plan(
         self,
@@ -494,12 +667,14 @@ class AgenticShortRenderer:
                     f"clip {clip_plan.clip_index} source bounds changed after planning",
                 )
             video_path = output_dir / clip_plan.output_name
+            caption_font_family, color_filter = self._catalog_rendering(clip_plan)
             subtitles, layout_path, footprint_path, footprint = _write_caption_evidence(
                 output_dir / f"{video_path.stem}.srt",
                 clip=selected_clip,
                 transcript_segments=transcript_segments,
                 width=settings.width,
                 height=settings.height,
+                font_family=caption_font_family,
             )
             composition: ClipComposition = resolve_clip_composition(
                 clip_plan,
@@ -510,6 +685,7 @@ class AgenticShortRenderer:
                 hysteresis_ratio=crop_hysteresis_ratio,
                 smoothing_alpha=crop_smoothing_alpha,
                 max_crop_velocity_ratio_per_second=max_crop_velocity_ratio_per_second,
+                transition_presets=self.transition_presets,
             )
             used_asset_ids = sorted({
                 overlay.asset_id
@@ -542,6 +718,7 @@ class AgenticShortRenderer:
                 has_audio=media.has_audio,
                 asset_input_indexes=asset_input_indexes,
                 asset_input_kinds=asset_kinds,
+                color_filter=color_filter,
             )
             command = [
                 "ffmpeg", "-y", "-v", "error",

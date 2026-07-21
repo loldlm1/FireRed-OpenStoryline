@@ -65,6 +65,32 @@ class PriorAttemptQualityFeedbackTests(unittest.TestCase):
                         "message": private_marker,
                     }],
                 },
+                "outcome_report.json": {
+                    "version": "outcome_report.v1",
+                    "grade": "with_limitations",
+                    "limitations": [{
+                        "code": "VISUAL_REFRAME_FALLBACK",
+                        "stage": "compile",
+                        "clip_index": 1,
+                        "segment_id": "segment-1",
+                        "requested": "crop",
+                        "executed": "fit",
+                        "description": private_marker,
+                        "recommended_retry_action": "retry_defects",
+                    }],
+                },
+                "fallback_ledger.json": {
+                    "version": "fallback_ledger.v1",
+                    "entries": [{
+                        "code": "TRANSITION_FALLBACK",
+                        "clip_index": 1,
+                        "segment_id": "segment-2",
+                        "requested": "custom transition",
+                        "executed": "hard_cut",
+                        "reason": private_marker,
+                        "retry_action": "retry_defects",
+                    }],
+                },
                 "short-01.caption-footprint.json": {
                     "version": "caption_footprint.v1",
                     "summary": {
@@ -85,7 +111,14 @@ class PriorAttemptQualityFeedbackTests(unittest.TestCase):
         self.assertEqual(feedback["active_picture"][0]["median_active_height_ratio"], 0.3125)
         self.assertIn("CAPTION_WIDTH_EXCEEDED", feedback["blocker_codes"])
         self.assertIn("REQUESTED_ASSETS_MISSING", feedback["blocker_codes"])
+        self.assertEqual(feedback["prior_outcome_grade"], "with_limitations")
+        self.assertEqual(
+            feedback["retry_reason_codes"],
+            ["TRANSITION_FALLBACK", "VISUAL_REFRAME_FALLBACK"],
+        )
+        self.assertEqual(feedback["limitations"][0]["executed"], "fit")
         self.assertIn("frame_quality_qa.v1", feedback["evidence_versions"])
+        self.assertIn("outcome_report.v1", feedback["evidence_versions"])
         self.assertNotIn(private_marker, json.dumps(feedback))
 
     def test_malformed_documents_fail_closed_without_private_text(self):

@@ -35,11 +35,49 @@ function session(source: SourceState) {
     id: sessionId,
     title: 'Entrevista editorial de julio',
     workflow_version: 2,
+    capabilities: { retry_ux_enabled: true },
     input_video: source.state === 'missing' ? null : source,
     jobs: [],
     created_at: now,
     updated_at: now,
     deleted_at: null,
+  };
+}
+
+function outcome(grade: 'enhanced' | 'with_limitations' | 'retryable_failure' | 'terminal_failure' = 'enhanced') {
+  const limited = grade === 'with_limitations';
+  const failed = grade === 'retryable_failure' || grade === 'terminal_failure';
+  return {
+    version: 'outcome_report.v1',
+    grade,
+    technical_status: grade === 'retryable_failure' ? 'blocked' : 'pass',
+    output_count: failed ? 0 : 1,
+    limitation_codes: limited ? ['ACTIVE_PICTURE_TOO_SMALL'] : [],
+    fatal_error_codes: grade === 'retryable_failure' ? ['AUDIO_MISSING'] : [],
+    limitations: limited ? [{
+      code: 'ACTIVE_PICTURE_TOO_SMALL',
+      stage: 'qa',
+      requested: 'crop',
+      executed: 'fit',
+      description: 'Se preservó todo el contenido con un encuadre seguro.',
+      retryable: true,
+      recommended_retry_action: 'retry_defects',
+    }] : [],
+    fatal_errors: grade === 'retryable_failure' ? [{
+      code: 'AUDIO_MISSING',
+      stage: 'qa',
+      retryable: true,
+    }] : [],
+    retry: {
+      supported: limited || grade === 'retryable_failure',
+      quality_feedback_supported: limited || grade === 'retryable_failure',
+      recommended_action: limited || grade === 'retryable_failure' ? 'retry_defects' : 'none',
+      reused_stage_names: limited ? ['transcript', 'global_analysis'] : [],
+      recomputed_stage_names: limited ? ['edit_plan', 'render'] : [],
+      resolved_limitation_codes: limited ? ['CAPTION_WIDTH_EXCEEDED'] : [],
+      remaining_limitation_codes: limited ? ['ACTIVE_PICTURE_TOO_SMALL'] : [],
+      new_limitation_codes: [],
+    },
   };
 }
 
@@ -52,6 +90,7 @@ function run(state = 'running') {
     progress: state === 'completed' ? 1 : 0.28,
     is_favorite: false,
     error_code: null,
+    outcome: state === 'completed' ? outcome() : null,
     created_at: now,
     completed_at: state === 'completed' ? now : null,
     media_expires_at: null,
@@ -282,6 +321,7 @@ function historyRun(id: string, versionId: string, attempt: number, options: {
   favorite?: boolean;
   available?: boolean;
   state?: string;
+  grade?: 'enhanced' | 'with_limitations' | 'retryable_failure' | 'terminal_failure';
 } = {}): HistoryRun {
   const state = options.state || 'completed';
   return {
@@ -290,6 +330,7 @@ function historyRun(id: string, versionId: string, attempt: number, options: {
     prompt_version_id: versionId,
     attempt_number: attempt,
     is_favorite: Boolean(options.favorite),
+    outcome: outcome(options.grade || (state === 'failed' ? 'retryable_failure' : 'enhanced')),
     artifacts: [{
       name: `${id.slice(0, 4)}-clip.mp4`,
       kind: 'clip',
@@ -361,6 +402,7 @@ async function installHistoryApi(page: Page, options: {
   ];
   let favoriteId = versions.flatMap((version) => version.attempts).find((run) => run.is_favorite)?.id || null;
   let failNextFavorite = false;
+  let lastRetryPayload: Record<string, unknown> | null = null;
 
   const syncFavorites = () => {
     for (const version of versions) {
@@ -419,6 +461,20 @@ async function installHistoryApi(page: Page, options: {
       const version = detailFor(versionMatch[1]);
       return version ? json(route, version) : json(route, { detail: { code: 'PROMPT_VERSION_NOT_FOUND' } }, 404);
     }
+    const rerunMatch = path.match(/^\/api\/mvp\/prompt-versions\/([a-f0-9]{32})\/runs$/);
+    if (rerunMatch && method === 'POST') {
+      const version = detailFor(rerunMatch[1]);
+      if (!version) return json(route, { detail: { code: 'PROMPT_VERSION_NOT_FOUND' } }, 404);
+      lastRetryPayload = request.postDataJSON();
+      const next = historyRun('9'.repeat(32), version.id, version.attempts.length + 1, {
+        state: 'queued',
+        grade: 'enhanced',
+      });
+      next.outcome = null;
+      next.artifacts = [];
+      version.attempts.unshift(next);
+      return json(route, next, 202);
+    }
     const jobMatch = path.match(/^\/api\/mvp\/jobs\/([a-f0-9]{32})$/);
     if (jobMatch) {
       syncFavorites();
@@ -468,6 +524,7 @@ async function installHistoryApi(page: Page, options: {
   return {
     failNextFavorite() { failNextFavorite = true; },
     get favoriteId() { return favoriteId; },
+    get lastRetryPayload() { return lastRetryPayload; },
   };
 }
 
@@ -667,6 +724,45 @@ test.describe('reusable video workspace', () => {
     await page.locator('#comparison-close').click();
     await expect(page.locator('#comparison-dialog')).toBeHidden();
     await expect(page.locator('#comparison-open')).toBeFocused();
+  });
+
+  test('explains limited outcomes, prefills an improved version, and retries with prior evidence', async ({ page }) => {
+    const limited = historyVersion(2, {
+      id: secondPromptVersionId,
+      runId: secondJobId,
+    });
+    limited.attempts[0] = historyRun(secondJobId, secondPromptVersionId, 1, {
+      grade: 'with_limitations',
+    });
+    const enhanced = historyVersion(1, { id: promptVersionId, runId: jobId });
+    const mock = await installHistoryApi(page, { versions: [limited, enhanced] });
+    await page.goto(`/?session=${sessionId}`);
+
+    const card = page.locator('#recent-jobs .version-card').first();
+    await expect(card.locator('.outcome-badge')).toHaveText('! Completado con limitaciones');
+    await card.getByRole('button', { name: 'Ver salidas y QA' }).click();
+    await expect(card.locator('.outcome-detail')).toContainText('ACTIVE_PICTURE_TOO_SMALL');
+    await expect(card.locator('.outcome-detail')).toContainText('Etapas reutilizadas');
+    await card.locator('.limitation-disclosure summary').click();
+    await expect(card.locator('.limitation-disclosure')).toContainText('Se ejecutó fit en lugar de crop');
+
+    await card.getByRole('button', { name: 'Crear versión mejorada' }).click();
+    await expect(page.locator('#prompt')).toHaveValue(/ACTIVE_PICTURE_TOO_SMALL/);
+    await expect(page.locator('#prompt')).toBeFocused();
+
+    const compareChecks = page.locator('#recent-jobs .compare-check input');
+    await compareChecks.nth(0).check();
+    await compareChecks.nth(1).check();
+    await page.locator('#comparison-open').click();
+    await expect(page.locator('#comparison-dialog')).toContainText('Resueltas: CAPTION_WIDTH_EXCEEDED');
+    await page.keyboard.press('Escape');
+
+    await card.getByRole('button', { name: 'Reintentar defectos' }).click();
+    await expect(card.locator('.attempt-row')).toHaveCount(2);
+    expect(mock.lastRetryPayload).toEqual({
+      prior_attempt_id: secondJobId,
+      use_quality_feedback: true,
+    });
   });
 
   test('persists a human favorite, clears it, and rolls optimistic state back after failure', async ({ page }) => {

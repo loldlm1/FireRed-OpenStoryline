@@ -19,7 +19,14 @@ from open_storyline.mvp.jobs import (
     JobStoreError,
     _iso,
 )
-from open_storyline.mvp.models import Artifact, EditingSession, SessionInputVideo, VideoJob
+from open_storyline.mvp.models import (
+    Artifact,
+    EditingSession,
+    JobStageCheckpoint,
+    SessionAnalysisCache,
+    SessionInputVideo,
+    VideoJob,
+)
 from open_storyline.mvp.observability import emit_event
 from open_storyline.mvp.security import sanitize_text
 from open_storyline.mvp.session_media import SessionMediaStore
@@ -259,6 +266,11 @@ class RetentionService:
                 source_report["purged"] += int(result.get("selected", 1))
                 for key in ("deleted_files", "missing_files", "bytes"):
                     source_report[key] += int(result.get(key, 0))
+                checkpoint_result = await self._purge_session_analysis_cache(
+                    row.source.editing_session_id
+                )
+                source_report["deleted_files"] += checkpoint_result["deleted_files"]
+                source_report["bytes"] += checkpoint_result["bytes"]
                 if int(result.get("selected", 1)):
                     emit_event(
                         "session_source_purged",
@@ -338,6 +350,16 @@ class RetentionService:
                         )
                     ).scalars()
                 )
+                registered.update(
+                    (
+                        await session.execute(
+                            select(JobStageCheckpoint.relative_path).where(
+                                JobStageCheckpoint.job_id == job_id,
+                                JobStageCheckpoint.status == "available",
+                            )
+                        )
+                    ).scalars()
+                )
         except SQLAlchemyError:
             raise JobStoreError("DATABASE_UNAVAILABLE", "temporary cleanup is unavailable") from None
         result = await asyncio.to_thread(
@@ -352,6 +374,55 @@ class RetentionService:
                 result,
             )
         return result
+
+    async def _purge_session_analysis_cache(
+        self,
+        editing_session_id: str,
+    ) -> dict[str, int]:
+        try:
+            async with self.database.sessions() as session:
+                rows = list(
+                    (
+                        await session.execute(
+                            select(SessionAnalysisCache).where(
+                                SessionAnalysisCache.editing_session_id
+                                == editing_session_id
+                            )
+                        )
+                    ).scalars()
+                )
+        except SQLAlchemyError:
+            raise JobStoreError(
+                "DATABASE_UNAVAILABLE", "analysis cache retention is unavailable"
+            ) from None
+
+        deleted_files = 0
+        deleted_bytes = 0
+        root = self.store.session_media_root.resolve()
+        for row in rows:
+            relative = Path(str(row.relative_path or ""))
+            if relative.is_absolute() or ".." in relative.parts:
+                continue
+            path = (root / relative).resolve(strict=False)
+            if root not in path.parents or path.is_symlink():
+                continue
+            status, size = await asyncio.to_thread(self._unlink, path)
+            if status == "deleted":
+                deleted_files += 1
+                deleted_bytes += size
+        if rows:
+            try:
+                async with self.database.sessions() as session:
+                    async with session.begin():
+                        for row in rows:
+                            stored = await session.get(SessionAnalysisCache, row.id)
+                            if stored is not None:
+                                await session.delete(stored)
+            except SQLAlchemyError:
+                raise JobStoreError(
+                    "DATABASE_UNAVAILABLE", "analysis cache retention is unavailable"
+                ) from None
+        return {"deleted_files": deleted_files, "bytes": deleted_bytes}
 
     async def delete_session(self, session_id: str) -> dict[str, Any]:
         if not JOB_ID_PATTERN.fullmatch(str(session_id or "")):

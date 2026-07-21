@@ -8,6 +8,7 @@ from unittest.mock import patch
 from open_storyline.mvp.edit_plan import (
     AssetRequest,
     AgenticEditPlanner,
+    CatalogSelection,
     ClipEditPlan,
     EditPlan,
     EditPlanError,
@@ -21,6 +22,7 @@ from open_storyline.mvp.edit_plan import (
     resolve_agentic_server_mode,
     validate_edit_plan,
     validate_generated_asset_limit,
+    validate_catalog_plan_context,
     validate_job_controls,
     validate_stock_asset_limit,
     validate_stock_policy,
@@ -294,11 +296,86 @@ class EditPlanContractTests(unittest.TestCase):
             source_duration_ms=30_000,
         )
 
-        self.assertEqual(plan.version, "edit_plan.v1")
+        self.assertEqual(plan.version, "edit_plan.v2")
         self.assertEqual(plan.clips[0].segments[0].timeline_window.start_ms, 0)
         self.assertEqual(plan.clips[0].segments[0].timeline_window.end_ms, 20_000)
         self.assertEqual(plan.requested_capabilities, ("crop", "hard_cut", "subtitles"))
         self.assertEqual(validate_edit_plan(plan.to_dict()), plan)
+
+    def test_catalog_contract_rejects_unknown_and_style_mismatched_ids(self):
+        snapshot = {
+            "version": "catalog_candidates.v1",
+            "catalog_version": "2026.07.1",
+            "manifest_sha256": "a" * 64,
+            "entries": [
+                {
+                    "id": "style.clean-product",
+                    "kind": "style_profile",
+                    "config": {"catalog_ids": [
+                        "caption.clean",
+                        "color.clean-contrast",
+                        "transition.crossfade",
+                        "recipe.slow-zoom",
+                    ]},
+                },
+                {"id": "caption.clean", "kind": "caption_treatment", "config": {}},
+                {"id": "caption.bold-hook", "kind": "caption_treatment", "config": {}},
+                {"id": "color.clean-contrast", "kind": "color_treatment", "config": {}},
+                {"id": "transition.hard-cut", "kind": "transition", "config": {"operation": "hard_cut"}},
+                {"id": "transition.crossfade", "kind": "transition", "config": {"operation": "fade"}},
+                {"id": "recipe.slow-zoom", "kind": "recipe", "config": {}},
+            ],
+        }
+        base = build_shadow_edit_plan(
+            [ShortCandidate(0, 20_000, "Title", "Hook", "Reason", 0.9)],
+            source_duration_ms=20_000,
+        )
+        clip = base.clips[0].model_copy(update={
+            "catalog_selection": CatalogSelection(
+                style_profile_id="style.clean-product",
+                caption_treatment_id="caption.clean",
+                color_treatment_id="color.clean-contrast",
+                recipe_ids=("recipe.slow-zoom",),
+            ),
+            "segments": (
+                base.clips[0].segments[0].model_copy(update={
+                    "transition_in": TransitionSpec(
+                        kind="cut",
+                        duration_ms=0,
+                        catalog_id="transition.hard-cut",
+                    ),
+                }),
+            ),
+        })
+        plan = base.model_copy(update={
+            "catalog_version": snapshot["catalog_version"],
+            "catalog_manifest_sha256": snapshot["manifest_sha256"],
+            "clips": (clip,),
+        })
+
+        self.assertEqual(validate_catalog_plan_context(plan, snapshot), plan)
+
+        unknown = plan.model_copy(update={
+            "clips": (clip.model_copy(update={
+                "catalog_selection": clip.catalog_selection.model_copy(update={
+                    "recipe_ids": ("recipe.invented",),
+                }),
+            }),),
+        })
+        with self.assertRaises(EditPlanError) as caught:
+            validate_catalog_plan_context(unknown, snapshot)
+        self.assertEqual(caught.exception.code, "EDIT_PLAN_CATALOG_ID_UNKNOWN")
+
+        mismatched = plan.model_copy(update={
+            "clips": (clip.model_copy(update={
+                "catalog_selection": clip.catalog_selection.model_copy(update={
+                    "caption_treatment_id": "caption.bold-hook",
+                }),
+            }),),
+        })
+        with self.assertRaises(EditPlanError) as caught:
+            validate_catalog_plan_context(mismatched, snapshot)
+        self.assertEqual(caught.exception.code, "EDIT_PLAN_CATALOG_STYLE_MISMATCH")
 
     def test_rejects_overlapping_primary_timeline(self):
         with self.assertRaises(ValueError):
@@ -628,6 +705,85 @@ class AgenticEditPlannerTests(unittest.IsolatedAsyncioTestCase):
             ["ACTIVE_PICTURE_TOO_SMALL"],
         )
         self.assertEqual(payload["visual_coverage_feedback"], {})
+
+    async def test_planner_receives_only_compact_catalog_ids_and_records_selection(self):
+        planner, client, kwargs = planner_fixture(
+            "speaker", "Create a clean product marketing short."
+        )
+        snapshot = {
+            "version": "catalog_candidates.v1",
+            "catalog_version": "2026.07.1",
+            "manifest_sha256": "b" * 64,
+            "aspect_ratio": "9:16",
+            "requested_tags": ["clean", "marketing", "portrait", "product"],
+            "entries": [
+                {
+                    "id": "style.clean-product",
+                    "kind": "style_profile",
+                    "label": "Clean Product",
+                    "config": {"catalog_ids": [
+                        "caption.clean",
+                        "color.clean-contrast",
+                        "transition.crossfade",
+                        "recipe.slow-zoom",
+                    ]},
+                },
+                {
+                    "id": "caption.clean",
+                    "kind": "caption_treatment",
+                    "label": "Clean Captions",
+                    "config": {"font_id": "font.caption.core"},
+                },
+                {
+                    "id": "color.clean-contrast",
+                    "kind": "color_treatment",
+                    "label": "Clean Contrast",
+                    "config": {"filter": "eq", "contrast": 1.06, "saturation": 1.02},
+                },
+                {
+                    "id": "transition.hard-cut",
+                    "kind": "transition",
+                    "label": "Hard Cut",
+                    "config": {"operation": "hard_cut", "duration_ms": 0},
+                },
+                {
+                    "id": "transition.crossfade",
+                    "kind": "transition",
+                    "label": "Crossfade",
+                    "config": {"operation": "fade", "duration_ms": 220},
+                },
+                {
+                    "id": "recipe.slow-zoom",
+                    "kind": "recipe",
+                    "label": "Slow Zoom",
+                    "config": {"operation": "focus_zoom"},
+                },
+            ],
+        }
+        client.response["clips"][0]["catalog_selection"] = {
+            "style_profile_id": "style.clean-product",
+            "caption_treatment_id": "caption.clean",
+            "color_treatment_id": "color.clean-contrast",
+            "recipe_ids": ["recipe.slow-zoom"],
+        }
+        client.response["clips"][0]["segments"][0]["transition_in"]["catalog_id"] = (
+            "transition.hard-cut"
+        )
+        kwargs["catalog_snapshot"] = snapshot
+
+        plan = await planner.plan(**kwargs)
+        payload = json.loads(client.call["user_prompt"])
+
+        self.assertEqual(
+            payload["creative_catalog"]["manifest_sha256"],
+            "b" * 64,
+        )
+        self.assertNotIn("https://", json.dumps(payload["creative_catalog"]))
+        self.assertEqual(plan.catalog_version, "2026.07.1")
+        self.assertEqual(
+            plan.clips[0].catalog_selection.style_profile_id,
+            "style.clean-product",
+        )
 
     async def test_repairs_one_structurally_invalid_response(self):
         planner, client, kwargs = planner_fixture(

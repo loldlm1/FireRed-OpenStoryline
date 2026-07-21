@@ -21,6 +21,7 @@ from open_storyline.config import default_config_path, load_settings
 from open_storyline.mvp.activity import ActivityService
 from open_storyline.mvp.api import create_mvp_router
 from open_storyline.mvp.audit import AuditService
+from open_storyline.mvp.catalog import load_creative_catalog
 from open_storyline.mvp.auth import (
     CSRF_COOKIE,
     SAFE_METHODS,
@@ -33,8 +34,14 @@ from open_storyline.mvp.auth import (
 from open_storyline.mvp.database import Database
 from open_storyline.mvp.jobs import JobManager, JobStore
 from open_storyline.mvp.observability import emit_event, finish_request, start_request
+from open_storyline.mvp.outcomes import retry_ux_enabled
 from open_storyline.mvp.pipeline import MVPJobProcessor
 from open_storyline.mvp.prompt_versions import PromptVersionService
+from open_storyline.mvp.promotion import (
+    completion_policy,
+    limited_output_promotion_enabled,
+    render_promotion_mode,
+)
 from open_storyline.mvp.retention import (
     RetentionScheduler,
     RetentionService,
@@ -88,6 +95,11 @@ def create_app() -> FastAPI:
     @asynccontextmanager
     async def lifespan(app: FastAPI):
         config = load_settings(default_config_path())
+        render_promotion_mode(config.agentic_editing)
+        completion_policy(config.agentic_editing)
+        limited_output_promotion_enabled()
+        retry_ux_enabled()
+        creative_catalog = load_creative_catalog()
         database = Database.from_env()
         auth_service = AuthService(database, AuthSettings.from_env())
         retention_settings = RetentionSettings.from_env()
@@ -115,7 +127,10 @@ def create_app() -> FastAPI:
         )
         store.attach_retention(retention_service)
         retention_scheduler = RetentionScheduler(retention_service)
-        manager = JobManager(store, MVPJobProcessor(config))
+        manager = JobManager(
+            store,
+            MVPJobProcessor(config, creative_catalog=creative_catalog),
+        )
         app.state.config = config
         app.state.database = database
         app.state.auth_service = auth_service
@@ -127,6 +142,14 @@ def create_app() -> FastAPI:
         app.state.activity = activity
         app.state.retention_service = retention_service
         app.state.retention_scheduler = retention_scheduler
+        app.state.creative_catalog = creative_catalog
+        emit_event(
+            "creative_catalog_loaded",
+            catalog_version=creative_catalog.version,
+            manifest_sha256=creative_catalog.manifest_sha256,
+            entry_count=len(creative_catalog.entries),
+            quarantined_count=len(creative_catalog.quarantined),
+        )
         try:
             await manager.start()
             await retention_scheduler.start()
@@ -147,6 +170,7 @@ def create_app() -> FastAPI:
     app.state.session_media = None
     app.state.prompt_versions = None
     app.state.activity = None
+    app.state.creative_catalog = None
     app.state.session_workspace_mode = workspace_settings.mode
 
     @app.middleware("http")

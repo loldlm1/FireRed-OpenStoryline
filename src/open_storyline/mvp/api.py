@@ -12,6 +12,7 @@ from pydantic import BaseModel, Field
 
 from open_storyline.mvp.activity import ActivityService
 from open_storyline.mvp.jobs import JobManager, JobStore, JobStoreError
+from open_storyline.mvp.outcomes import retry_ux_enabled
 from open_storyline.mvp.prompt_versions import (
     PromptVersionService,
     validate_run_settings,
@@ -161,7 +162,14 @@ def create_mvp_router(
                 limit=job_limit,
                 cursor=job_cursor,
             )
-            return {**current, "jobs": jobs["items"], "next_job_cursor": jobs["next_cursor"]}
+            return {
+                **current,
+                "jobs": jobs["items"],
+                "next_job_cursor": jobs["next_cursor"],
+                "capabilities": {
+                    "retry_ux_enabled": retry_ux_enabled(),
+                },
+            }
         except JobStoreError as exc:
             raise _http_error(exc) from exc
 

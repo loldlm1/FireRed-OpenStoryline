@@ -40,6 +40,7 @@ const state = {
   detailsByVersion: new Map(),
   expandedRunIds: new Set(),
   selectedRunIds: new Set(),
+  retryPendingIds: new Set(),
   favoritePending: false,
   currentJob: null,
   upload: null,
@@ -96,6 +97,7 @@ function resetHistoryState() {
   state.detailsByVersion = new Map();
   state.expandedRunIds = new Set();
   state.selectedRunIds = new Set();
+  state.retryPendingIds = new Set();
   state.favoritePending = false;
 }
 
@@ -131,6 +133,8 @@ function historyCallbacks() {
     onToggleDetail: toggleRunDetail,
     onCompare: toggleComparisonSelection,
     onFavorite: toggleFavorite,
+    onRetryDefects: retryDefects,
+    onCreateImprovedVersion: createImprovedVersion,
   };
 }
 
@@ -145,6 +149,8 @@ function renderHistory() {
     activeJobId: state.currentJob?.id || '',
     nextCursor: state.nextVersionCursor,
     favoritePending: state.favoritePending,
+    retryPendingIds: state.retryPendingIds,
+    retryUxEnabled: Boolean(state.currentSession?.capabilities?.retry_ux_enabled),
   }, historyCallbacks());
   renderWorkspace(state.currentSession, { favoriteLabel: favoriteLabel() });
 }
@@ -401,6 +407,81 @@ async function toggleFavorite(run) {
     state.favoritePending = false;
     renderHistory();
   }
+}
+
+async function retryDefects(version, run) {
+  if (
+    !state.currentSession?.capabilities?.retry_ux_enabled
+    || state.retryPendingIds.has(run.id)
+  ) return;
+  const sessionId = state.currentSession.id;
+  const epoch = state.sessionEpoch;
+  state.retryPendingIds.add(run.id);
+  renderHistory();
+  try {
+    const detail = await loadVersionDetail(version.id);
+    const prior = (detail?.attempts || []).find((item) => item.id === run.id) || run;
+    const qualityFeedback = Boolean(prior.outcome?.retry?.quality_feedback_supported);
+    const nextRun = await apiJson(
+      `/api/mvp/prompt-versions/${version.id}/runs`,
+      {
+        method: 'POST',
+        body: qualityFeedback
+          ? { prior_attempt_id: run.id, use_quality_feedback: true }
+          : { use_quality_feedback: false },
+      },
+    );
+    if (epoch !== state.sessionEpoch || state.currentSession?.id !== sessionId) return;
+    version.attempts = [
+      nextRun,
+      ...(version.attempts || []).filter((item) => item.id !== nextRun.id),
+    ];
+    if (detail) {
+      state.detailsByVersion.set(version.id, {
+        ...detail,
+        attempts: [
+          nextRun,
+          ...(detail.attempts || []).filter((item) => item.id !== nextRun.id),
+        ],
+      });
+    }
+    await selectRun(nextRun.id, { startedAt: nextRun.created_at });
+    showToast(`Intento ${nextRun.attempt_number} creado con la evidencia del defecto anterior.`);
+  } catch (error) {
+    if (epoch === state.sessionEpoch && state.currentSession?.id === sessionId) {
+      showToast(errorMessage(error, 'No pudimos preparar el reintento de defectos.'));
+    }
+  } finally {
+    state.retryPendingIds.delete(run.id);
+    if (epoch === state.sessionEpoch && state.currentSession?.id === sessionId) renderHistory();
+  }
+}
+
+function createImprovedVersion(version, run) {
+  if (!state.currentSession?.capabilities?.retry_ux_enabled) return;
+  const issues = [
+    ...(run.outcome?.limitation_codes || []),
+    ...(run.outcome?.fatal_error_codes || []),
+    ...(run.outcome?.limitations || []).map((item) => item.code),
+    ...(run.outcome?.fatal_errors || []).map((item) => item.code),
+  ].filter(Boolean);
+  const uniqueIssues = [...new Set(issues)].slice(0, 12);
+  const guidance = uniqueIssues.length
+    ? `\n\nCrea una versión mejorada que conserve la intención original y resuelva estos defectos verificados:\n${uniqueIssues.map((code) => `- ${code}`).join('\n')}`
+    : '\n\nCrea una versión mejorada que conserve la intención original y corrija los defectos de la ejecución anterior.';
+  elements.prompt.value = `${version.prompt}${guidance}`.slice(0, 12000);
+  elements.promptCount.textContent = `${elements.prompt.value.length.toLocaleString('es')} / 12.000`;
+  const settings = version.settings || {};
+  elements.maxClips.value = String(settings.max_clips || 8);
+  elements.editMode.value = settings.edit_mode || 'agentic';
+  elements.assetPolicy.value = settings.asset_policy || 'auto';
+  elements.maxGeneratedAssets.value = String(settings.max_generated_assets_per_clip ?? 2);
+  elements.stockPolicy.value = settings.stock_policy || 'off';
+  elements.maxStockAssets.value = String(settings.max_stock_assets_per_clip ?? 0);
+  syncAdvancedSettings();
+  elements.jobForm.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  window.requestAnimationFrame(() => elements.prompt.focus());
+  showToast('Preparamos una nueva versión editable con los defectos verificados.');
 }
 
 async function selectRun(jobId, { startedAt, reset = true } = {}) {

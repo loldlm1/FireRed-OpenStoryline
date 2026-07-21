@@ -12,6 +12,7 @@ import subprocess
 import sys
 import unittest
 import uuid
+from unittest.mock import patch
 
 import httpx
 from fastapi import FastAPI
@@ -105,7 +106,8 @@ class PromptVersionPostgresTests(unittest.IsolatedAsyncioTestCase):
         async with self.database.engine.begin() as connection:
             await connection.execute(
                 text(
-                    "TRUNCATE audit_reviews, audit_documents, artifacts, job_events, "
+                    "TRUNCATE job_stage_checkpoints, session_analysis_cache, "
+                    "audit_reviews, audit_documents, artifacts, job_events, "
                     "video_jobs, prompt_versions, session_input_videos, editing_sessions, "
                     "auth_sessions, login_attempt_buckets"
                 )
@@ -453,6 +455,11 @@ class PromptVersionPostgresTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(feedback["prior_attempt_number"], 1)
         self.assertIn("ACTIVE_PICTURE_TOO_SMALL", feedback["blocker_codes"])
         self.assertEqual(feedback["worst_metric_samples"][0]["timestamp_ms"], 1000)
+        self.assertEqual(rerun["request"]["retry_of_attempt_id"], prior["id"])
+        self.assertEqual(
+            rerun["request"]["resume_policy"],
+            "reuse_compatible_checkpoints",
+        )
 
         with self.assertRaises(JobStoreError) as missing_flag:
             await self.service.rerun(
@@ -492,8 +499,37 @@ class PromptVersionPostgresTests(unittest.IsolatedAsyncioTestCase):
         with self.assertRaises(JobStoreError) as incomplete:
             await self.service.select_favorite(editing_session["id"], first_run["id"])
         self.assertEqual(incomplete.exception.code, "FAVORITE_RUN_INVALID")
-        await self.store.update(first_run["id"], state="completed", progress=1)
+        await self.store.update(
+            first_run["id"],
+            state="completed",
+            progress=1,
+            outcome={
+                "version": "outcome_report.v1",
+                "grade": "with_limitations",
+                "technical_status": "pass",
+                "outputs": [{"video": "short-01.mp4", "subtitles": None}],
+                "limitations": [{
+                    "code": "CAPTION_WIDTH_EXCEEDED",
+                    "stage": "qa",
+                    "retryable": True,
+                }],
+                "fatal_errors": [],
+                "retry": {"supported": True},
+            },
+        )
         await self.store.update(second_run["id"], state="completed", progress=1)
+        refreshed = await self.service.list_versions(editing_session["id"], limit=3)
+        first_summary = next(
+            run
+            for version in refreshed["items"]
+            for run in version["attempts"]
+            if run["id"] == first_run["id"]
+        )
+        self.assertEqual(first_summary["outcome"]["grade"], "with_limitations")
+        self.assertEqual(
+            first_summary["outcome"]["limitation_codes"],
+            ["CAPTION_WIDTH_EXCEEDED"],
+        )
         selected = await self.service.select_favorite(editing_session["id"], first_run["id"])
         switched = await self.service.select_favorite(editing_session["id"], second_run["id"])
         self.assertEqual(selected["selection_source"], "human")
@@ -570,6 +606,13 @@ class PromptVersionPostgresTests(unittest.IsolatedAsyncioTestCase):
         )
         transport = httpx.ASGITransport(app=app)
         async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+            with patch.dict(os.environ, {"OPENSTORYLINE_RETRY_UX_ENABLED": "true"}):
+                session_state = await client.get(
+                    f"/api/mvp/sessions/{editing_session['id']}"
+                )
+            self.assertTrue(
+                session_state.json()["capabilities"]["retry_ux_enabled"]
+            )
             created = await client.post(
                 f"/api/mvp/sessions/{editing_session['id']}/prompt-versions",
                 json={

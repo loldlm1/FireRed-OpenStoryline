@@ -161,10 +161,30 @@ class KamalConfigTests(unittest.TestCase):
         self.assertEqual(config["env"]["clear"]["OPENSTORYLINE_PEXELS_SEARCH_LIMIT"], 8)
         self.assertEqual(config["env"]["clear"]["OPENSTORYLINE_PEXELS_MAX_BYTES"], 83886080)
         self.assertIs(config["env"]["clear"]["OPENSTORYLINE_CREATIVE_QA_ENABLED"], True)
+        self.assertEqual(
+            config["env"]["clear"]["OPENSTORYLINE_CREATIVE_CATALOG_PATH"],
+            "/app/creative_catalog/manifest.json",
+        )
+        self.assertIs(
+            config["env"]["clear"]["OPENSTORYLINE_CREATIVE_CATALOG_PLANNING_ENABLED"],
+            False,
+        )
         self.assertIs(config["env"]["clear"]["OPENSTORYLINE_CREATIVE_QA_STRICT"], True)
         self.assertEqual(
             config["env"]["clear"]["OPENSTORYLINE_RENDER_PROMOTION_MODE"],
             "report",
+        )
+        self.assertEqual(
+            config["env"]["clear"]["OPENSTORYLINE_COMPLETION_POLICY"],
+            "strict",
+        )
+        self.assertIs(
+            config["env"]["clear"]["OPENSTORYLINE_LIMITED_OUTPUT_PROMOTION_ENABLED"],
+            False,
+        )
+        self.assertIs(
+            config["env"]["clear"]["OPENSTORYLINE_RETRY_UX_ENABLED"],
+            False,
         )
         self.assertIs(config["env"]["clear"]["OPENSTORYLINE_SEMANTIC_QA_ENABLED"], False)
         self.assertEqual(config["env"]["clear"]["OPENSTORYLINE_SEMANTIC_QA_MAX_FRAMES"], 4)
@@ -204,6 +224,40 @@ class KamalConfigTests(unittest.TestCase):
         self.assertIn("OPENSTORYLINE_RENDER_QUALITY_PROFILE=high", local_env)
         self.assertIn("OPENSTORYLINE_RENDER_PROMOTION_MODE=report", kamal_env)
         self.assertIn("OPENSTORYLINE_RENDER_PROMOTION_MODE=report", local_env)
+        self.assertIn("OPENSTORYLINE_COMPLETION_POLICY=strict", kamal_env)
+        self.assertIn("OPENSTORYLINE_COMPLETION_POLICY=strict", local_env)
+        self.assertIn(
+            "OPENSTORYLINE_LIMITED_OUTPUT_PROMOTION_ENABLED=false",
+            kamal_env,
+        )
+        self.assertIn("OPENSTORYLINE_RETRY_UX_ENABLED=false", kamal_env)
+        self.assertIn(
+            "OPENSTORYLINE_CREATIVE_CATALOG_PATH=/app/creative_catalog/manifest.json",
+            kamal_env,
+        )
+        self.assertIn(
+            "OPENSTORYLINE_CREATIVE_CATALOG_PATH=./creative_catalog/manifest.json",
+            local_env,
+        )
+        self.assertIn(
+            "OPENSTORYLINE_CREATIVE_CATALOG_PLANNING_ENABLED=false",
+            kamal_env,
+        )
+        self.assertIn(
+            "OPENSTORYLINE_CREATIVE_CATALOG_PLANNING_ENABLED=false",
+            local_env,
+        )
+
+    def test_remote_image_installs_and_validates_the_offline_catalog(self):
+        dockerfile = (ROOT / "Dockerfile.remote").read_text(encoding="utf-8")
+        dockerignore = (ROOT / ".dockerignore").read_text(encoding="utf-8")
+
+        self.assertIn("apt-get install -y --no-install-recommends ffmpeg curl fontconfig", dockerfile)
+        self.assertIn("COPY creative_catalog/ ./creative_catalog/", dockerfile)
+        self.assertIn("fc-cache -f", dockerfile)
+        self.assertIn("generate_creative_catalog_manifest.py --check", dockerfile)
+        self.assertIn("python -m open_storyline.mvp.catalog", dockerfile)
+        self.assertIn("!creative_catalog/**", dockerignore)
 
     def test_pexels_release_gate_is_conditional_and_offline(self):
         wrapper = (ROOT / "bin" / "kamal-mvp").read_text(encoding="utf-8")

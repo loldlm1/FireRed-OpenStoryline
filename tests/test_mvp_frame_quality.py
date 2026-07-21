@@ -16,7 +16,9 @@ from open_storyline.mvp.frame_quality import (
 from open_storyline.mvp.promotion import (
     RenderPromotionError,
     build_render_promotion_report,
+    completion_policy,
     enforce_render_promotion,
+    limited_output_promotion_enabled,
     render_promotion_mode,
 )
 
@@ -82,6 +84,8 @@ class RenderPromotionTests(unittest.TestCase):
 
         self.assertEqual(report["decision"], "observe")
         self.assertEqual(enforce["decision"], "block")
+        self.assertEqual(report["promotion_decision"], "promote_with_limitations")
+        self.assertEqual(report["technical_blocker_codes"], [])
         self.assertEqual(report["blocker_codes"], enforce["blocker_codes"])
         self.assertIn("ASSET_OVERLAY_NOT_VISIBLE", report["blocker_codes"])
         with self.assertRaises(RenderPromotionError) as caught:
@@ -105,6 +109,69 @@ class RenderPromotionTests(unittest.TestCase):
                 "CREATIVE_CONFORMANCE_UNAVAILABLE",
             },
         )
+        self.assertEqual(report["promotion_decision"], "block_technical")
+
+    def test_baseline_policy_promotes_creative_limitations_but_not_technical_failures(self):
+        creative = build_render_promotion_report(
+            mode="enforce",
+            policy="baseline_guaranteed",
+            limited_output_enabled=True,
+            frame_quality={
+                "status": "blocker",
+                "findings": [{
+                    "code": "ACTIVE_PICTURE_TOO_SMALL",
+                    "severity": "blocker",
+                }],
+            },
+            render_qa={"status": "pass", "findings": []},
+            creative_conformance={"status": "pass", "findings": []},
+            caption_footprints=[],
+        )
+        technical = build_render_promotion_report(
+            mode="enforce",
+            policy="baseline_guaranteed",
+            limited_output_enabled=True,
+            frame_quality={"status": "pass", "findings": []},
+            render_qa={
+                "status": "blocker",
+                "findings": [{"code": "audio_missing", "severity": "blocker"}],
+            },
+            creative_conformance={"status": "pass", "findings": []},
+            caption_footprints=[],
+        )
+
+        self.assertEqual(creative["decision"], "promote")
+        self.assertEqual(creative["status"], "limited")
+        self.assertEqual(technical["decision"], "block")
+        self.assertEqual(technical["technical_blocker_codes"], ["AUDIO_MISSING"])
+
+    def test_baseline_policy_blocks_missing_frame_evidence_and_structural_defects(self):
+        report = build_render_promotion_report(
+            mode="enforce",
+            policy="baseline_guaranteed",
+            limited_output_enabled=True,
+            frame_quality={
+                "status": "blocker",
+                "findings": [
+                    {"code": "FRAME_SIGNAL_UNAVAILABLE", "severity": "blocker"},
+                ],
+            },
+            render_qa={
+                "status": "blocker",
+                "findings": [
+                    {"code": "black_frames_detected", "severity": "blocker"},
+                ],
+            },
+            creative_conformance={"status": "pass", "findings": []},
+            caption_footprints=[],
+        )
+
+        self.assertEqual(report["decision"], "block")
+        self.assertEqual(report["promotion_decision"], "block_technical")
+        self.assertEqual(
+            report["technical_blocker_codes"],
+            ["BLACK_FRAMES_DETECTED", "FRAME_SIGNAL_UNAVAILABLE"],
+        )
 
     def test_promotion_environment_control_is_strict(self):
         config = SimpleNamespace(render_promotion_mode="report")
@@ -114,6 +181,20 @@ class RenderPromotionTests(unittest.TestCase):
             with self.assertRaises(RenderPromotionError) as caught:
                 render_promotion_mode(config)
         self.assertEqual(caught.exception.code, "RENDER_PROMOTION_CONFIG_INVALID")
+
+    def test_completion_policy_and_limited_output_flags_fail_closed(self):
+        config = SimpleNamespace(completion_policy="strict")
+        with patch.dict(os.environ, {
+            "OPENSTORYLINE_COMPLETION_POLICY": "baseline_guaranteed",
+            "OPENSTORYLINE_LIMITED_OUTPUT_PROMOTION_ENABLED": "true",
+        }):
+            self.assertEqual(completion_policy(config), "baseline_guaranteed")
+            self.assertTrue(limited_output_promotion_enabled())
+        with patch.dict(os.environ, {
+            "OPENSTORYLINE_LIMITED_OUTPUT_PROMOTION_ENABLED": "sometimes",
+        }):
+            with self.assertRaises(RenderPromotionError):
+                limited_output_promotion_enabled()
 
 
 @unittest.skipUnless(shutil.which("ffmpeg") and shutil.which("ffprobe"), "FFmpeg is required")

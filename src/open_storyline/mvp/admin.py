@@ -145,6 +145,11 @@ async def _audit_command(
         )
     if arguments.audit_command == "show":
         return await audit.show_job(arguments.job_id, limit=arguments.limit)
+    if arguments.audit_command == "outcomes":
+        return await audit.outcome_slo_summary(
+            since=parse_since(arguments.since),
+            limit=arguments.limit,
+        )
     if arguments.audit_command == "events":
         return await store.events(
             arguments.job_id,
@@ -436,6 +441,14 @@ def main() -> int:
     show.add_argument("job_id")
     show.add_argument("--limit", type=int, default=200)
     _add_format(show, default="json")
+
+    outcomes = audit_commands.add_parser(
+        "outcomes",
+        help="summarize classified outcomes and playable-output SLO evidence",
+    )
+    outcomes.add_argument("--since")
+    outcomes.add_argument("--limit", type=int, default=5000)
+    _add_format(outcomes, default="json")
 
     verify = audit_commands.add_parser("verify")
     verify.add_argument("job_id")

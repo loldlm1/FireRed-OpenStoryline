@@ -38,7 +38,7 @@ FIXTURES = Path(__file__).parent / "fixtures" / "mvp_agentic"
 def edit_plan(*, with_asset: bool = False) -> dict:
     request = [{"id": "asset-1"}] if with_asset else []
     return {
-        "version": "edit_plan.v1",
+        "version": "edit_plan.v2",
         "requested_capabilities": [
             "crop", "focus_zoom", "hard_cut", "subtitles",
             *(["image_overlay"] if with_asset else []),

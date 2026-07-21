@@ -105,6 +105,7 @@ render_fps_cap = 60
 [agentic_editing]
 mode = "off"
 shadow_allow_blocked_plans = true
+baseline_fallbacks_enabled = false
 max_segments_per_clip = 24
 max_overlays_per_clip = 12
 max_assets_per_clip = 4
@@ -121,6 +122,7 @@ pexels_max_video_duration_seconds = 60
 creative_qa_enabled = true
 creative_qa_strict = true
 render_promotion_mode = "report"
+completion_policy = "strict"
 semantic_qa_enabled = false
 semantic_qa_max_frames = 4
 scene_threshold = 0.35

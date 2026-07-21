@@ -183,6 +183,7 @@ class MVPConfig(ConfigBaseModel):
 class AgenticEditingConfig(ConfigBaseModel):
     mode: Literal["off", "shadow", "render"] = "off"
     shadow_allow_blocked_plans: bool = True
+    baseline_fallbacks_enabled: bool = False
     max_segments_per_clip: int = Field(default=24, ge=1, le=48)
     max_overlays_per_clip: int = Field(default=12, ge=0, le=16)
     max_assets_per_clip: int = Field(default=4, ge=0, le=8)
@@ -199,6 +200,7 @@ class AgenticEditingConfig(ConfigBaseModel):
     creative_qa_enabled: bool = True
     creative_qa_strict: bool = True
     render_promotion_mode: Literal["off", "report", "enforce"] = "report"
+    completion_policy: Literal["strict", "baseline_guaranteed"] = "strict"
     semantic_qa_enabled: bool = False
     semantic_qa_max_frames: int = Field(default=4, ge=1, le=8)
     scene_threshold: float = Field(default=0.35, gt=0, lt=1)

@@ -483,6 +483,64 @@ class CompositorTests(unittest.TestCase):
             )
         self.assertEqual(caught.exception.code, "FILTER_AUDIO_REQUIRED")
 
+    def test_filtergraph_uses_allowlisted_catalog_color_and_transition_values(self):
+        first = SimpleNamespace(
+            source_window=TimeWindow(start_ms=0, end_ms=2_000),
+            timeline_window=TimeWindow(start_ms=0, end_ms=2_000),
+            strategy="fit",
+            crop=None,
+            transition_kind="cut",
+            transition_duration_ms=0,
+            transition_name="hard_cut",
+            transition_color="black",
+        )
+        second = SimpleNamespace(
+            source_window=TimeWindow(start_ms=2_000, end_ms=4_000),
+            timeline_window=TimeWindow(start_ms=1_800, end_ms=3_800),
+            strategy="fit",
+            crop=None,
+            transition_kind="xfade",
+            transition_duration_ms=200,
+            transition_name="wipeleft",
+            transition_color="black",
+        )
+        graph, _, _ = build_reframe_filtergraph(
+            [first, second],
+            output_width=180,
+            output_height=320,
+            subtitle_filename=None,
+            has_audio=True,
+            color_filter="eq=contrast=1.0600:saturation=1.0200",
+        )
+
+        self.assertIn("eq=contrast=1.0600:saturation=1.0200", graph)
+        self.assertIn("xfade=transition=wipeleft", graph)
+
+        with self.assertRaises(FilterGraphError) as caught:
+            build_reframe_filtergraph(
+                [first],
+                output_width=180,
+                output_height=320,
+                subtitle_filename=None,
+                has_audio=True,
+                color_filter="eq=contrast=1;movie=/private/source.mp4",
+            )
+        self.assertEqual(caught.exception.code, "FILTER_COLOR_TREATMENT_INVALID")
+
+        unsafe_transition = SimpleNamespace(**{
+            **second.__dict__,
+            "transition_name": "custom=/private/filter",
+        })
+        with self.assertRaises(FilterGraphError) as caught:
+            build_reframe_filtergraph(
+                [first, unsafe_transition],
+                output_width=180,
+                output_height=320,
+                subtitle_filename=None,
+                has_audio=True,
+            )
+        self.assertEqual(caught.exception.code, "FILTER_TRANSITION_INVALID")
+
 
 if __name__ == "__main__":
     unittest.main()

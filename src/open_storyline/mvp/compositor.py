@@ -1,7 +1,7 @@
 from __future__ import annotations
 
-from dataclasses import asdict, dataclass
-from typing import Any, Sequence
+from dataclasses import asdict, dataclass, replace
+from typing import Any, Mapping, Sequence
 import math
 
 from open_storyline.mvp.edit_plan import ClipEditPlan, EditSegment, TimeWindow
@@ -92,6 +92,8 @@ class ResolvedSegment:
     fallback_cause: str
     expected_active_area_ratio: float
     smoothed: bool
+    transition_name: str = ""
+    transition_color: str = "black"
 
     def to_dict(self) -> dict[str, Any]:
         value = asdict(self)
@@ -533,14 +535,17 @@ def resolve_clip_composition(
     hysteresis_ratio: float = 0.03,
     smoothing_alpha: float = 0.65,
     max_crop_velocity_ratio_per_second: float = 0.45,
+    transition_presets: Mapping[str, Mapping[str, Any]] | None = None,
 ) -> ClipComposition:
     values = (hysteresis_ratio, smoothing_alpha, max_crop_velocity_ratio_per_second)
     if any(not math.isfinite(value) or value < 0 for value in values):
         raise CompositionError("COMPOSITION_CONFIG_INVALID", "smoothing values must be finite and non-negative")
     if not 0 <= smoothing_alpha <= 1 or hysteresis_ratio > 0.25 or max_crop_velocity_ratio_per_second > 2:
         raise CompositionError("COMPOSITION_CONFIG_INVALID", "smoothing values exceed safe bounds")
-    resolved = tuple(
-        _resolve_segment(
+    presets = transition_presets or {}
+    resolved_items = []
+    for segment in clip.segments:
+        resolved_segment = _resolve_segment(
             segment,
             visual=visual,
             source_width=source_media.width,
@@ -548,8 +553,14 @@ def resolve_clip_composition(
             output_width=output_width,
             output_height=output_height,
         )
-        for segment in clip.segments
-    )
+        preset = presets.get(segment.transition_in.catalog_id) or {}
+        default_name = "hard_cut" if segment.transition_in.kind == "cut" else "fade"
+        resolved_items.append(replace(
+            resolved_segment,
+            transition_name=str(preset.get("operation") or default_name),
+            transition_color=str(preset.get("color") or "black"),
+        ))
+    resolved = tuple(resolved_items)
     return ClipComposition(
         clip_index=clip.clip_index,
         output_name=clip.output_name,

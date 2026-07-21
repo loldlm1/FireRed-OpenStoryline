@@ -26,6 +26,7 @@ from open_storyline.mvp.models import (
     SessionInputVideo,
     VideoJob,
 )
+from open_storyline.mvp.outcomes import build_outcome_slo_summary
 from open_storyline.mvp.security import (
     sanitize_audit_document,
     sanitize_for_persistence,
@@ -596,6 +597,59 @@ class AuditService:
                 if has_more and selected
                 else None
             ),
+        }
+
+    async def outcome_slo_summary(
+        self,
+        *,
+        since: datetime | None = None,
+        limit: int = 5000,
+    ) -> dict[str, Any]:
+        if not 1 <= int(limit) <= 5000:
+            raise JobStoreError(
+                "PAGE_LIMIT_INVALID",
+                "outcome summary limit must be between 1 and 5000",
+            )
+        query = (
+            select(VideoJob)
+            .where(
+                VideoJob.prompt_version_id.is_not(None),
+                VideoJob.state.in_(("completed", "failed")),
+                VideoJob.deleted_at.is_(None),
+            )
+            .order_by(VideoJob.created_at.desc(), VideoJob.id.desc())
+            .limit(int(limit) + 1)
+        )
+        if since is not None:
+            query = query.where(VideoJob.created_at >= since)
+        try:
+            async with self.database.sessions() as session:
+                rows = list((await session.execute(query)).scalars())
+        except SQLAlchemyError:
+            raise JobStoreError(
+                "DATABASE_UNAVAILABLE",
+                "outcome summary is unavailable",
+            ) from None
+        selected = rows[: int(limit)]
+        summary = build_outcome_slo_summary([
+            {
+                "outcome": (row.result_data or {}).get("outcome"),
+                "retry_of_attempt_id": (row.request_data or {}).get(
+                    "retry_of_attempt_id"
+                ),
+                "prior_limitation_codes": (
+                    (row.request_data or {}).get("prior_attempt_quality_feedback") or {}
+                ).get("retry_reason_codes", []),
+                "started_at": _iso(row.started_at),
+                "completed_at": _iso(row.completed_at),
+            }
+            for row in selected
+        ])
+        return {
+            **summary,
+            "rows_scanned": len(selected),
+            "since": _iso(since),
+            "truncated": len(rows) > int(limit),
         }
 
     async def show_job(self, job_id: str, *, limit: int = 200) -> dict[str, Any]:
