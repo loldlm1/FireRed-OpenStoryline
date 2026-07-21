@@ -9,6 +9,7 @@ import math
 import re
 import uuid
 
+from open_storyline.mvp.defects import DEFECT_REGISTRY
 from open_storyline.mvp.security import sanitize_text
 
 
@@ -18,6 +19,12 @@ SAFE_ID = re.compile(r"^[A-Za-z0-9._:-]{1,128}$")
 SAFE_CODE = re.compile(r"^[A-Z0-9_]{1,120}$")
 SAFE_VERSION = re.compile(r"^[A-Za-z0-9._-]{1,80}$")
 QUALITY_FEEDBACK_VERSION = "quality_feedback.v1"
+REPAIR_OBSERVABILITY_VERSION = "repair_observability.v1"
+REPAIR_EVIDENCE_TYPES = frozenset(
+    evidence_type
+    for definition in DEFECT_REGISTRY.values()
+    for evidence_type in definition.evidence_requirements
+)
 
 
 def _mapping(value: Any) -> dict[str, Any]:
@@ -216,6 +223,76 @@ def compact_prior_attempt_quality_feedback(
         "active_picture": active_picture,
         "caption_footprints": caption_footprints[:8],
         "worst_metric_samples": metric_samples[:12],
+    }
+
+
+def compact_repair_observability(report: dict[str, Any]) -> dict[str, Any]:
+    """Allowlist repair telemetry so transient editorial context cannot persist."""
+    source = _mapping(report)
+    hashes = {
+        key: str(source.get(key) or "").lower()
+        for key in (
+            "repair_prompt_sha256",
+            "request_fingerprint",
+            "editing_prompt_sha256",
+            "transcript_sha256",
+            "candidate_sha256",
+        )
+    }
+    affected_values = source.get("affected_clip_ids")
+    evidence_values = source.get("evidence_types")
+    objective_codes = [
+        code for code in _codes(source.get("objective_codes")) if code in DEFECT_REGISTRY
+    ]
+    advisory_codes = [
+        code for code in _codes(source.get("advisory_codes")) if code in DEFECT_REGISTRY
+    ]
+    stage = str(source.get("stage") or "")
+    mode = str(source.get("mode") or "")
+    return {
+        "version": REPAIR_OBSERVABILITY_VERSION,
+        "report_version": (
+            "repair_report.v1" if source.get("version") == "repair_report.v1" else ""
+        ),
+        "request_version": (
+            "repair_batch_request.v1"
+            if source.get("request_version") == "repair_batch_request.v1"
+            else ""
+        ),
+        "stage": stage if stage in {"visual_understanding", "plan_repair"} else "",
+        "mode": mode if mode in {"off", "report", "enforce"} else "",
+        "semantic_attempt": _integer(source.get("semantic_attempt"), maximum=1),
+        "response_schema": _token(source.get("response_schema")),
+        "repair_prompt_version": _token(source.get("repair_prompt_version")),
+        **{
+            key: value if re.fullmatch(r"[a-f0-9]{64}", value) else ""
+            for key, value in hashes.items()
+        },
+        "editing_prompt_bytes": _integer(source.get("editing_prompt_bytes"), maximum=12_000),
+        "transcript_bytes": _integer(source.get("transcript_bytes"), maximum=16_000),
+        "affected_clip_ids": sorted({
+            value
+            for value in (
+                affected_values
+                if isinstance(affected_values, (list, tuple, set))
+                else ()
+            )
+            if isinstance(value, int) and 1 <= value <= 8
+        }),
+        "objective_codes": objective_codes,
+        "advisory_codes": advisory_codes,
+        "evidence_types": sorted({
+            value
+            for value in (
+                evidence_values
+                if isinstance(evidence_values, (list, tuple, set))
+                else ()
+            )
+            if isinstance(value, str) and value in REPAIR_EVIDENCE_TYPES
+        })[:32],
+        "evidence_count": _integer(source.get("evidence_count"), maximum=64),
+        "would_call": source.get("would_call") is True,
+        "call_allowed": source.get("call_allowed") is True,
     }
 
 

@@ -1,5 +1,6 @@
 EDIT_PLAN_PROMPT_VERSION = "mvp-agentic-edit-plan.v8"
 VISUAL_UNDERSTANDING_PROMPT_VERSION = "mvp-visual-understanding.v2"
+REPAIR_SYSTEM_PROMPT_VERSION = "mvp-defect-repair.v1"
 
 
 EDIT_PLAN_SYSTEM_PROMPT = (
@@ -38,4 +39,18 @@ VISUAL_UNDERSTANDING_SYSTEM_PROMPT = (
     "explanations in categorical fields; use description, summary, or warnings "
     "for explanatory text. Describe visible evidence only. Do not invent frames, "
     "identities, file paths, niche rules, or hidden events."
+)
+
+
+REPAIR_SYSTEM_PROMPT = (
+    "You repair one bounded candidate for a deterministic video-editing system. "
+    "Return only the registered replacement schema. Preserve selected source "
+    "windows, output count, usable editorial decisions, unaffected operations, "
+    "audio and subtitle requirements, validated assets, and consistent catalog "
+    "style. Correct only the supplied registered objective defects using the "
+    "bounded evidence and available capabilities. Advisory suggestions are "
+    "secondary and must not cause unrelated rewrites. Never claim that a defect "
+    "is resolved, authorize promotion, invent evidence or capabilities, return "
+    "commands or paths, or include prose outside schema fields. The backend will "
+    "revalidate the complete replacement and decide resolution and fallback."
 )

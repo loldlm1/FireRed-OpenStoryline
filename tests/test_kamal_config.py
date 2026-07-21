@@ -128,6 +128,10 @@ class KamalConfigTests(unittest.TestCase):
             ],
             False,
         )
+        self.assertEqual(
+            config["env"]["clear"]["OPENSTORYLINE_LLM_DEFECT_REPAIR_MODE"],
+            "off",
+        )
         self.assertNotIn("OPENSTORYLINE_STT_MODELS", config["env"]["clear"])
         self.assertEqual(config["env"]["clear"]["MISTRAL_STT_TIMEOUT"], 180)
         self.assertEqual(
@@ -233,6 +237,8 @@ class KamalConfigTests(unittest.TestCase):
         self.assertIn("OPENSTORYLINE_STRUCTURED_OUTPUT_MODE=json_object", kamal_env)
         self.assertIn("OPENSTORYLINE_STRUCTURED_OUTPUT_MODE=json_object", local_env)
         self.assertIn("OPENSTORYLINE_STRUCTURED_OUTPUT_BOUNDARIES=", kamal_env)
+        self.assertIn("OPENSTORYLINE_LLM_DEFECT_REPAIR_MODE=off", kamal_env)
+        self.assertIn("OPENSTORYLINE_LLM_DEFECT_REPAIR_MODE=off", local_env)
         self.assertIn(
             "OPENSTORYLINE_STRUCTURED_OUTPUT_CAPABILITY_VERIFIED=false",
             kamal_env,

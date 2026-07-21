@@ -1,7 +1,7 @@
 # Plan: Centralized Agentic Defect Registry And Bounded Repair Loop
 
 **Generated**: 2026-07-21
-**Status**: Implementation in progress; Sprints 1-2 complete
+**Status**: Implementation in progress; Sprints 1-3 complete
 **Estimated Complexity**: High
 
 ## Overview
@@ -56,9 +56,9 @@ preserves an unavailable enhancement itself.
   `docs/mvp/implementation-history.md` and `docs/mvp/creative-catalog.md`.
 - The current approved 9Router text/vision route remains
   `cx/gpt-5.6-sol`. This plan does not change the model or provider.
-- The approved plan bootstrap and Sprint 1 implementation are committed on the
-  feature branch. Sprint 2 is implemented and validated at the checkpoint
-  recorded below; Sprints 3-6 remain sequentially gated.
+- The approved plan bootstrap and Sprints 1-2 are committed on the feature
+  branch. Sprint 3 is implemented and validated at the checkpoint recorded
+  below; Sprints 4-6 remain sequentially gated.
 
 No provider call, deployment, production database mutation, or production media
 mutation was performed while closing PR #11 and preparing this branch.
@@ -823,12 +823,23 @@ observability compaction, fixtures, and focused tests.
 
 ### Sprint 3 Gate
 
-- [ ] All Sprint 3 tasks complete.
-- [ ] Sprint 3 validation passes and evidence is recorded.
-- [ ] Residual risks are documented.
-- [ ] Exactly one Sprint 3 commit is created with the proposed sprint message.
-- [ ] The rollback point is recorded.
-- [ ] Sprint 4 has not started before this gate completes.
+- [x] All Sprint 3 tasks complete.
+- [x] Sprint 3 validation passes and evidence is recorded.
+- [x] Residual risks are documented.
+- [x] Exactly one Sprint 3 commit is created with the proposed sprint message.
+- [x] The rollback point is recorded.
+- [x] Sprint 4 has not started before this gate completes.
+
+**Recorded evidence**: 100 focused policy, privacy, prompt, planning, predictive
+QA, registry, observability, and deployment-config tests passed. The full local
+suite passed 418 tests with 74 expected database skips, and the same 418 tests
+passed against the isolated PostgreSQL database. Python compilation, shell
+syntax, configuration rendering, diff checks, bounded every-code request
+generation, and private-context redaction checks passed. The policy remains
+dormant until Sprint 4 wires stage execution; no live provider call, migration,
+or production state change occurred. Roll back by setting
+`OPENSTORYLINE_LLM_DEFECT_REPAIR_MODE=off` and reverting the Sprint 3 commit;
+the registry and strict transport remain available.
 
 ## Sprint 4: Execute Visual And Plan Repair With Predictive QA And Safe Fallback
 

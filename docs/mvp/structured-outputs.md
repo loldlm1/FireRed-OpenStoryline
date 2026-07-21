@@ -26,6 +26,15 @@ private-free probe passes for the configured 9Router route and model. Unknown
 boundary names fail startup. Strict boundaries never downgrade silently to
 permissive parsing.
 
+Registry-driven semantic repair is independently controlled by
+`OPENSTORYLINE_LLM_DEFECT_REPAIR_MODE`. `off` bypasses eligibility and makes no
+repair call. `report` evaluates the same evidence and records only a redacted
+would-call contract. `enforce` may make at most one visual-understanding repair
+and one separately budgeted pre-render edit-plan repair. Advisory-only,
+post-render, provider, media, security, unknown, and FFMPEGA findings cannot
+trigger these calls. Returning the setting to `off` is the repair rollback and
+does not disable the defect registry or strict schema transport.
+
 The deploy wrapper runs the strict acceptance and extra-field rejection probes
 whenever `json_schema` mode is selected. A failed probe blocks deployment. Run
 the isolated probe directly with:

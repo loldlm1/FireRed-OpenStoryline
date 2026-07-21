@@ -94,6 +94,9 @@ class DefectDefinition:
     title_es: str
     description_es: str
     legacy_aliases: tuple[str, ...] = ()
+    detector: str | None = None
+    threshold: str | None = None
+    trigger_eligible: bool = False
 
 
 def _code_set(value: str) -> frozenset[str]:
@@ -239,6 +242,12 @@ _REGISTERED_CODES = _code_set(
     SOURCE_EXPIRED UPLOAD_CHUNK_TYPE_UNSUPPORTED UPLOAD_EXPIRED UPLOAD_INCOMPLETE
     UPLOAD_OFFSET_INVALID UPLOAD_PATH_INVALID UPLOAD_WRITE_FAILED
     FFMPEGA_TIMEOUT FFMPEGA_UNAVAILABLE
+    REPAIR_CANDIDATE_MISSING REPAIR_CANDIDATE_TOO_LARGE
+    REPAIR_CLIP_LIMIT_EXCEEDED REPAIR_CODE_LIMIT_EXCEEDED
+    REPAIR_CONTEXT_INVALID REPAIR_CONTEXT_PRIVATE REPAIR_EVIDENCE_INVALID
+    REPAIR_EVIDENCE_LIMIT_EXCEEDED REPAIR_MODE_INVALID REPAIR_NOT_ELIGIBLE
+    REPAIR_PROMPT_INVALID REPAIR_REQUEST_TOO_LARGE REPAIR_TRANSCRIPT_INVALID
+    REPAIR_TRANSCRIPT_TOO_LARGE
     """
 )
 
@@ -335,6 +344,8 @@ _ADVISORY_CODES = _code_set(
     SEMANTIC_QA_UNAVAILABLE SEVERE_BLOCKINESS_REVIEW SEVERE_BLUR_REVIEW
     SUBTITLE_GAP_REVIEW
     SUBTITLE_TIMELINE_UNAVAILABLE UNPLANNED_OPERATIONS_EXECUTED
+    PREDICTIVE_ATTENTION_GAP_RISK PREDICTIVE_INACTIVE_HOOK_RISK
+    PREDICTIVE_LONG_VISUAL_HOLD_RISK PREDICTIVE_RHYTHM_RISK
     """
 )
 
@@ -366,6 +377,9 @@ _PLAN_REPAIR_CODES = _code_set(
     TRACK_REFERENCE_OUTSIDE_CLIP TRACK_REFERENCE_UNKNOWN TRANSITION_TOO_LONG
     CROP_VISUAL_GAP_TOO_LARGE CROP_VISUAL_OBSERVATION_MISSING
     CROP_VISUAL_OBSERVATIONS_INSUFFICIENT CROP_VISUAL_TEMPORAL_COVERAGE_LOW
+    PREDICTIVE_ACTIVE_PICTURE_RISK PREDICTIVE_OVERLAY_DUPLICATE
+    PREDICTIVE_OVERLAY_GEOMETRY_INVALID PREDICTIVE_OVERLAY_OPACITY_LOW
+    PREDICTIVE_OVERLAY_TIMING_INVALID PREDICTIVE_SUBTITLE_SAFE_ZONE_CONFLICT
     """
 )
 
@@ -385,8 +399,75 @@ _FALLBACK_CODES = _code_set(
     FFMPEGA_PARAMETER_BLOCKED FFMPEGA_PATH_NOT_SHARED FFMPEGA_PLAN_EMPTY
     FFMPEGA_PLAN_INVALID FFMPEGA_QUEUE_FAILED FFMPEGA_RESPONSE_INVALID
     FFMPEGA_SKILL_BLOCKED FFMPEGA_TIMEOUT FFMPEGA_UNAVAILABLE
+    REPAIR_CAPABILITY_UNSUPPORTED REPAIR_CATALOG_STYLE_LOST
+    REPAIR_NEW_DEFECT_INTRODUCED REPAIR_OUTPUT_COUNT_CHANGED
+    REPAIR_SOURCE_WINDOW_CHANGED REPAIR_SUBTITLE_REQUIREMENT_LOST
+    REPAIR_UNAFFECTED_OPERATION_REMOVED
     """
 )
+
+_PREDICTIVE_METADATA: dict[str, tuple[str, tuple[str, ...], str, bool]] = {
+    "PREDICTIVE_OVERLAY_DUPLICATE": (
+        "plan_overlay_identity",
+        ("edit_plan", "overlay_ids"),
+        "duplicate overlay identifier",
+        True,
+    ),
+    "PREDICTIVE_OVERLAY_OPACITY_LOW": (
+        "plan_overlay_opacity",
+        ("edit_plan", "overlay_opacity"),
+        "opacity < 0.15",
+        True,
+    ),
+    "PREDICTIVE_OVERLAY_TIMING_INVALID": (
+        "plan_overlay_timing",
+        ("edit_plan", "timeline_windows"),
+        "overlay outside its segment or non-positive duration",
+        True,
+    ),
+    "PREDICTIVE_OVERLAY_GEOMETRY_INVALID": (
+        "plan_overlay_geometry",
+        ("edit_plan", "overlay_geometry"),
+        "width_ratio + 2 * margin_ratio > 1",
+        True,
+    ),
+    "PREDICTIVE_SUBTITLE_SAFE_ZONE_CONFLICT": (
+        "plan_subtitle_safe_zone",
+        ("edit_plan", "overlay_position"),
+        "protected overlay occupies a bottom subtitle zone",
+        True,
+    ),
+    "PREDICTIVE_ACTIVE_PICTURE_RISK": (
+        "plan_active_picture",
+        ("edit_plan", "source_aspect_ratio"),
+        "predicted active height ratio < 0.35",
+        True,
+    ),
+    "PREDICTIVE_INACTIVE_HOOK_RISK": (
+        "plan_hook_activity",
+        ("edit_plan", "opening_operations"),
+        "no visible opening operation in first 3000 ms",
+        False,
+    ),
+    "PREDICTIVE_ATTENTION_GAP_RISK": (
+        "plan_attention_gap",
+        ("edit_plan", "segment_operations"),
+        "operation-free interval >= 6000 ms",
+        False,
+    ),
+    "PREDICTIVE_LONG_VISUAL_HOLD_RISK": (
+        "plan_visual_hold",
+        ("edit_plan", "segment_duration"),
+        "static segment duration >= 8000 ms",
+        False,
+    ),
+    "PREDICTIVE_RHYTHM_RISK": (
+        "plan_rhythm",
+        ("edit_plan", "segment_count"),
+        "single segment duration >= 12000 ms",
+        False,
+    ),
+}
 
 _POST_RENDER_FALLBACK_CODES = _code_set(
     """
@@ -542,7 +623,7 @@ def _domain(code: str) -> DefectDomain:
         return DefectDomain.CAPTION
     if code.startswith(("VISUAL_", "CROP_VISUAL", "FRAME_", "SCENE_")):
         return DefectDomain.EVIDENCE
-    if code.startswith(("EDIT_", "CLIP_", "SEGMENT_", "OVERLAY_", "REGION_", "TRACK_", "CAPABILITY_", "TRANSITION_", "SHORTS_", "NO_VALID_SHORTS", "FULL_FRAME", "EVIDENCE_", "FIRST_SEGMENT")):
+    if code.startswith(("EDIT_", "CLIP_", "SEGMENT_", "OVERLAY_", "REGION_", "TRACK_", "CAPABILITY_", "TRANSITION_", "SHORTS_", "NO_VALID_SHORTS", "FULL_FRAME", "EVIDENCE_", "FIRST_SEGMENT", "REPAIR_")):
         return DefectDomain.PLANNING
     if code.startswith(("RENDER_", "FILTER", "COMPOSITION_", "FFMPEGA_", "VIDEO_RENDER", "MEDIA_PROBE", "FFPROBE", "EFFECT_", "EXTERNAL_ASSET_OMITTED")):
         return DefectDomain.RENDER
@@ -574,6 +655,8 @@ def _repair_strategy(code: str) -> RepairStrategy:
 
 
 def _repair_phase(code: str, strategy: RepairStrategy) -> RepairPhase:
+    if code in _PREDICTIVE_METADATA:
+        return RepairPhase.PRE_RENDER
     if code in _POST_RENDER_FALLBACK_CODES:
         return RepairPhase.POST_RENDER
     return {
@@ -613,6 +696,12 @@ def _severity(promotion_class: PromotionClass, retryable: bool) -> DefectSeverit
 
 
 def _fallback(code: str) -> str | None:
+    if code == "PREDICTIVE_SUBTITLE_SAFE_ZONE_CONFLICT":
+        return "CAPTION_SAFE_ZONE_FALLBACK"
+    if code == "PREDICTIVE_ACTIVE_PICTURE_RISK":
+        return "VISUAL_REFRAME_FALLBACK"
+    if code.startswith("PREDICTIVE_OVERLAY_"):
+        return "RENDER_PREFLIGHT_FALLBACK"
     if code.startswith("CROP_VISUAL") or code in {"ACTIVE_PICTURE_TOO_SMALL"}:
         return "VISUAL_REFRAME_FALLBACK"
     if code.startswith("CAPTION_") or code.startswith("SUBTITLE_"):
@@ -637,6 +726,14 @@ def _evidence(strategy: RepairStrategy) -> tuple[str, ...]:
         RepairStrategy.ADVISORY: ("qa_finding",),
         RepairStrategy.TERMINAL: (),
     }[strategy]
+
+
+def _predictive_policy(code: str) -> tuple[str | None, str | None, bool]:
+    metadata = _PREDICTIVE_METADATA.get(code)
+    if metadata is None:
+        return None, None, False
+    detector, _evidence_types, threshold, trigger_eligible = metadata
+    return detector, threshold, trigger_eligible
 
 
 def _presentation(
@@ -691,6 +788,12 @@ def _definition(code: str) -> DefectDefinition:
         domain,
         promotion_class,
     )
+    detector, threshold, trigger_eligible = _predictive_policy(code)
+    evidence_requirements = (
+        _PREDICTIVE_METADATA[code][1]
+        if code in _PREDICTIVE_METADATA
+        else _evidence(strategy)
+    )
     return DefectDefinition(
         code=code,
         domain=domain,
@@ -700,7 +803,7 @@ def _definition(code: str) -> DefectDefinition:
         ),
         repair_strategy=strategy,
         repair_phase=_repair_phase(code, strategy),
-        evidence_requirements=_evidence(strategy),
+        evidence_requirements=evidence_requirements,
         safe_fallback_code=_fallback(code),
         retryable=retryable,
         retry_action=(RetryAction.RETRY_DEFECTS if retryable else RetryAction.NONE),
@@ -710,6 +813,9 @@ def _definition(code: str) -> DefectDefinition:
         title_es=title_es,
         description_es=description_es,
         legacy_aliases=(code.lower(),) if code in _PUBLIC_CODES else (),
+        detector=detector,
+        threshold=threshold,
+        trigger_eligible=trigger_eligible,
     )
 
 
@@ -762,6 +868,9 @@ UNKNOWN_DEFECT = DefectDefinition(
     description_en="An unregistered defect code was reported and failed closed.",
     title_es="Incidencia de procesamiento desconocida",
     description_es="Se registro un codigo no reconocido y el proceso fallo de forma segura.",
+    detector=None,
+    threshold=None,
+    trigger_eligible=False,
 )
 
 
@@ -793,6 +902,9 @@ def defect_public_metadata(code: Any) -> dict[str, Any]:
         "retryable": definition.retryable,
         "retry_action": definition.retry_action.value,
         "promotion_class": definition.promotion_class.value,
+        "detector": definition.detector,
+        "threshold": definition.threshold,
+        "trigger_eligible": definition.trigger_eligible,
         "en": {"title": definition.title_en, "description": definition.description_en},
         "es": {"title": definition.title_es, "description": definition.description_es},
     }
