@@ -548,6 +548,16 @@ class MVPJobProcessor:
                     json.dumps(shorts_plan_artifact, ensure_ascii=False, indent=2),
                     encoding="utf-8",
                 )
+                await store.register_artifact(
+                    job_id,
+                    visual_path,
+                    kind="visual_understanding",
+                )
+                await store.register_artifact(
+                    job_id,
+                    shorts_plan_path,
+                    kind="shorts_plan",
+                )
                 edit_plan = await plan_agentic_edit(
                     visual_coverage.compact_feedback(),
                 )
