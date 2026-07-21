@@ -586,8 +586,10 @@ if necessary. Domain validators remain unchanged.
 - **Description**:
   - Add a narrow `complete_structured()` API accepting only registered schema
     names/models, not arbitrary caller-provided schemas.
-  - Send Chat Completions `response_format.type=json_schema` with schema name,
-    `strict=true`, and the stable schema.
+  - Send strict boundaries through the Responses-compatible
+    `text.format.type=json_schema` transport with schema name, `strict=true`,
+    `store=false`, and the stable schema. Keep Chat Completions `json_object` as
+    the explicit rollback transport for unallowlisted boundaries.
   - In strict mode, stop accepting fenced JSON or unrelated surrounding prose.
   - Distinguish transport retries from semantic repair attempts.
   - Handle refusal, empty content, non-success finish reasons, truncation,
@@ -1199,8 +1201,10 @@ schema compatibility review. No additive evidence is deleted.
   configuration load, Python compilation, shell syntax, and diff checks passed.
 - The remote image built as `openstoryline-mvp:sprint6-local`; console-strict
   Chromium smoke and the focused retry/comparison flow passed with one worker.
-- Authorized redacted 9Router text, vision, image, strict-schema acceptance,
-  and extra-field rejection probes passed.
+- Authorized redacted 9Router text, vision, and image probes passed. The release
+  gate then exposed intermittent Chat Completions extra-field enforcement; the
+  Responses-compatible strict transport passed five repeated adversarial calls
+  plus a multimodal call and became the fail-closed strict boundary.
 - The production PostgreSQL backup and isolated restore check passed at schema
   revision `20260721_0003`, and the private rollout flags passed the offline
   monotonic validator. Deployment and private-session canary evidence remain

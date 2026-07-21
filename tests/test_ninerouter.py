@@ -220,12 +220,24 @@ class NineRouterClientTests(unittest.IsolatedAsyncioTestCase):
         payload = self._shorts_payload()
 
         def handler(request: httpx.Request) -> httpx.Response:
+            captured["url"] = str(request.url)
             captured.update(json.loads(request.content))
             return httpx.Response(200, json={
-                "choices": [{
-                    "finish_reason": "stop",
-                    "message": {"content": json.dumps(payload)},
+                "status": "completed",
+                "output": [{
+                    "type": "message",
+                    "status": "completed",
+                    "content": [{
+                        "type": "output_text",
+                        "text": json.dumps(payload),
+                    }],
                 }],
+                "usage": {
+                    "input_tokens": 90,
+                    "output_tokens": 30,
+                    "total_tokens": 120,
+                    "output_tokens_details": {"reasoning_tokens": 20},
+                },
             })
 
         client = NineRouterClient(
@@ -241,20 +253,36 @@ class NineRouterClientTests(unittest.IsolatedAsyncioTestCase):
             schema_name=SHORTS_SELECTION_SCHEMA,
             system_prompt="system",
             user_prompt="user",
+            image_data_urls=["data:image/jpeg;base64,ZmFrZQ=="],
         )
 
         self.assertEqual(result, payload)
-        response_format = captured["response_format"]
+        self.assertEqual(captured["url"], "https://router.test/v1/responses")
+        self.assertFalse(captured["store"])
+        self.assertEqual(captured["reasoning"], {"effort": "medium"})
+        response_format = captured["text"]["format"]
         self.assertEqual(response_format["type"], "json_schema")
-        self.assertTrue(response_format["json_schema"]["strict"])
-        self.assertEqual(response_format["json_schema"]["name"], "shorts_selection_v1")
+        self.assertTrue(response_format["strict"])
+        self.assertEqual(response_format["name"], "shorts_selection_v1")
+        self.assertEqual(captured["input"][0]["content"][0]["type"], "input_text")
+        self.assertEqual(captured["input"][0]["content"][1]["type"], "input_image")
+        self.assertEqual(client.last_attempts[0].input_tokens, 90)
+        self.assertEqual(client.last_attempts[0].reasoning_tokens, 20)
 
     async def test_strict_schema_never_accepts_fences_or_prose(self):
         payload = json.dumps(self._shorts_payload())
 
         def handler(request: httpx.Request) -> httpx.Response:
             return httpx.Response(200, json={
-                "choices": [{"message": {"content": f"```json\n{payload}\n```"}}],
+                "status": "completed",
+                "output": [{
+                    "type": "message",
+                    "status": "completed",
+                    "content": [{
+                        "type": "output_text",
+                        "text": f"```json\n{payload}\n```",
+                    }],
+                }],
             })
 
         client = NineRouterClient(
@@ -277,15 +305,32 @@ class NineRouterClientTests(unittest.IsolatedAsyncioTestCase):
     async def test_structured_output_handles_schema_mismatch_refusal_and_incomplete(self):
         cases = (
             (
-                {"choices": [{"message": {"content": '{"clips":[] ,"extra":true}'}}]},
+                {
+                    "status": "completed",
+                    "output": [{
+                        "type": "message",
+                        "status": "completed",
+                        "content": [{
+                            "type": "output_text",
+                            "text": '{"clips":[] ,"extra":true}',
+                        }],
+                    }],
+                },
                 "NINEROUTER_SCHEMA_MISMATCH",
             ),
             (
-                {"choices": [{"message": {"content": "", "refusal": "no"}}]},
+                {
+                    "status": "completed",
+                    "output": [{
+                        "type": "message",
+                        "status": "completed",
+                        "content": [{"type": "refusal", "refusal": "no"}],
+                    }],
+                },
                 "NINEROUTER_RESPONSE_REFUSED",
             ),
             (
-                {"choices": [{"finish_reason": "length", "message": {"content": "{}"}}]},
+                {"status": "incomplete", "output": []},
                 "NINEROUTER_RESPONSE_INCOMPLETE",
             ),
         )

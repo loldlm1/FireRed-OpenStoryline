@@ -150,17 +150,27 @@ class NineRouterPreflightTests(unittest.TestCase):
         captured = []
 
         def fake_post(url, payload, *, api_key, timeout):
-            captured.append(payload)
+            captured.append((url, payload))
             return (
                 200,
-                {"choices": [{"message": {"content": '{"ok":true}'}}]},
+                {
+                    "status": "completed",
+                    "output": [{
+                        "type": "message",
+                        "status": "completed",
+                        "content": [{
+                            "type": "output_text",
+                            "text": '{"ok":true}',
+                        }],
+                    }],
+                },
                 b"redacted",
                 "ok",
             )
 
         with patch.object(qa_ninerouter, "post_json", side_effect=fake_post):
             checks = qa_ninerouter.strict_schema_checks(
-                "https://router.test/v1/chat/completions",
+                "https://router.test/v1/responses",
                 model="cx/gpt-5.6-sol",
                 api_key="secret",
                 timeout=1,
@@ -168,30 +178,45 @@ class NineRouterPreflightTests(unittest.TestCase):
 
         self.assertTrue(all(check.ok for check in checks))
         self.assertEqual(len(captured), 2)
-        response_format = captured[0]["response_format"]
+        self.assertEqual(
+            captured[0][0],
+            "https://router.test/v1/responses",
+        )
+        response_format = captured[0][1]["text"]["format"]
         self.assertEqual(response_format["type"], "json_schema")
-        self.assertTrue(response_format["json_schema"]["strict"])
+        self.assertTrue(response_format["strict"])
         self.assertFalse(
-            response_format["json_schema"]["schema"]["additionalProperties"]
+            response_format["schema"]["additionalProperties"]
         )
         self.assertEqual(
-            response_format["json_schema"]["schema"]["properties"]["ok"]["enum"],
+            response_format["schema"]["properties"]["ok"]["enum"],
             [True],
         )
+        self.assertFalse(captured[0][1]["store"])
 
     def test_strict_schema_probe_fails_on_unsupported_or_extra_output(self):
         responses = [
             (400, None, b"", "http"),
             (
                 200,
-                {"choices": [{"message": {"content": '{"ok":true,"extra":1}'}}]},
+                {
+                    "status": "completed",
+                    "output": [{
+                        "type": "message",
+                        "status": "completed",
+                        "content": [{
+                            "type": "output_text",
+                            "text": '{"ok":true,"extra":1}',
+                        }],
+                    }],
+                },
                 b"redacted",
                 "ok",
             ),
         ]
         with patch.object(qa_ninerouter, "post_json", side_effect=responses):
             checks = qa_ninerouter.strict_schema_checks(
-                "https://router.test/v1/chat/completions",
+                "https://router.test/v1/responses",
                 model="cx/gpt-5.6-sol",
                 api_key="secret",
                 timeout=1,

@@ -26,6 +26,15 @@ private-free probe passes for the configured 9Router route and model. Unknown
 boundary names fail startup. Strict boundaries never downgrade silently to
 permissive parsing.
 
+Strict boundaries use the 9Router Responses-compatible endpoint with
+`text.format.type=json_schema`, `strict=true`, and `store=false`. The existing
+Chat Completions `json_object` transport remains the rollback path for
+unallowlisted boundaries. This split is intentional: the production route did
+not consistently enforce Chat Completions `response_format`, while the
+Responses transport passed repeated acceptance, extra-field rejection, and
+multimodal probes. Local Pydantic and semantic validation still run after every
+provider success.
+
 Registry-driven semantic repair is independently controlled by
 `OPENSTORYLINE_LLM_DEFECT_REPAIR_MODE`. `off` bypasses eligibility and makes no
 repair call. `report` evaluates the same evidence and records only a redacted
@@ -35,9 +44,9 @@ post-render, provider, media, security, unknown, and FFMPEGA findings cannot
 trigger these calls. Returning the setting to `off` is the repair rollback and
 does not disable the defect registry or strict schema transport.
 
-The deploy wrapper runs the strict acceptance and extra-field rejection probes
-whenever `json_schema` mode is selected. A failed probe blocks deployment. Run
-the isolated probe directly with:
+The deploy wrapper runs Responses-based strict acceptance and extra-field
+rejection probes whenever `json_schema` mode is selected. A failed probe blocks
+deployment. Run the isolated probe directly with:
 
 ```bash
 python scripts/qa_ninerouter.py \

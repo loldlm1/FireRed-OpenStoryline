@@ -223,8 +223,17 @@ def _json_object_contract(payload: Any) -> bool:
 
 
 def _strict_schema_contract(payload: Any) -> bool:
+    if not isinstance(payload, dict) or payload.get("status") != "completed":
+        return False
+    parts = [
+        str(content.get("text") or "")
+        for output in payload.get("output") or ()
+        if isinstance(output, dict) and output.get("type") == "message"
+        for content in output.get("content") or ()
+        if isinstance(content, dict) and content.get("type") == "output_text"
+    ]
     try:
-        return json.loads(_message_text(payload).strip()) == {"ok": True}
+        return json.loads("".join(parts).strip()) == {"ok": True}
     except json.JSONDecodeError:
         return False
 
@@ -238,11 +247,14 @@ def strict_schema_checks(
 ) -> list[Check]:
     common = {
         "model": model,
-        "reasoning_effort": "low",
-        "response_format": {
+        "reasoning": {"effort": "low"},
+        "store": False,
+        "text": {"format": {
             "type": "json_schema",
-            "json_schema": STRICT_SCHEMA_PROBE,
-        },
+            "name": STRICT_SCHEMA_PROBE["name"],
+            "strict": True,
+            "schema": STRICT_SCHEMA_PROBE["schema"],
+        }},
     }
     checks: list[Check] = []
     for name, prompt in (
@@ -254,7 +266,7 @@ def strict_schema_checks(
     ):
         status, payload, _, category = post_json(
             endpoint,
-            {**common, "messages": [{"role": "user", "content": prompt}]},
+            {**common, "input": prompt},
             api_key=api_key,
             timeout=timeout,
         )
@@ -338,7 +350,7 @@ def live_contract_checks(
         ))
         if strict_schema:
             checks.extend(strict_schema_checks(
-                endpoint,
+                f"{base_url}/v1/responses",
                 model=text_model,
                 api_key=api_key,
                 timeout=timeout,

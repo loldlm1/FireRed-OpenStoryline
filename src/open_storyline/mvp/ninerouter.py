@@ -84,7 +84,9 @@ def _message_text(content: Any) -> str:
 def _usage(payload: Any) -> dict[str, int | float | None]:
     usage = payload.get("usage") if isinstance(payload, dict) else None
     usage = usage if isinstance(usage, dict) else {}
-    details = usage.get("completion_tokens_details")
+    details = usage.get("completion_tokens_details") or usage.get(
+        "output_tokens_details"
+    )
     details = details if isinstance(details, dict) else {}
 
     def integer(name: str, source: dict[str, Any] = usage) -> int | None:
@@ -93,6 +95,13 @@ def _usage(payload: Any) -> dict[str, int | float | None]:
         except (TypeError, ValueError, OverflowError):
             return None
         return value if 0 <= value <= 100_000_000 else None
+
+    def first_integer(*names: str) -> int | None:
+        for name in names:
+            value = integer(name)
+            if value is not None:
+                return value
+        return None
 
     cost_value = usage.get("cost")
     if cost_value is None and isinstance(payload, dict):
@@ -104,12 +113,32 @@ def _usage(payload: Any) -> dict[str, int | float | None]:
     if cost is not None and not 0 <= cost <= 100_000:
         cost = None
     return {
-        "input_tokens": integer("prompt_tokens"),
-        "output_tokens": integer("completion_tokens"),
+        "input_tokens": first_integer("prompt_tokens", "input_tokens"),
+        "output_tokens": first_integer("completion_tokens", "output_tokens"),
         "reasoning_tokens": integer("reasoning_tokens", details),
         "total_tokens": integer("total_tokens"),
         "cost_usd": round(cost, 8) if cost is not None else None,
     }
+
+
+def _responses_text(payload: Any) -> tuple[str, bool]:
+    if not isinstance(payload, dict):
+        return "", False
+    parts: list[str] = []
+    refused = False
+    for output in payload.get("output") or ():
+        if not isinstance(output, dict) or output.get("type") != "message":
+            continue
+        for item in output.get("content") or ():
+            if not isinstance(item, dict):
+                continue
+            if item.get("type") == "refusal" and item.get("refusal"):
+                refused = True
+            elif item.get("type") == "output_text" and isinstance(
+                item.get("text"), str
+            ):
+                parts.append(item["text"])
+    return "\n".join(parts), refused
 
 
 def parse_json_object(value: str) -> dict[str, Any]:
@@ -229,6 +258,12 @@ class NineRouterClient:
             return f"{self.base_url}/chat/completions"
         return f"{self.base_url}/v1/chat/completions"
 
+    @property
+    def responses_endpoint(self) -> str:
+        if self.base_url.endswith("/v1"):
+            return f"{self.base_url}/responses"
+        return f"{self.base_url}/v1/responses"
+
     async def complete_json(
         self,
         *,
@@ -284,37 +319,49 @@ class NineRouterClient:
                 "NINEROUTER_CONFIG_INVALID",
                 "reasoning effort must be low, medium, or high",
             )
-        user_content: Any = user_prompt
-        if image_data_urls:
-            user_content = [{"type": "text", "text": user_prompt}]
-            user_content.extend({
-                "type": "image_url",
-                "image_url": {"url": str(image_url)},
-            } for image_url in image_data_urls)
         use_strict_schema = bool(
             definition is not None
             and self.structured_output_mode == "json_schema"
             and definition.name in self.structured_output_boundaries
         )
-        response_format = {"type": "json_object"}
         if use_strict_schema:
-            response_format = {
-                "type": "json_schema",
-                "json_schema": {
+            user_content = [{"type": "input_text", "text": user_prompt}]
+            user_content.extend({
+                "type": "input_image",
+                "image_url": str(image_url),
+            } for image_url in image_data_urls)
+            request_body = {
+                "model": self.model,
+                "instructions": system_prompt,
+                "input": [{"role": "user", "content": user_content}],
+                "reasoning": {"effort": effective_reasoning_effort},
+                "store": False,
+                "text": {"format": {
+                    "type": "json_schema",
                     "name": definition.provider_name,
                     "strict": True,
                     "schema": definition.schema,
-                },
+                }},
             }
-        request_body = {
-            "model": self.model,
-            "messages": [
-                {"role": "system", "content": system_prompt},
-                {"role": "user", "content": user_content},
-            ],
-            "reasoning_effort": effective_reasoning_effort,
-            "response_format": response_format,
-        }
+            endpoint = self.responses_endpoint
+        else:
+            user_content: Any = user_prompt
+            if image_data_urls:
+                user_content = [{"type": "text", "text": user_prompt}]
+                user_content.extend({
+                    "type": "image_url",
+                    "image_url": {"url": str(image_url)},
+                } for image_url in image_data_urls)
+            request_body = {
+                "model": self.model,
+                "messages": [
+                    {"role": "system", "content": system_prompt},
+                    {"role": "user", "content": user_content},
+                ],
+                "reasoning_effort": effective_reasoning_effort,
+                "response_format": {"type": "json_object"},
+            }
+            endpoint = self.endpoint
         attempts: list[NineRouterAttempt] = []
         terminal_code: str | None = None
         headers = {"Authorization": f"Bearer {self.api_key}"}
@@ -322,7 +369,7 @@ class NineRouterClient:
             for number in range(1, self.max_retries + 2):
                 started = time.monotonic()
                 try:
-                    response = await client.post(self.endpoint, headers=headers, json=request_body)
+                    response = await client.post(endpoint, headers=headers, json=request_body)
                 except httpx.HTTPError as exc:
                     attempts.append(NineRouterAttempt(
                         number,
@@ -347,22 +394,30 @@ class NineRouterClient:
 
                 try:
                     payload = response.json()
-                    choice = payload["choices"][0]
-                    message = choice["message"]
-                    refusal = message.get("refusal")
-                    if refusal:
-                        terminal_code = "NINEROUTER_RESPONSE_REFUSED"
-                        raise ValueError("provider refused the structured response")
-                    finish_reason = choice.get("finish_reason", "stop")
-                    if finish_reason not in {None, "stop"}:
-                        terminal_code = "NINEROUTER_RESPONSE_INCOMPLETE"
-                        raise ValueError("provider response did not finish normally")
-                    text = _message_text(message["content"]).strip()
                     if use_strict_schema:
+                        response_status = str(payload.get("status") or "")
+                        if response_status != "completed":
+                            terminal_code = "NINEROUTER_RESPONSE_INCOMPLETE"
+                            raise ValueError("provider response did not complete")
+                        text, refused = _responses_text(payload)
+                        if refused:
+                            terminal_code = "NINEROUTER_RESPONSE_REFUSED"
+                            raise ValueError("provider refused the structured response")
                         parsed = json.loads(text)
                         if not isinstance(parsed, dict):
                             raise TypeError("response root must be a JSON object")
                     else:
+                        choice = payload["choices"][0]
+                        message = choice["message"]
+                        refusal = message.get("refusal")
+                        if refusal:
+                            terminal_code = "NINEROUTER_RESPONSE_REFUSED"
+                            raise ValueError("provider refused the structured response")
+                        finish_reason = choice.get("finish_reason", "stop")
+                        if finish_reason not in {None, "stop"}:
+                            terminal_code = "NINEROUTER_RESPONSE_INCOMPLETE"
+                            raise ValueError("provider response did not finish normally")
+                        text = _message_text(message["content"]).strip()
                         parsed = parse_json_object(text)
                     if use_strict_schema:
                         try:
