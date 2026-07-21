@@ -29,9 +29,13 @@ user requirements
   -> advisory semantic and human review
 ```
 
-**Plan status**: Ready for implementation.
+**Plan status**: Implemented and production-validated; pull request pending.
 
 **Created**: 2026-07-20.
+
+**Implementation branch**: `fix/production-video-quality-hardening`.
+
+**Current implementation head and deployed revision**: `824886c`.
 
 **Current local baseline**: `8e2a71e`.
 
@@ -40,9 +44,11 @@ user requirements
 The commit difference only removes completed planning documents; no behavioral
 deployment drift was found.
 
-**Planning boundary**: This document is the only file created during research.
-No product code, production state, provider, database, deployment, or media was
-mutated.
+**Original research boundary**: This document was the only file created during
+the research phase. The authorized implementation and production validation
+described below followed in ordered, validated sprint commits. Private prompts,
+media, transcripts, provider responses, frames, and credentials remain outside
+Git.
 
 ## Confirmed Operator Decisions
 
@@ -93,14 +99,93 @@ The stored prompt requires a Pexels **video**, not a Pexels image. The exact
 replay must follow the stored prompt unless the operator deliberately creates a
 new prompt version requesting a still image instead.
 
-## Remaining Operator Decision
+## Resolved Operator Decision
 
-The operator's conversational description referred to two images, while the
-immutable stored prompt requires a generated image plus a vertical Pexels video.
-The recommended choice is to follow the stored prompt for the exact replay so
-the new attempt is an attributable engine comparison. If a Pexels still image
-is the real product requirement, create a separate prompt version after the
-exact replay rather than changing the baseline contract.
+The operator approved following the immutable stored prompt for the exact
+replay: one generated editorial image plus one vertical Pexels video. No prompt
+variant was introduced, so the result remains attributable to engine changes
+rather than a changed creative requirement.
+
+## Implementation And Production Validation
+
+### Ordered Sprint Commits
+
+The requested sprint batch was implemented and validated in order:
+
+| Sprint | Commit | Outcome |
+| --- | --- | --- |
+| 1 | `4e8f37d` | Required creative intent became typed, versioned, executable, and fail-closed. |
+| 2 | `2709e2d` | Selected clips gained bounded local visual evidence and crop-coverage preflight. |
+| 3 | `3505770` | Captions became resolution-aware and footer-bounded; explicit quality profiles replaced implicit encoding settings. |
+| 4 | `e583bf0` | Frame-level evidence and deterministic `off|report|enforce` promotion decisions were added. |
+| 5 | `24d5b88` | Pinned, isolated, read-only reference-quality tooling was added outside the remote web image. |
+| 6 | `9633cfd` | Kamal readiness, non-root runtime ownership, release observation, and rollback controls were hardened. |
+
+Subsequent production canary findings were repaired in focused commits through
+`824886c`. These changes normalize bounded provider/model aliases, preserve
+required-asset failure semantics, tighten crop evidence and safety bounds, and
+verify that resolved assets are actually visible in the rendered timeline.
+
+### Exact Replay Result
+
+Production Attempt 25 replayed the same immutable session lineage, prompt
+version, settings version, source hash, and source media under promotion mode
+`report`. It passed the same deterministic promotion checks used by `enforce`:
+
+- Exactly one GPT editorial image was requested, resolved, called once, and
+  visibly rendered for 3 seconds.
+- Exactly one portrait Pexels video was requested, resolved, called once, and
+  visibly rendered for 4 seconds.
+- Asset visibility checks passed with SSIM `0.983` and `0.987`.
+- The output filled a 1080x1920 portrait canvas, preserved the speaker under
+  manual frame inspection, and encoded as H.264/AAC at 60 fps.
+- The 21.8-second output was 7.6 MB. Reference-aligned quality passed with
+  median SSIM `0.984`, minimum SSIM `0.983`, and median PSNR `43.74`.
+- Captions used at most two lines, a resolved 46 px font, and no more than 4.5%
+  of frame height inside the footer-safe region.
+- The deterministic decision was `promote` with zero blockers. Manual sampled
+  frames and a one-frame-per-second contact sheet also passed review.
+
+The private QA workspace is retained temporarily at
+`/tmp/openstoryline-attempt25.goYQNI/` for operator review and remains outside
+the repository.
+
+### Enforcement Result
+
+Production was then redeployed with
+`OPENSTORYLINE_RENDER_PROMOTION_MODE=enforce`. Attempts 26 and 27 both failed
+safely during edit-plan preflight with
+`EDIT_PLAN_VISUAL_COVERAGE_INSUFFICIENT`, before any image or Pexels provider
+call. Attempt 26 demonstrated that bounded stable-track continuity accepts an
+11.25-second sampling bracket while a 16.875-second bracket remains blocked by
+the 12-second safety ceiling. Attempt 27 consumed only sanitized prior-attempt
+feedback and remained safely blocked.
+
+The safety ceiling was not weakened to force another passing canary. Attempt 25
+already proves that an acceptable exact-lineage candidate passes the identical
+deterministic gate; Attempts 26 and 27 prove that enforcement rejects unsafe
+agent plans without incurring provider side effects.
+
+### Validation Evidence
+
+- Focused compositor, render, pipeline, and visual-coverage suite: 33 tests
+  passed.
+- Full local suite without PostgreSQL: 342 tests passed with 70 expected
+  database-backed skips.
+- Full suite against disposable PostgreSQL 17: 342 tests passed with no skips.
+- Release, quality-sidecar, and remote-profile suite: 25 tests passed.
+- Shell syntax checks, `Dockerfile.quality`, and the exact
+  `Dockerfile.remote` build/deploy path passed.
+- Guarded 9Router text, vision, and image gates plus direct Mistral gates passed.
+- Chromium smoke and authenticated desktop login, CSRF, session, and
+  required-asset UI flows passed.
+- Production `/up`, `/health`, container state, recent logs, provider
+  readiness, queue recovery, and the Attempt 25 structural audit passed.
+
+Production currently runs revision `824886c` as UID `65532` with promotion mode
+`enforce`. No schema, persistent-volume, DNS, TLS, or firewall change was
+required. The operational rollback remains to set the private Kamal environment
+to promotion mode `report` or `off` and deploy the prior compatible revision.
 
 ## Audited Incident Findings
 
@@ -1177,24 +1262,24 @@ editing-engine behavior so rollback remains clear.
 
 ## Completion Checklist
 
-- [ ] Synthetic incident reproduces missing assets, uncovered crop, letterbox,
+- [x] Synthetic incident reproduces missing assets, uncovered crop, letterbox,
       and caption footprint failures.
-- [ ] Required creative intent is versioned and executable.
-- [ ] Planner uses configured reasoning effort and cannot silently degrade in
+- [x] Required creative intent is versioned and executable.
+- [x] Planner uses configured reasoning effort and cannot silently degrade in
       render mode.
-- [ ] Selected clips receive bounded local visual sampling.
-- [ ] Crop/focus plans require same-window coverage.
-- [ ] Unapproved fit/letterbox fallback blocks promotion.
-- [ ] Captions use explicit target-resolution ASS and bounded cues.
-- [ ] Caption footprint is measured in the footer safe zone.
-- [ ] Render profiles are benchmarked for quality, CPU, latency, and size.
-- [ ] Active-picture and aligned frame metrics are persisted without frame bytes.
-- [ ] Deterministic promotion blockers are distinct from advisory creative QA.
-- [ ] Optional VMAF tooling is isolated, pinned, read-only, and license-reviewed.
-- [ ] `/up` gates production readiness in the selected Kamal mode.
-- [ ] Production access remains within the accepted private-only direct-port
+- [x] Selected clips receive bounded local visual sampling.
+- [x] Crop/focus plans require same-window coverage.
+- [x] Unapproved fit/letterbox fallback blocks promotion.
+- [x] Captions use explicit target-resolution ASS and bounded cues.
+- [x] Caption footprint is measured in the footer safe zone.
+- [x] Render profiles are benchmarked for quality, CPU, latency, and size.
+- [x] Active-picture and aligned frame metrics are persisted without frame bytes.
+- [x] Deterministic promotion blockers are distinct from advisory creative QA.
+- [x] Optional VMAF tooling is isolated, pinned, read-only, and license-reviewed.
+- [x] `/up` gates production readiness in the selected Kamal mode.
+- [x] Production access remains within the accepted private-only direct-port
       boundary.
-- [ ] Non-root migration includes persistent-volume ownership and rollback.
-- [ ] Full deterministic, connected PostgreSQL, FFmpeg, Kamal, shell, Docker,
+- [x] Non-root migration includes persistent-volume ownership and rollback.
+- [x] Full deterministic, connected PostgreSQL, FFmpeg, Kamal, shell, Docker,
       and affected browser checks are reported accurately.
-- [ ] Private production evidence and provider credentials remain outside Git.
+- [x] Private production evidence and provider credentials remain outside Git.
