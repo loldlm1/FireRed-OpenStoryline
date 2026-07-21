@@ -142,6 +142,19 @@ class CreativeQATests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(report["operations"]["missing"], [])
         self.assertEqual(report["assets"]["missing"], [])
 
+    def test_conformance_accepts_focus_zoom_clamped_to_safe_crop(self):
+        rendered = execution(with_asset=True)
+        rendered["clips"][0]["segments"][0]["operation"] = "crop"
+        report = build_creative_conformance_report(
+            edit_plan=edit_plan(with_asset=True),
+            render_execution=rendered,
+            strict=True,
+        )
+
+        self.assertEqual(report["status"], "pass")
+        self.assertEqual(report["operations"]["conditional"], ["focus_zoom"])
+        self.assertEqual(report["operations"]["missing"], [])
+
     def test_duplicate_asset_visibility_blocks_conformance(self):
         rendered = execution(with_asset=True)
         duplicate = deepcopy(rendered["clips"][0]["segments"][0]["overlays"][0])

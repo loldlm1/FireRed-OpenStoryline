@@ -961,8 +961,9 @@ def build_retention_rhythm_report(
     }
 
 
-def _planned_operations(edit_plan: dict[str, Any]) -> tuple[set[str], set[str]]:
+def _planned_operations(edit_plan: dict[str, Any]) -> tuple[set[str], set[str], set[str]]:
     operations = {"subtitles"}
+    conditional_operations: set[str] = set()
     assets: set[str] = set()
     for clip in edit_plan.get("clips") or []:
         for segment in clip.get("segments") or []:
@@ -978,6 +979,7 @@ def _planned_operations(edit_plan: dict[str, Any]) -> tuple[set[str], set[str]]:
                 operations.add(mapped_layout)
             if mode == "crop" and float(layout.get("max_zoom") or 1) > 1:
                 operations.add("focus_zoom")
+                conditional_operations.add("focus_zoom")
             transition = str((segment.get("transition_in") or {}).get("kind") or "cut")
             operations.add({"cut": "hard_cut", "fade": "fade", "xfade": "xfade"}.get(transition, transition))
             for overlay in segment.get("overlays") or []:
@@ -992,7 +994,7 @@ def _planned_operations(edit_plan: dict[str, Any]) -> tuple[set[str], set[str]]:
         for request in clip.get("asset_requests") or []:
             if request.get("id"):
                 assets.add(str(request["id"]))
-    return operations, assets
+    return operations, conditional_operations, assets
 
 
 def _executed_operations(render_execution: dict[str, Any]) -> tuple[set[str], set[str], int, int]:
@@ -1044,11 +1046,13 @@ def build_creative_conformance_report(
     semantic_review: dict[str, Any] | None = None,
     asset_visibility: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
-    planned_operations, requested_assets = _planned_operations(edit_plan)
+    planned_operations, conditional_operations, requested_assets = _planned_operations(edit_plan)
     executed_operations, used_assets, fallback_count, unexplained_fallbacks = _executed_operations(
         render_execution
     )
-    missing_operations = sorted(planned_operations - executed_operations)
+    missing_operations = sorted(
+        planned_operations - conditional_operations - executed_operations
+    )
     extra_operations = sorted(executed_operations - planned_operations)
     missing_assets = sorted(requested_assets - used_assets)
     unrequested_assets = sorted(used_assets - requested_assets)
@@ -1151,6 +1155,7 @@ def build_creative_conformance_report(
         },
         "operations": {
             "planned": sorted(planned_operations),
+            "conditional": sorted(conditional_operations),
             "executed": sorted(executed_operations),
             "missing": missing_operations,
             "extra": extra_operations,
@@ -1314,7 +1319,13 @@ def _unavailable_reports(code: str, *, strict: bool) -> tuple[dict[str, Any], di
         "strict_thresholds": strict,
         "notice": QA_NOTICE,
         "summary": {"blockers": 0, "warnings": 0, "review_notes": 1},
-        "operations": {"planned": [], "executed": [], "missing": [], "extra": []},
+        "operations": {
+            "planned": [],
+            "conditional": [],
+            "executed": [],
+            "missing": [],
+            "extra": [],
+        },
         "assets": {"requested": [], "used": [], "missing": [], "unrequested": []},
         "asset_visibility": {
             "version": ASSET_VISIBILITY_VERSION,
