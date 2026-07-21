@@ -4,6 +4,7 @@ from dataclasses import asdict, dataclass
 from typing import Any, Iterable
 import os
 
+from open_storyline.mvp.defects import defect_definition
 from open_storyline.mvp.edit_plan import EditPlan, required_capabilities
 from open_storyline.mvp.visual_coverage import ClipVisualCoverageReport
 
@@ -55,6 +56,13 @@ class CompilationResult:
         }
 
 
+@dataclass(frozen=True)
+class FallbackDirective:
+    code: str
+    clip_index: int | None = None
+    segment_id: str = ""
+
+
 def baseline_fallbacks_enabled(config: Any) -> bool:
     raw = os.getenv("OPENSTORYLINE_BASELINE_FALLBACKS_ENABLED")
     if raw is None:
@@ -100,16 +108,34 @@ def compile_baseline_plan(
     omitted_asset_ids: Iterable[str] = (),
     force_minimal: bool = False,
     cause_code: str = "",
+    remaining_defects: Iterable[FallbackDirective] = (),
+    max_segments_per_clip: int = 48,
+    max_overlays_per_clip: int = 16,
+    max_assets_per_clip: int = 8,
 ) -> CompilationResult:
     payload = plan.to_dict()
     available = {str(value) for value in available_capabilities}
     omitted_assets = {str(value) for value in omitted_asset_ids}
     blockers = _coverage_blockers(visual_coverage)
+    directives = tuple(remaining_defects)
     entries: list[FallbackEntry] = []
 
     for clip in payload["clips"]:
         clip_index = int(clip["clip_index"])
-        if force_minimal:
+        clip_directives = tuple(
+            directive
+            for directive in directives
+            if directive.clip_index in {None, clip_index}
+        )
+        directive_codes = {directive.code for directive in clip_directives}
+        clip_wide_codes = {
+            directive.code for directive in clip_directives if not directive.segment_id
+        }
+        if force_minimal or (
+            len(clip["segments"]) > max_segments_per_clip
+            and directive_codes
+            & {"EDIT_PLAN_SEGMENT_BUDGET_EXCEEDED", "SEGMENT_BUDGET_EXCEEDED"}
+        ):
             source_window = dict(clip["source_window"])
             duration_ms = int(source_window["end_ms"]) - int(source_window["start_ms"])
             previous_segments = list(clip["segments"])
@@ -139,14 +165,72 @@ def compile_baseline_plan(
                 executed="single_segment_full_frame_fit",
                 reason=str(cause_code or "FFmpeg preflight rejected the compiled filtergraph")[:240],
             ))
+            for directive in clip_directives:
+                fallback_code = defect_definition(directive.code).safe_fallback_code
+                if fallback_code is None:
+                    continue
+                entries.append(FallbackEntry(
+                    code=fallback_code,
+                    clip_index=clip_index,
+                    segment_id=directive.segment_id or "plan",
+                    requested=directive.code,
+                    executed=fallback_code,
+                    reason="The clip required a deterministic bounded baseline fallback.",
+                ))
             continue
 
         removed_asset_ids = set(omitted_assets)
         transition_unsupported = False
+        if directive_codes & {
+            "EDIT_PLAN_CATALOG_ID_UNKNOWN",
+            "EDIT_PLAN_CATALOG_KIND_INVALID",
+            "EDIT_PLAN_CATALOG_STYLE_MISMATCH",
+            "EDIT_PLAN_CATALOG_TRANSITION_MISMATCH",
+        }:
+            clip["catalog_selection"] = {
+                "style_profile_id": "",
+                "caption_treatment_id": "",
+                "color_treatment_id": "",
+                "recipe_ids": [],
+            }
+            for segment in clip["segments"]:
+                segment["transition_in"]["catalog_id"] = ""
+        if len(clip.get("asset_requests") or []) > max_assets_per_clip:
+            removed_asset_ids.update(
+                str(asset["id"])
+                for asset in clip["asset_requests"][max_assets_per_clip:]
+            )
+        overlay_budget = max_overlays_per_clip
         for segment in clip["segments"]:
             segment_id = str(segment["id"])
             layout = segment["layout"]
             coverage_codes = blockers.get((clip_index, segment_id), ())
+            segment_codes = clip_wide_codes | {
+                directive.code
+                for directive in clip_directives
+                if directive.segment_id == segment_id
+            }
+            if segment_codes & {
+                "EDIT_PLAN_REGION_UNKNOWN",
+                "EDIT_PLAN_REGION_OUTSIDE_CLIP",
+                "EDIT_PLAN_TRACK_UNKNOWN",
+                "EDIT_PLAN_TRACK_OUTSIDE_CLIP",
+                "EDIT_PLAN_EVIDENCE_UNKNOWN",
+                "REGION_REFERENCE_UNKNOWN",
+                "REGION_REFERENCE_OUTSIDE_CLIP",
+                "TRACK_REFERENCE_UNKNOWN",
+                "TRACK_REFERENCE_OUTSIDE_CLIP",
+                "EVIDENCE_REFERENCE_UNKNOWN",
+                "FULL_FRAME_FALLBACK_UNAPPROVED",
+            }:
+                layout.update({
+                    "mode": "fit",
+                    "focal_target": None,
+                    "fallback": "fit",
+                    "allow_full_frame_fallback": True,
+                    "max_zoom": 1.0,
+                })
+                segment["evidence_ids"] = []
             if coverage_codes and layout.get("mode") == "crop":
                 layout.update({
                     "mode": "fit",
@@ -190,6 +274,12 @@ def compile_baseline_plan(
                     reason="The installed renderer does not advertise focus zoom support.",
                 ))
             transition = segment["transition_in"]
+            if segment_codes & {
+                "TRANSITION_TOO_LONG",
+                "OVERLAY_TRANSITION_TOO_LONG",
+                "EDIT_PLAN_CATALOG_TRANSITION_MISMATCH",
+            }:
+                transition.update({"kind": "cut", "duration_ms": 0, "catalog_id": ""})
             transition_capability = {
                 "cut": "hard_cut",
                 "fade": "fade",
@@ -246,6 +336,28 @@ def compile_baseline_plan(
                         executed=str(overlay["position"]),
                         reason="The overlay was moved out of the protected subtitle zone.",
                     ))
+                if "PREDICTIVE_OVERLAY_OPACITY_LOW" in segment_codes:
+                    overlay["opacity"] = max(0.15, float(overlay.get("opacity") or 0))
+                if "PREDICTIVE_OVERLAY_GEOMETRY_INVALID" in segment_codes:
+                    margin = float(overlay.get("margin_ratio") or 0)
+                    overlay["width_ratio"] = min(
+                        float(overlay.get("width_ratio") or 0.35),
+                        max(0.08, 1 - (2 * margin)),
+                    )
+                if "OVERLAY_TRANSITION_TOO_LONG" in segment_codes:
+                    duration_ms = (
+                        int(overlay["timeline_window"]["end_ms"])
+                        - int(overlay["timeline_window"]["start_ms"])
+                    )
+                    overlay["transition_ms"] = min(
+                        int(overlay.get("transition_ms") or 0),
+                        max(0, duration_ms // 2),
+                    )
+                if overlay_budget <= 0:
+                    if overlay.get("asset_id"):
+                        removed_asset_ids.add(str(overlay["asset_id"]))
+                    continue
+                overlay_budget -= 1
                 kept_overlays.append(overlay)
             segment["overlays"] = kept_overlays
         if transition_unsupported:
@@ -285,6 +397,22 @@ def compile_baseline_plan(
             for asset in clip.get("asset_requests") or []
             if str(asset["id"]) not in removed_asset_ids
         ]
+
+        for directive in clip_directives:
+            fallback_code = defect_definition(directive.code).safe_fallback_code
+            if fallback_code is None:
+                continue
+            entries.append(FallbackEntry(
+                code=fallback_code,
+                clip_index=clip_index,
+                segment_id=directive.segment_id or "plan",
+                requested=directive.code,
+                executed=fallback_code,
+                reason=(
+                    "The bounded semantic repair left this registered creative "
+                    "defect unresolved, so its deterministic fallback was applied."
+                ),
+            ))
 
     payload["degraded"] = bool(entries)
     payload["degradation_reason"] = (

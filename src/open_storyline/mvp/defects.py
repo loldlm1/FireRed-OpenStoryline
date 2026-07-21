@@ -702,16 +702,45 @@ def _fallback(code: str) -> str | None:
         return "VISUAL_REFRAME_FALLBACK"
     if code.startswith("PREDICTIVE_OVERLAY_"):
         return "RENDER_PREFLIGHT_FALLBACK"
+    if code.startswith("VISUAL_"):
+        return "VISUAL_REFRAME_FALLBACK"
     if code.startswith("CROP_VISUAL") or code in {"ACTIVE_PICTURE_TOO_SMALL"}:
         return "VISUAL_REFRAME_FALLBACK"
     if code.startswith("CAPTION_") or code.startswith("SUBTITLE_"):
         return "CAPTION_SAFE_ZONE_FALLBACK"
+    if code in {
+        "EDIT_PLAN_REGION_UNKNOWN",
+        "EDIT_PLAN_REGION_OUTSIDE_CLIP",
+        "EDIT_PLAN_TRACK_UNKNOWN",
+        "EDIT_PLAN_TRACK_OUTSIDE_CLIP",
+        "EDIT_PLAN_EVIDENCE_UNKNOWN",
+        "REGION_REFERENCE_UNKNOWN",
+        "REGION_REFERENCE_OUTSIDE_CLIP",
+        "TRACK_REFERENCE_UNKNOWN",
+        "TRACK_REFERENCE_OUTSIDE_CLIP",
+        "EVIDENCE_REFERENCE_UNKNOWN",
+        "FULL_FRAME_FALLBACK_UNAPPROVED",
+    }:
+        return "VISUAL_REFRAME_FALLBACK"
     if code.startswith(("ASSET_OVERLAY_", "ASSET_VISIBILITY_")):
+        return "EXTERNAL_ASSET_OMITTED"
+    if code in {
+        "EDIT_PLAN_ASSET_BUDGET_EXCEEDED",
+        "EDIT_PLAN_GENERATED_ASSET_BUDGET_EXCEEDED",
+        "EDIT_PLAN_STOCK_ASSET_BUDGET_EXCEEDED",
+        "ASSET_BUDGET_EXCEEDED",
+        "REQUESTED_ASSETS_MISSING",
+        "UNREQUESTED_ASSETS_USED",
+    }:
         return "EXTERNAL_ASSET_OMITTED"
     if "TRANSITION" in code:
         return "TRANSITION_FALLBACK"
+    if "CAPABILITY" in code or code == "EDIT_PLAN_OVERLAY_BUDGET_EXCEEDED":
+        return "EFFECT_OMITTED"
     if code.startswith("FFMPEGA_") or code == "EFFECT_PLANNING_FAILED":
         return "EFFECT_OMITTED"
+    if code in _PLAN_REPAIR_CODES or code in _CONDITIONAL_REPAIR_CODES:
+        return "RENDER_PREFLIGHT_FALLBACK"
     return None
 
 

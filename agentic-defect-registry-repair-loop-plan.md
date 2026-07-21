@@ -1,7 +1,7 @@
 # Plan: Centralized Agentic Defect Registry And Bounded Repair Loop
 
 **Generated**: 2026-07-21
-**Status**: Implementation in progress; Sprints 1-3 complete
+**Status**: Implementation in progress; Sprints 1-4 complete
 **Estimated Complexity**: High
 
 ## Overview
@@ -56,9 +56,9 @@ preserves an unavailable enhancement itself.
   `docs/mvp/implementation-history.md` and `docs/mvp/creative-catalog.md`.
 - The current approved 9Router text/vision route remains
   `cx/gpt-5.6-sol`. This plan does not change the model or provider.
-- The approved plan bootstrap and Sprints 1-2 are committed on the feature
-  branch. Sprint 3 is implemented and validated at the checkpoint recorded
-  below; Sprints 4-6 remain sequentially gated.
+- The approved plan bootstrap and Sprints 1-3 are committed on the feature
+  branch. Sprint 4 is implemented and validated at the checkpoint recorded
+  below; Sprints 5-6 remain sequentially gated.
 
 No provider call, deployment, production database mutation, or production media
 mutation was performed while closing PR #11 and preparing this branch.
@@ -965,12 +965,25 @@ strict schemas and restore the existing deterministic baseline behavior.
 
 ### Sprint 4 Gate
 
-- [ ] All Sprint 4 tasks complete.
-- [ ] Sprint 4 validation passes and evidence is recorded.
-- [ ] Residual risks are documented.
-- [ ] Exactly one Sprint 4 commit is created with the proposed sprint message.
-- [ ] The rollback point is recorded.
-- [ ] Sprint 5 has not started before this gate completes.
+- [x] All Sprint 4 tasks complete.
+- [x] Sprint 4 validation passes and evidence is recorded.
+- [x] Residual risks are documented.
+- [x] Exactly one Sprint 4 commit is created with the proposed sprint message.
+- [x] The rollback point is recorded.
+- [x] Sprint 5 has not started before this gate completes.
+
+**Recorded evidence**: 83 focused edit-plan, visual-understanding, pipeline,
+fallback, checkpoint, and repair-policy tests passed with 3 expected database
+skips. The full local suite passed 421 tests with 74 expected database skips.
+The integration fixtures prove that two objective plan codes are batched into
+one strict-schema repair call, successful checkpoints prevent a second call,
+invalid cached repair payloads recompute within the same bound, visual repair
+attempts remain separately categorized, and localized fallbacks preserve
+unaffected operations. Python compilation and diff checks passed. No live
+provider call or connected-database run occurred because ordinary validation
+does not authorize paid providers and `TEST_DATABASE_URL` is unset. Roll back
+with `OPENSTORYLINE_LLM_DEFECT_REPAIR_MODE=off`; strict schemas and the existing
+deterministic baseline remain available.
 
 ## Sprint 5: Audit Repair Outcomes And Publish Technical-Pass Candidates
 

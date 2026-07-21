@@ -169,7 +169,8 @@ class VisualUnderstandingTests(unittest.IsolatedAsyncioTestCase):
         client = RepairingVisionClient()
         manifest = self._manifest()
 
-        understanding = await VisualUnderstandingPlanner(client).plan(
+        planner = VisualUnderstandingPlanner(client)
+        understanding = await planner.plan(
             frame_manifest=manifest,
             scene_report=self.scenes,
             editing_prompt="Create a portrait edit.",
@@ -183,6 +184,45 @@ class VisualUnderstandingTests(unittest.IsolatedAsyncioTestCase):
             "VISUAL_TRACK_ROLE_INVALID",
         )
         self.assertEqual(understanding.tracks[0].role, "speaker")
+        self.assertEqual(understanding.tracks[0].region_ids, ("region-1",))
+        self.assertEqual(
+            planner.last_attempt_categories,
+            ("initial_generation", "legacy_repair"),
+        )
+
+    async def test_planner_delegates_to_registry_repair_once(self):
+        client = RepairingVisionClient()
+        manifest = self._manifest()
+        repair_calls = []
+
+        async def repair_handler(*, invalid_response, error, **_kwargs):
+            repair_calls.append(error.code)
+            client.last_attempts = (NineRouterAttempt(1, 200, "repair_ok"),)
+            repaired = dict(invalid_response)
+            repaired["regions"] = repaired["regions"][:1]
+            repaired["tracks"] = [
+                {**repaired["tracks"][0], "region_ids": ["region-1"]}
+            ]
+            return repaired
+
+        planner = VisualUnderstandingPlanner(
+            client,
+            registry_repair_handler=repair_handler,
+            legacy_repair_enabled=False,
+        )
+        understanding = await planner.plan(
+            frame_manifest=manifest,
+            scene_report=self.scenes,
+            editing_prompt="Create a portrait edit.",
+            transcript_text="A short transcript.",
+        )
+
+        self.assertEqual(repair_calls, ["VISUAL_TRACK_ROLE_INVALID"])
+        self.assertEqual(client.calls, 1)
+        self.assertEqual(
+            planner.last_attempt_categories,
+            ("initial_generation", "visual_repair"),
+        )
         self.assertEqual(understanding.tracks[0].region_ids, ("region-1",))
 
     def test_clip_repair_sampling_covers_each_blocked_window(self):

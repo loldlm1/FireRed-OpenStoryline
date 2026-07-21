@@ -1227,6 +1227,137 @@ def validate_catalog_plan_context(
     return plan
 
 
+def merge_repaired_edit_plan_response(
+    value: Any,
+    *,
+    base_plan: EditPlan,
+    affected_clip_indexes: Iterable[int],
+    selected_clips: Sequence[ShortCandidate],
+    known_region_ids: Iterable[str],
+    known_track_ids: Iterable[str],
+    known_evidence_ids_by_clip: dict[int, Iterable[str]],
+    max_segments_per_clip: int,
+    max_overlays_per_clip: int,
+    max_assets_per_clip: int,
+    max_generated_assets_per_clip: int,
+    max_stock_assets_per_clip: int,
+    asset_policy: AssetPolicy,
+    stock_policy: AssetPolicy,
+    renderer_capabilities: Iterable[str],
+    catalog_snapshot: dict[str, Any] | None = None,
+    creative_intent: CreativeIntent | None = None,
+) -> EditPlan:
+    normalized = _normalize_edit_plan_response(value)
+    if not isinstance(normalized, dict) or not isinstance(normalized.get("clips"), list):
+        raise EditPlanError("EDIT_PLAN_INVALID", "repair response must contain clip plans")
+    affected = tuple(sorted({int(index) for index in affected_clip_indexes}))
+    returned_indexes = tuple(sorted({
+        int(clip.get("clip_index") or 0)
+        for clip in normalized["clips"]
+        if isinstance(clip, dict)
+    }))
+    if not affected or returned_indexes != affected or len(normalized["clips"]) != len(affected):
+        raise EditPlanError(
+            "EDIT_PLAN_CLIP_MISMATCH",
+            "repair response must replace exactly the affected clips",
+        )
+    replacements = {
+        int(clip["clip_index"]): clip
+        for clip in normalized["clips"]
+        if isinstance(clip, dict)
+    }
+    payload = base_plan.to_dict()
+    payload.update({
+        "planner_version": AGENTIC_PLANNER_VERSION,
+        "prompt_version": EDIT_PLAN_PROMPT_VERSION,
+        "degraded": False,
+        "degradation_reason": "",
+    })
+    payload["clips"] = [
+        replacements.get(int(clip["clip_index"]), clip)
+        for clip in payload["clips"]
+    ]
+    response_capabilities = normalized.get("requested_capabilities")
+    if not isinstance(response_capabilities, list):
+        raise EditPlanError(
+            "EDIT_PLAN_INVALID",
+            "repair response must declare requested capabilities",
+        )
+    payload["requested_capabilities"] = sorted({
+        *base_plan.requested_capabilities,
+        *(str(value) for value in response_capabilities),
+    })
+    candidate = validate_edit_plan(payload, source_duration_ms=base_plan.source_duration_ms)
+    candidate = candidate.model_copy(update={
+        "requested_capabilities": tuple(sorted(
+            set(candidate.requested_capabilities) | set(required_capabilities(candidate))
+        )),
+    })
+    candidate = validate_edit_plan_context(
+        candidate,
+        selected_clips=selected_clips,
+        known_region_ids=known_region_ids,
+        known_track_ids=known_track_ids,
+        known_evidence_ids_by_clip=known_evidence_ids_by_clip,
+        max_segments_per_clip=max_segments_per_clip,
+        max_overlays_per_clip=max_overlays_per_clip,
+        max_assets_per_clip=max_assets_per_clip,
+    )
+    candidate = validate_catalog_plan_context(candidate, catalog_snapshot)
+    generated_counts = {
+        clip.clip_index: sum(
+            asset.kind == "generated_image" for asset in clip.asset_requests
+        )
+        for clip in candidate.clips
+    }
+    stock_counts = {
+        clip.clip_index: sum(
+            asset.kind in {"stock_image", "stock_video"}
+            for asset in clip.asset_requests
+        )
+        for clip in candidate.clips
+    }
+    if asset_policy == "off" and any(generated_counts.values()):
+        raise EditPlanError(
+            "EDIT_PLAN_ASSET_POLICY_BLOCKED",
+            "repair requested generated images while that job policy is off",
+        )
+    if stock_policy == "off" and any(stock_counts.values()):
+        raise EditPlanError(
+            "EDIT_PLAN_STOCK_POLICY_BLOCKED",
+            "repair requested stock assets while that job policy is off",
+        )
+    if any(count > max_generated_assets_per_clip for count in generated_counts.values()):
+        raise EditPlanError(
+            "EDIT_PLAN_GENERATED_ASSET_BUDGET_EXCEEDED",
+            "repair exceeds the generated image budget",
+        )
+    if any(count > max_stock_assets_per_clip for count in stock_counts.values()):
+        raise EditPlanError(
+            "EDIT_PLAN_STOCK_ASSET_BUDGET_EXCEEDED",
+            "repair exceeds the stock asset budget",
+        )
+    available = {str(value) for value in renderer_capabilities}
+    unavailable = sorted(set(candidate.requested_capabilities) - available)
+    if unavailable:
+        raise EditPlanError(
+            "EDIT_PLAN_CAPABILITY_UNAVAILABLE",
+            "repair requested unavailable capabilities: " + ", ".join(unavailable),
+        )
+    if creative_intent is not None:
+        try:
+            validate_creative_intent_conformance(candidate, creative_intent)
+        except ValueError as exc:
+            raise EditPlanError(
+                "EDIT_PLAN_INTENT_MISMATCH",
+                _safe_text(str(exc), limit=1000),
+                evidence={
+                    "intent_conformance": creative_intent_conformance_evidence(exc),
+                },
+            ) from exc
+    return candidate
+
+
 def _clip_context(
     clip: ShortCandidate,
     *,
@@ -1292,9 +1423,18 @@ def _clip_context(
     }
 
 
+@dataclass(frozen=True)
+class DeferredEditPlanDefect:
+    code: str
+    clip_index: int
+    evidence: dict[str, Any]
+    invalid_candidate: dict[str, Any]
+
+
 class AgenticEditPlanner:
     def __init__(self, client: NineRouterClient) -> None:
         self.client = client
+        self.deferred_defects: tuple[DeferredEditPlanDefect, ...] = ()
 
     async def plan(
         self,
@@ -1319,7 +1459,10 @@ class AgenticEditPlanner:
         prior_attempt_quality_feedback: dict[str, Any] | None = None,
         catalog_snapshot: dict[str, Any] | None = None,
         renderer_capabilities: Iterable[str] = SUPPORTED_CAPABILITIES,
+        defer_registry_repair: bool = False,
     ) -> EditPlan:
+        self.deferred_defects = ()
+        deferred_defects: list[DeferredEditPlanDefect] = []
         available_capabilities = frozenset(str(value) for value in renderer_capabilities)
         if not available_capabilities or not available_capabilities <= SUPPORTED_CAPABILITIES:
             raise EditPlanError(
@@ -1562,6 +1705,22 @@ class AgenticEditPlanner:
             try:
                 clip_plan = validate_response(response)
             except EditPlanError as initial_error:
+                if defer_registry_repair:
+                    deferred_defects.append(DeferredEditPlanDefect(
+                        code=initial_error.code,
+                        clip_index=clip_index,
+                        evidence=dict(initial_error.evidence),
+                        invalid_candidate=deepcopy(response),
+                    ))
+                    fallback = deepcopy(user_payload["valid_output_template"])
+                    fallback["clips"][0]["segments"][0]["reason"] = (
+                        "Use the strongest validated source evidence while the bounded "
+                        "job-level repair policy evaluates the invalid candidate."
+                    )
+                    clip_plan = validate_response(fallback, enforce_intent=False)
+                    planned_clips.extend(clip_plan.clips)
+                    requested_capabilities.update(clip_plan.requested_capabilities)
+                    continue
                 repair_payload = {
                     "repair_task": (
                         "Rewrite invalid_response using valid_output_template and "
@@ -1622,6 +1781,7 @@ class AgenticEditPlanner:
                 (catalog_snapshot or {}).get("manifest_sha256") or ""
             ),
         )
+        self.deferred_defects = tuple(deferred_defects)
         generated_assets = [
             asset
             for clip in plan.clips

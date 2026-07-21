@@ -425,6 +425,107 @@ def repair_disposition(
     return result("report_only" if mode is RepairMode.REPORT else "eligible", eligible=True)
 
 
+def make_repair_finding(
+    code: str,
+    *,
+    clip_index: int | None,
+    objective: bool,
+    values: Mapping[str, Any] | None = None,
+    source: str = "deterministic_validator",
+    required_capabilities: Iterable[str] = (),
+) -> RepairFinding:
+    definition = defect_definition(code)
+    safe_values = {
+        "code": definition.code,
+        **({"clip_index": int(clip_index)} if clip_index is not None else {}),
+        **dict(values or {}),
+    }
+    evidence = tuple(
+        RepairEvidence(
+            evidence_type=evidence_type,
+            values=safe_values,
+            clip_index=clip_index,
+            source=source,
+        )
+        for evidence_type in definition.evidence_requirements
+    )
+    return RepairFinding(
+        code=definition.code,
+        objective=objective,
+        evidence=evidence,
+        clip_index=clip_index,
+        required_capabilities=tuple(str(item) for item in required_capabilities),
+    )
+
+
+def bounded_repair_findings(
+    findings: Iterable[RepairFinding],
+) -> tuple[tuple[RepairFinding, ...], tuple[RepairFinding, ...]]:
+    unique: dict[tuple[str, int | None, bool], RepairFinding] = {}
+    for finding in findings:
+        key = (defect_definition(finding.code).code, finding.clip_index, finding.objective)
+        unique.setdefault(key, finding)
+    ordered = tuple(sorted(
+        unique.values(),
+        key=lambda item: (
+            0
+            if item.objective
+            and defect_definition(item.code).repair_strategy in {
+                RepairStrategy.LLM_VISUAL_REPAIR,
+                RepairStrategy.LLM_PLAN_REPAIR,
+                RepairStrategy.CONDITIONAL_LLM_OR_FALLBACK,
+            }
+            else 1 if item.objective else 2,
+            item.code,
+            item.clip_index or 0,
+        ),
+    ))
+    return ordered[:MAX_REPAIR_CODES], ordered[MAX_REPAIR_CODES:]
+
+
+def repair_findings_from_preflight(report: Any) -> tuple[RepairFinding, ...]:
+    findings: list[RepairFinding] = []
+    for item in tuple(getattr(report, "findings", ())):
+        source = str(getattr(item, "source", "") or "")
+        match = re.search(r"(?:^|\.)clips\.(\d+)(?:\.|$)", source)
+        clip_index = int(match.group(1)) if match else None
+        segment_match = re.search(r"(?:^|\.)segments\.([A-Za-z0-9._:-]+)", source)
+        values: dict[str, Any] = {
+            "observed": str(getattr(item, "severity", "") or "finding"),
+            "source": source[:120],
+        }
+        if segment_match:
+            values["segment_id"] = segment_match.group(1)
+        findings.append(make_repair_finding(
+            str(getattr(item, "code", "") or ""),
+            clip_index=clip_index,
+            objective=str(getattr(item, "severity", "")) == "block",
+            values=values,
+            source="edit_preflight",
+        ))
+    return tuple(findings)
+
+
+def repair_findings_from_visual_coverage(report: Any) -> tuple[RepairFinding, ...]:
+    findings: list[RepairFinding] = []
+    for segment in tuple(getattr(report, "segments", ())):
+        for code in tuple(getattr(segment, "blocker_codes", ())):
+            findings.append(make_repair_finding(
+                str(code),
+                clip_index=int(segment.clip_index),
+                objective=True,
+                values={
+                    "segment_id": str(segment.segment_id),
+                    "start_ms": int(segment.source_start_ms),
+                    "end_ms": int(segment.source_end_ms),
+                    "observation_count": int(segment.observation_count),
+                    "maximum_gap_ms": int(segment.maximum_gap_ms),
+                },
+                source="visual_coverage",
+            ))
+    return tuple(findings)
+
+
 def build_repair_batch(
     *,
     stage: RepairStage,
@@ -957,9 +1058,13 @@ __all__ = [
     "RepairStage",
     "TranscriptExcerpt",
     "build_repair_batch",
+    "bounded_repair_findings",
     "compute_repair_resolution",
     "evaluate_repair_quality_floor",
+    "make_repair_finding",
     "predict_plan_findings",
+    "repair_findings_from_preflight",
+    "repair_findings_from_visual_coverage",
     "repair_disposition",
     "resolve_repair_mode",
 ]
