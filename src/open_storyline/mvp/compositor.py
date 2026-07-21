@@ -27,7 +27,7 @@ REFRAME_RENDER_CAPABILITIES = frozenset({
     "subtitles",
 })
 RENDER_EXECUTION_VERSION = "render_execution.v1"
-CROP_TARGET_MAX_OVERFLOW_RATIO = 1.10
+CROP_TARGET_MAX_OVERFLOW_RATIO = 1.12
 
 
 class CompositionError(RuntimeError):
