@@ -68,6 +68,7 @@ Each implementation increment was validated before its short commit.
 | 55 | Agentic reliability Phase 3: verified creative catalog | Checked-in open-license manifests, Spanish/English fonts, emoji fallback, trending style profiles, startup validation, offline rendering, and tamper/license rejection | `feat: bundle verified creative catalog` |
 | 56 | Agentic reliability Phase 4: catalog-aware retries | Installed-capability-only planning, validated catalog IDs, compact prior-defect feedback, checkpoint lineage, and bounded style/filter contracts | `feat: integrate catalog-aware agent retries` |
 | 57 | Agentic reliability Phase 5: auditable outcomes and retry UX | Strict versus baseline-guaranteed promotion evidence, fail-closed technical classification, typed outcome/SLO summaries, same-version defect retries, improved-version prefill, and responsive Spanish comparison states | `feat: expose retryable video outcomes` |
+| 58 | Agentic reliability Phase 6: staged production rollout and catalog maintenance | 377 local tests with 74 expected PostgreSQL skips, 25 connected PostgreSQL tests, production backup/restore, healthy isolated flag canaries, same-version checkpoint reuse, strict/catalog/baseline outputs with deterministic structural approval, focused Chromium retry UX, and a documented open-license update process | `docs: complete agentic reliability rollout` |
 
 The original pull request targeted `main` in
 `loldlm1/FireRed-OpenStoryline`. Merge and release state belongs in the hosting

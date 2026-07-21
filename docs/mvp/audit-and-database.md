@@ -39,10 +39,12 @@ them as the live source of truth.
 
 The additive `20260719_0002` revision introduces workflow versions,
 `session_input_videos`, `prompt_versions`, run attempts, favorites, and public
-activity without removing legacy job columns. `/up` accepts both
-`20260717_0001` and `20260719_0002` for the compatibility bridge and fails
-closed on unknown revisions. Apply the bridge before the migration; do not
-enable reusable sessions until migration, backup, restore, and canary gates pass.
+activity without removing legacy job columns. The additive `20260721_0003`
+revision adds session-analysis and job-stage checkpoints without removing or
+rewriting existing rows. `/up` accepts `20260717_0001`, `20260719_0002`, and
+`20260721_0003` for the compatibility bridge and fails closed on unknown
+revisions. Apply migrations in order; do not enable reusable sessions or
+checkpoint reads until migration, backup, restore, and canary gates pass.
 
 Create or inspect the schema with:
 
@@ -310,11 +312,12 @@ Real server commands require a separately authorized maintenance window. Keep
 The normal emergency action is to set
 `OPENSTORYLINE_SESSION_WORKSPACE_MODE=legacy` and redeploy/restart, preserving
 all workflow-v2 rows and files. If code rollback is required, return to the
-compatibility bridge image (`71c9082`), not a pre-bridge image. Keep schema
-`20260719_0002`; do not downgrade after workflow-v2 data exists. Disable
-retention before investigating inconsistent state, preserve the output volume
-and restore-checked `openstoryline.latest.dump`, and repair bounded records
-idempotently. Restore only with writes stopped and an empty/isolated target.
+compatibility bridge image (`71c9082`), not a pre-bridge image. Keep the current
+additive schema, including `20260721_0003` after checkpoint rollout; do not
+downgrade after workflow-v2 or checkpoint data exists. Disable retention before
+investigating inconsistent state, preserve the output volume and restore-checked
+`openstoryline.latest.dump`, and repair bounded records idempotently. Restore
+only with writes stopped and an empty/isolated target.
 Media already purged by expiry or session deletion is irreversible and cannot
 be recovered from the database dump.
 

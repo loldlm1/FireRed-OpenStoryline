@@ -90,9 +90,9 @@ isolated so upstream behavior can continue to be merged into this fork.
   multiple attempts, all attributable to the same source hash. At most one
   completed run in the session may be the human-selected favorite.
 - Database readiness uses an explicit compatibility set rather than revision
-  ordering. The legacy `20260717_0001` schema and additive
-  `20260719_0002` schema are accepted; missing, obsolete, and unknown revisions
-  fail closed with `DATABASE_SCHEMA_OUTDATED`.
+  ordering. The legacy `20260717_0001`, reusable-workspace `20260719_0002`,
+  and checkpoint `20260721_0003` schemas are accepted; missing, obsolete, and
+  unknown revisions fail closed with `DATABASE_SCHEMA_OUTDATED`.
 - Deploy the compatibility bridge before applying the additive migration, and
   keep mode `legacy` until a separately authorized canary. A normal rollback
   returns to the bridge application while retaining the additive schema, source

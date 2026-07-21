@@ -72,3 +72,31 @@ PYTHONPATH=src .venv/bin/python -m unittest tests/test_mvp_catalog.py -v
 The application never fetches these resources at startup or while processing a
 job. Any catalog update is a reviewed source change followed by a new image
 build and normal canary/rollback flow.
+
+## Lightweight maintenance workflow
+
+Review trend profiles quarterly or when repeated audit limitations show a
+specific missing capability. Treat social trends as generic editing patterns,
+not as permission to copy a branded template, campaign, creator identity, or
+marketplace pack.
+
+1. Propose the smallest new or changed profile using existing deterministic
+   entries first; add a bundled file only when the renderer cannot express the
+   capability natively.
+2. Accept only resources with verified commercial-use, modification, and
+   redistribution terms such as OFL, Apache-2.0, MIT, BSD, or CC0. Reject
+   attribution-unclear, editorial-only, non-commercial, paid, or account-bound
+   downloads.
+3. Pin the upstream revision, local hash, license text, review date, and glyph
+   or FFmpeg capability requirements in the manifest source. Keep Spanish,
+   English, and the supported marketing-emoji set in the required checks.
+4. Regenerate and review the manifest diff, run the reproducible catalog tests,
+   build the remote image without network access, and confirm zero required
+   entries are quarantined.
+5. Canary catalog planning independently on synthetic media and one authorized
+   private session. Verify the usage ledger and output structure before wider
+   rollout; disable only catalog planning to roll back a bad profile.
+
+Do not update profiles by downloading resources at runtime or by scraping a
+trend feed. Trends influence reviewed metadata and recipes only; shipped bytes
+remain versioned source artifacts with auditable licenses.

@@ -372,6 +372,9 @@ OPENSTORYLINE_RENDER_PROMOTION_MODE=report
 OPENSTORYLINE_COMPLETION_POLICY=strict
 OPENSTORYLINE_LIMITED_OUTPUT_PROMOTION_ENABLED=false
 OPENSTORYLINE_RETRY_UX_ENABLED=false
+OPENSTORYLINE_CHECKPOINTS_ENABLED=false
+OPENSTORYLINE_BASELINE_FALLBACKS_ENABLED=false
+OPENSTORYLINE_CREATIVE_CATALOG_PLANNING_ENABLED=false
 OPENSTORYLINE_SEMANTIC_QA_ENABLED=false
 ```
 
@@ -389,6 +392,15 @@ técnicamente válidas con limitaciones creativas declaradas; estructura, codec,
 audio, duración o evidencia técnica inválida siguen bloqueando. Activa
 `OPENSTORYLINE_RETRY_UX_ENABLED=true` por separado para mostrar reintento de
 defectos y prellenado de una versión mejorada.
+
+La capa de fiabilidad también se activa por etapas: primero checkpoints,
+después fallbacks deterministas y por último planificación con catálogo. Tras
+cada cambio, reinicia con la misma imagen, ejecuta un intento de la misma
+versión inmutable y revisa `audit outcomes`, `audit show` y `audit verify`.
+Activa `baseline_guaranteed` con promoción limitada sólo cuando el artefacto,
+los subtítulos, la evidencia de frames y la decisión de promoción pasen; activa
+la UX de reintento en un reinicio separado. Este orden mantiene un kill switch
+independiente para catálogo, promoción, checkpoints y UI.
 
 Sin autorización para desplegar o llamar proveedores, todos los flags permanecen
 apagados. El rollback normal no requiere restaurar PostgreSQL: vuelve la UI a
