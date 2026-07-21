@@ -6,6 +6,7 @@ import json
 import unittest
 from unittest.mock import patch
 
+from open_storyline.mvp.checkpoints import CheckpointHit
 from open_storyline.mvp.edit_plan import (
     AssetRequest,
     ClipEditPlan,
@@ -43,7 +44,11 @@ class FakeTranscript:
 
 
 class FakeSTT:
+    def __init__(self):
+        self.calls = 0
+
     async def transcribe(self, _audio, *, language=""):
+        self.calls += 1
         return FakeTranscript()
 
 
@@ -350,12 +355,14 @@ async def fake_creative_qa_artifacts(*, output_dir, **_kwargs):
 class FakeStore:
     def __init__(self, root: Path, *, server_request: dict, prompt: str = "make a strong short"):
         self.root = root
+        self.root.mkdir(parents=True, exist_ok=True)
         self.request = server_request
         self.prompt = prompt
         self.registered: list[tuple[str, str]] = []
 
     async def load(self, _job_id):
         return {
+            "editing_session_id": "e" * 32,
             "prompt": self.prompt,
             "prompt_version_id": "b" * 32,
             "attempt_number": 2,
@@ -388,6 +395,38 @@ class FakeStore:
 
     async def register_artifact(self, _job_id, path, *, kind):
         self.registered.append((Path(path).name, kind))
+
+
+class FakeCheckpointStore:
+    enabled = True
+
+    def __init__(self):
+        self.session = {}
+        self.jobs = {}
+
+    async def load_session(self, *, stage, fingerprint, **_kwargs):
+        payload = self.session.get((stage, fingerprint))
+        if payload is None:
+            return None
+        return CheckpointHit(stage, fingerprint, payload, "a" * 64)
+
+    async def save_session(self, *, stage, fingerprint, payload, **_kwargs):
+        self.session[(stage, fingerprint)] = payload
+
+    async def load_job(self, *, job_id, stage, fingerprint):
+        payload = self.jobs.get((job_id, stage, fingerprint))
+        if payload is None:
+            return None
+        return CheckpointHit(
+            stage,
+            fingerprint,
+            payload,
+            "b" * 64,
+            source_job_id=job_id,
+        )
+
+    async def save_job(self, *, job_id, stage, fingerprint, payload, **_kwargs):
+        self.jobs[(job_id, stage, fingerprint)] = payload
 
 
 def config(mode: str, *, generated_assets: bool = False, pexels_assets: bool = False):
@@ -447,6 +486,101 @@ def config(mode: str, *, generated_assets: bool = False, pexels_assets: bool = F
 
 
 class MVPAgenticPipelineTests(unittest.IsolatedAsyncioTestCase):
+    async def test_retry_reuses_expensive_analysis_checkpoints(self):
+        class CountingPlanner(FakePlanner):
+            calls = 0
+
+            async def plan(self, **kwargs):
+                type(self).calls += 1
+                return await super().plan(**kwargs)
+
+        class CountingVisualPlanner(FakeVisualPlanner):
+            calls = 0
+
+            async def plan(self, **kwargs):
+                type(self).calls += 1
+                return await super().plan(**kwargs)
+
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            first_store = FakeStore(
+                root / "first",
+                server_request={
+                    "max_clips": 1,
+                    "edit_mode": "agentic",
+                    "asset_policy": "off",
+                },
+            )
+            second_store = FakeStore(
+                root / "second",
+                server_request={
+                    "max_clips": 1,
+                    "edit_mode": "agentic",
+                    "asset_policy": "off",
+                    "prior_attempt_quality_feedback": {
+                        "prior_attempt_id": "1" * 32,
+                        "prior_attempt_number": 1,
+                    },
+                },
+            )
+            checkpoints = FakeCheckpointStore()
+            processor = object.__new__(MVPJobProcessor)
+            processor.config = config("shadow")
+            processor.stt = FakeSTT()
+            scene_report = build_scene_boundaries(
+                [],
+                source_duration_ms=30_000,
+                threshold=0.35,
+            )
+            frame_manifest = FrameManifest(
+                source_duration_ms=30_000,
+                source_width=1920,
+                source_height=1080,
+                frames=(SampledFrame(
+                    id="frame-001",
+                    timestamp_ms=250,
+                    scene_id="scene-001",
+                    width=512,
+                    height=288,
+                    extraction_reason="scene_opening",
+                    encoded_bytes=4,
+                    data_url="data:image/jpeg;base64,ZmFrZQ==",
+                ),),
+            )
+            CountingPlanner.calls = 0
+            CountingVisualPlanner.calls = 0
+
+            with (
+                patch("open_storyline.mvp.pipeline.CheckpointStore", return_value=checkpoints),
+                patch("open_storyline.mvp.pipeline.probe_media", return_value=MediaInfo(30_000, 1920, 1080, True)),
+                patch("open_storyline.mvp.pipeline.extract_audio_for_stt", side_effect=lambda _source, target: target),
+                patch("open_storyline.mvp.pipeline.detect_scene_boundaries", return_value=scene_report) as detector,
+                patch("open_storyline.mvp.pipeline.sample_frames", return_value=frame_manifest) as sampler,
+                patch("open_storyline.mvp.pipeline.VisualUnderstandingPlanner", CountingVisualPlanner),
+                patch("open_storyline.mvp.pipeline.AgenticEditPlanner", FakeEditPlanner),
+                patch("open_storyline.mvp.pipeline.NineRouterClient.from_config", return_value=FakeRemoteClient()),
+                patch("open_storyline.mvp.pipeline.ShortsPlanner", CountingPlanner),
+                patch("open_storyline.mvp.pipeline.CPUShortRenderer", FakeRenderer),
+            ):
+                first = await processor("1" * 32, first_store)
+                second = await processor("2" * 32, second_store)
+
+            self.assertEqual(first["checkpoints"]["reused_stages"], [])
+            self.assertEqual(
+                set(second["checkpoints"]["reused_stages"]),
+                {
+                    "transcript",
+                    "scene_boundaries",
+                    "agentic_global_analysis",
+                    "clip_visual_analysis",
+                },
+            )
+            self.assertEqual(processor.stt.calls, 1)
+            self.assertEqual(detector.call_count, 1)
+            self.assertEqual(sampler.call_count, 2)
+            self.assertEqual(CountingVisualPlanner.calls, 2)
+            self.assertEqual(CountingPlanner.calls, 1)
+
     async def test_shadow_mode_registers_plans_and_keeps_legacy_render(self):
         with TemporaryDirectory() as directory:
             store = FakeStore(

@@ -14,6 +14,7 @@ from sqlalchemy.engine import make_url
 from sqlalchemy.exc import SQLAlchemyError
 
 from open_storyline.mvp.database import (
+    CHECKPOINT_SCHEMA_REVISION,
     COMPATIBLE_SCHEMA_REVISIONS,
     LEGACY_SCHEMA_REVISION,
     WORKSPACE_SCHEMA_REVISION,
@@ -35,7 +36,9 @@ REQUIRED_TABLES = {
     "job_events",
     "login_attempt_buckets",
     "prompt_versions",
+    "session_analysis_cache",
     "session_input_videos",
+    "job_stage_checkpoints",
     "video_jobs",
 }
 
@@ -80,6 +83,8 @@ class WorkspaceModelContractTests(unittest.TestCase):
         self.assertIn("attempt_number", tables["video_jobs"].c)
         self.assertIn("is_favorite", tables["video_jobs"].c)
         self.assertIn("audience", tables["job_events"].c)
+        self.assertIn("fingerprint", tables["session_analysis_cache"].c)
+        self.assertIn("fingerprint", tables["job_stage_checkpoints"].c)
 
         constraint_names = {
             constraint.name
@@ -114,8 +119,8 @@ class WorkspaceModelContractTests(unittest.TestCase):
         restore_check = (ROOT / "scripts" / "mvp-postgres-restore-check.sh").read_text(
             encoding="utf-8"
         )
-        self.assertIn("20260719_0002", restore_check)
-        self.assertIn("REQUIRED_TABLE_COUNT=10", restore_check)
+        self.assertIn("20260721_0003", restore_check)
+        self.assertIn("REQUIRED_TABLE_COUNT=12", restore_check)
 
 
 class _FakeConnection:
@@ -164,7 +169,11 @@ class DatabaseReadinessTests(unittest.IsolatedAsyncioTestCase):
     async def test_compatible_schemas_are_ready(self):
         self.assertEqual(
             COMPATIBLE_SCHEMA_REVISIONS,
-            frozenset({LEGACY_SCHEMA_REVISION, WORKSPACE_SCHEMA_REVISION}),
+            frozenset({
+                LEGACY_SCHEMA_REVISION,
+                WORKSPACE_SCHEMA_REVISION,
+                CHECKPOINT_SCHEMA_REVISION,
+            }),
         )
         for revision in COMPATIBLE_SCHEMA_REVISIONS:
             with self.subTest(revision=revision):
@@ -415,6 +424,8 @@ class MigrationTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("ck_job_events_audience", constraints)
         self.assertIn("uq_job_events_job_sequence", constraints)
         self.assertIn("ck_audit_reviews_verdict", constraints)
+        self.assertIn("uq_session_analysis_cache_fingerprint", constraints)
+        self.assertIn("uq_job_stage_checkpoint_fingerprint", constraints)
 
     async def test_migration_matches_orm_metadata(self):
         environment = {**os.environ, "DATABASE_URL": self.database_url}

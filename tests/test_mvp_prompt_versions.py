@@ -105,7 +105,8 @@ class PromptVersionPostgresTests(unittest.IsolatedAsyncioTestCase):
         async with self.database.engine.begin() as connection:
             await connection.execute(
                 text(
-                    "TRUNCATE audit_reviews, audit_documents, artifacts, job_events, "
+                    "TRUNCATE job_stage_checkpoints, session_analysis_cache, "
+                    "audit_reviews, audit_documents, artifacts, job_events, "
                     "video_jobs, prompt_versions, session_input_videos, editing_sessions, "
                     "auth_sessions, login_attempt_buckets"
                 )
