@@ -174,6 +174,10 @@ class NineRouterPreflightTests(unittest.TestCase):
         self.assertFalse(
             response_format["json_schema"]["schema"]["additionalProperties"]
         )
+        self.assertEqual(
+            response_format["json_schema"]["schema"]["properties"]["ok"]["enum"],
+            [True],
+        )
 
     def test_strict_schema_probe_fails_on_unsupported_or_extra_output(self):
         responses = [

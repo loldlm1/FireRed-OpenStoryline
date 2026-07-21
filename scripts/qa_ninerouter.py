@@ -29,7 +29,7 @@ STRICT_SCHEMA_PROBE = {
     "strict": True,
     "schema": {
         "type": "object",
-        "properties": {"ok": {"type": "boolean"}},
+        "properties": {"ok": {"type": "boolean", "enum": [True]}},
         "required": ["ok"],
         "additionalProperties": False,
     },
