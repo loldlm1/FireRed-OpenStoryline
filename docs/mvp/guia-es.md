@@ -385,9 +385,17 @@ OPENSTORYLINE_CREATIVE_CATALOG_PLANNING_ENABLED=false
 OPENSTORYLINE_SEMANTIC_QA_ENABLED=false
 ```
 
-Primero compara planes y evidencia sin cambiar el renderer. Luego autoriza un
-canary privado con fuente sintética, seguido por `Sesion prueba 1` y al menos dos
-nichos no relacionados; esos medios y reportes nunca entran a Git. Activa en
+Primero compara planes y evidencia sin cambiar el renderer. La reparación
+agentiva sigue una secuencia acotada: una tanda primaria con todos los defectos
+autoritativos, revalidación determinista y, como máximo, una tanda de
+contingencia sólo si aparece un defecto autoritativo nuevo. Un candidato que
+introduce defectos se descarta y no consume esa contingencia. Un proveedor que
+falla después de iniciar la llamada cuenta como intento; sólo entonces el motor
+puede aplicar un fallback local por segmento. El compositor debe pasar su
+dry-run final antes de invocar FFmpeg. Luego autoriza un
+canary privado con fuente sintética, seguido por una sesión de producción
+autorizada y al menos dos nichos no relacionados; sus identificadores, medios y
+reportes nunca entran a Git. Activa en
 orden: render agentivo source-only, imágenes generadas y, finalmente, Pexels.
 Verifica `/up`, `/health`, recuperación de cola, descargas, auditoría, retención,
 visibilidad del objetivo, sincronía, latencia y errores de proveedor después de
@@ -401,7 +409,12 @@ evidencia técnica inválida siguen bloqueando. La combinación histórica
 `baseline_guaranteed` más promoción limitada se conserva sólo como
 compatibilidad. Activa
 `OPENSTORYLINE_RETRY_UX_ENABLED=true` por separado para mostrar reintento de
-defectos y prellenado de una versión mejorada.
+defectos y prellenado de una versión mejorada. En producción, `render` exige
+`OPENSTORYLINE_LLM_DEFECT_REPAIR_MODE=enforce`, schemas estrictos verificados,
+`OPENSTORYLINE_BASELINE_FALLBACKS_ENABLED=true` y esta UX activa; el validador
+rechaza combinaciones parciales. “Volver a ejecutar” reutiliza la versión y
+fuente retenidas sin exigir evidencia de calidad. “Reparar con evidencia” sólo
+aparece cuando existe evidencia objetiva y una fuente todavía disponible.
 
 La capa de fiabilidad también se activa por etapas: primero checkpoints,
 después fallbacks deterministas y por último planificación con catálogo. Tras

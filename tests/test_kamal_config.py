@@ -25,6 +25,7 @@ def validate_rollout_flags(**overrides: str) -> subprocess.CompletedProcess[str]
         "OPENSTORYLINE_FFMPEGA_ENABLED": "false",
         "OPENSTORYLINE_DELIVERY_POLICY": "qa_enforced",
         "OPENSTORYLINE_RETRY_UX_ENABLED": "false",
+        "OPENSTORYLINE_BASELINE_FALLBACKS_ENABLED": "false",
         "OPENSTORYLINE_RENDER_PROMOTION_MODE": "report",
         "OPENSTORYLINE_CREATIVE_QA_ENABLED": "true",
         "OPENSTORYLINE_CREATIVE_QA_STRICT": "true",
@@ -490,12 +491,75 @@ class KamalConfigTests(unittest.TestCase):
             OPENSTORYLINE_FFMPEGA_ENABLED="true",
             OPENSTORYLINE_DELIVERY_POLICY="technical_pass_guaranteed",
             OPENSTORYLINE_RETRY_UX_ENABLED="true",
+            OPENSTORYLINE_BASELINE_FALLBACKS_ENABLED="true",
             OPENSTORYLINE_RENDER_PROMOTION_MODE="enforce",
         )
 
         self.assertEqual(default.returncode, 0, default.stderr)
         self.assertEqual(complete.returncode, 0, complete.stderr)
         self.assertIn("internally consistent", complete.stdout)
+
+    def test_agentic_rollout_validator_requires_safe_production_render_combination(self):
+        base = {
+            "OPENSTORYLINE_STRUCTURED_OUTPUT_MODE": "json_schema",
+            "OPENSTORYLINE_STRUCTURED_OUTPUT_CAPABILITY_VERIFIED": "true",
+            "OPENSTORYLINE_STRUCTURED_OUTPUT_BOUNDARIES": (
+                "shorts_selection.v1,visual_understanding.v1,edit_plan.v1,"
+                "edit_plan_repair.v1,semantic_qa.v1,"
+                "ffmpega_agentic_finishing.v1,ffmpega_deterministic_effects.v1"
+            ),
+            "OPENSTORYLINE_AGENTIC_EDITING_MODE": "render",
+        }
+        cases = (
+            ({**base, "OPENSTORYLINE_LLM_DEFECT_REPAIR_MODE": "off"},
+             "production render requires OPENSTORYLINE_LLM_DEFECT_REPAIR_MODE=enforce"),
+            ({**base, "OPENSTORYLINE_LLM_DEFECT_REPAIR_MODE": "enforce",
+              "OPENSTORYLINE_BASELINE_FALLBACKS_ENABLED": "false",
+              "OPENSTORYLINE_RETRY_UX_ENABLED": "true"},
+             "production render requires OPENSTORYLINE_BASELINE_FALLBACKS_ENABLED=true"),
+            ({**base, "OPENSTORYLINE_LLM_DEFECT_REPAIR_MODE": "enforce",
+              "OPENSTORYLINE_BASELINE_FALLBACKS_ENABLED": "true",
+              "OPENSTORYLINE_RETRY_UX_ENABLED": "false"},
+             "production render requires OPENSTORYLINE_RETRY_UX_ENABLED=true"),
+        )
+        for overrides, message in cases:
+            with self.subTest(message=message):
+                result = validate_rollout_flags(**overrides)
+                self.assertNotEqual(result.returncode, 0)
+                self.assertIn(message, result.stderr)
+
+    def test_shadow_report_profile_remains_explicitly_available(self):
+        result = validate_rollout_flags(
+            OPENSTORYLINE_STRUCTURED_OUTPUT_MODE="json_schema",
+            OPENSTORYLINE_STRUCTURED_OUTPUT_CAPABILITY_VERIFIED="true",
+            OPENSTORYLINE_STRUCTURED_OUTPUT_BOUNDARIES=(
+                "shorts_selection.v1,visual_understanding.v1,edit_plan.v1,"
+                "edit_plan_repair.v1,semantic_qa.v1,"
+                "ffmpega_agentic_finishing.v1,ffmpega_deterministic_effects.v1"
+            ),
+            OPENSTORYLINE_LLM_DEFECT_REPAIR_MODE="report",
+            OPENSTORYLINE_AGENTIC_EDITING_MODE="shadow",
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+
+    def test_plan_repair_call_cap_is_hard_coded_not_operator_tunable(self):
+        repair = (ROOT / "src" / "open_storyline" / "mvp" / "repair.py").read_text(
+            encoding="utf-8"
+        )
+        operator_surfaces = "\n".join(
+            (ROOT / path).read_text(encoding="utf-8")
+            for path in (
+                "config/deploy.yml",
+                ".env.mvp.example",
+                ".env.kamal.example",
+                "bin/kamal-mvp",
+            )
+        )
+        self.assertIn("MAX_PLAN_REPAIR_ROUNDS = 2", repair)
+        self.assertNotRegex(
+            operator_surfaces,
+            r"OPENSTORYLINE_[A-Z0-9_]*PLAN[A-Z0-9_]*(CALL|ATTEMPT|ROUND)",
+        )
 
     def test_agentic_rollout_validator_rejects_out_of_order_flags(self):
         cases = (

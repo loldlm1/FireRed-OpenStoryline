@@ -8,7 +8,7 @@ import unittest
 from unittest.mock import patch
 
 from open_storyline.mvp.checkpoints import CheckpointHit
-from open_storyline.mvp.compositor import dry_run_edit_plan_composition
+from open_storyline.mvp.compositor import CompositionError, dry_run_edit_plan_composition
 from open_storyline.mvp.edit_plan import (
     AssetRequest,
     ClipEditPlan,
@@ -910,6 +910,100 @@ class MVPAgenticPipelineTests(unittest.IsolatedAsyncioTestCase):
                 execution_order.index("ffmpeg_preflight"),
                 execution_order.index("ffmpeg_render"),
             )
+
+    async def test_geometry_recovery_fails_closed_when_the_final_baseline_is_not_executable(self):
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            store = FakeStore(
+                root,
+                server_request={
+                    "max_clips": 1,
+                    "edit_mode": "agentic",
+                    "asset_policy": "off",
+                },
+            )
+            remote = FakeGeometryRepairClient(fail_calls=(1, 2))
+            processor = object.__new__(MVPJobProcessor)
+            processor.config = config("render")
+            processor.config.agentic_editing.baseline_fallbacks_enabled = True
+            processor.config.agentic_editing.render_promotion_mode = "off"
+            processor.stt = FakeSTT()
+            scene_report = build_scene_boundaries(
+                [],
+                source_duration_ms=30_000,
+                threshold=0.35,
+            )
+
+            class UnexpectedRenderer(FakeAgenticRenderer):
+                def preflight_plan(self, **_kwargs):
+                    raise AssertionError("FFmpeg preflight ran after a failed dry-run gate")
+
+                def render_plan(self, **_kwargs):
+                    raise AssertionError("FFmpeg render ran after a failed dry-run gate")
+
+            with (
+                patch.dict(
+                    os.environ,
+                    {"OPENSTORYLINE_LLM_DEFECT_REPAIR_MODE": "enforce"},
+                ),
+                patch(
+                    "open_storyline.mvp.pipeline.probe_media",
+                    return_value=MediaInfo(30_000, 1920, 1080, True),
+                ),
+                patch(
+                    "open_storyline.mvp.pipeline.extract_audio_for_stt",
+                    side_effect=lambda _source, target: target,
+                ),
+                patch(
+                    "open_storyline.mvp.pipeline.detect_scene_boundaries",
+                    return_value=scene_report,
+                ),
+                patch(
+                    "open_storyline.mvp.pipeline.sample_frames",
+                    return_value=wide_frame_manifest(),
+                ),
+                patch(
+                    "open_storyline.mvp.pipeline.VisualUnderstandingPlanner",
+                    FakeWideVisualPlanner,
+                ),
+                patch(
+                    "open_storyline.mvp.pipeline.AgenticEditPlanner",
+                    FakeGeometryEditPlanner,
+                ),
+                patch(
+                    "open_storyline.mvp.pipeline.NineRouterClient.from_config",
+                    return_value=remote,
+                ),
+                patch("open_storyline.mvp.pipeline.ShortsPlanner", FakePlanner),
+                patch(
+                    "open_storyline.mvp.pipeline.AgenticShortRenderer",
+                    UnexpectedRenderer,
+                ),
+                patch(
+                    "open_storyline.mvp.pipeline.dry_run_edit_plan_composition",
+                    side_effect=CompositionError(
+                        "COMPOSITION_LAYOUT_UNSUPPORTED",
+                        "synthetic final baseline cannot be executed",
+                    ),
+                ),
+            ):
+                with self.assertRaises(EditPlanError) as caught:
+                    await processor("6" * 32, store)
+
+            self.assertEqual(caught.exception.code, "REPAIR_EXECUTION_DRY_RUN_FAILED")
+            self.assertEqual(len(remote.calls), 2)
+            self.assertFalse((root / "output" / "short-01.mp4").exists())
+            repair_report = json.loads(
+                (root / "output" / "repair_report.json").read_text(
+                    encoding="utf-8"
+                )
+            )
+            self.assertEqual(len(repair_report["attempt_ledger"]), 2)
+            self.assertEqual(
+                repair_report["summary"]["repair_invariant_violation_count"],
+                0,
+            )
+            self.assertEqual(repair_report["summary"]["jobs_at_two_call_cap"], 1)
 
     async def test_enforced_plan_repair_is_batched_and_checkpointed_once(self):
         with TemporaryDirectory() as directory:

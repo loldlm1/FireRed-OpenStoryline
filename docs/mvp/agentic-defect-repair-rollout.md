@@ -23,8 +23,8 @@ The validator makes no provider or deployment call. `setup`, `deploy`, and
 | Defect registry and read-only presentation | Application reliability | Always on | Deploy compatible readers | Roll back code only after outcome compatibility review | Registry/hash tests and bounded audit output | Unknown or historical codes stop rendering safely in API/UI |
 | Strict-schema capability probe | Provider operations | Unverified | Run `scripts/qa_ninerouter.py --strict-models --live-inference --strict-schema --skip-ssh`, then set `OPENSTORYLINE_STRUCTURED_OUTPUT_CAPABILITY_VERIFIED=true` | Set the verification flag to `false` before returning to permissive mode | Responses-based acceptance and extra-field rejection both pass for the configured model | Schema unsupported, mismatch, refusal, incomplete response, or provider regression |
 | Strict boundaries | AI application owner | `json_object`, empty list | Set `json_schema` and add the next complete prefix described below | Remove boundaries in reverse order, then restore `json_object` | Strict validity and local semantic validity remain healthy | Higher schema failures, latency, cost, or lower playable output |
-| Repair report | AI application owner | `off` | After all strict boundaries, set agentic mode to `shadow` or `render` and repair mode to `report` | Set repair mode to `off` | Eligible dispositions match enforce mode while semantic repair calls remain zero | Unexpected eligibility, private evidence, or unbounded request/report |
-| Repair enforce | AI application owner | `off` | Set agentic mode to `render` and repair mode to `enforce` | Set repair mode to `report` or `off` | At most one visual and one plan call; no FFMPEGA repair calls; no new defects | Repair failures, new defects, checkpoint mismatch, latency, or cost threshold |
+| Repair report | AI application owner | `off` | After all strict boundaries, set agentic mode to `shadow` and repair mode to `report` | Set repair mode to `off` | Eligible dispositions match enforce mode while semantic repair calls remain zero | Unexpected eligibility, private evidence, or unbounded request/report |
+| Repair enforce | AI application owner | `off` | Set agentic mode to `render`, repair mode to `enforce`, baseline fallbacks to `true`, and retry UX to `true` | Leave render mode first, then set repair mode to `off` or use an explicit shadow/off profile | At most one visual call and at most two plan batches (`primary` plus new-defect `contingency`); no FFMPEGA repair calls; no invariant violations | Repair failures, third-call attempt, new defects, checkpoint mismatch, latency, cost, or playable-rate threshold |
 | Technical-pass delivery | QA/release owner | `qa_enforced` | Keep creative QA strict, set render promotion to `enforce`, then set delivery to `technical_pass_guaranteed` | Restore `qa_enforced` | Creative-only blockers publish truthfully; technical and mixed blockers remain withheld | Any technical blocker becomes downloadable or strict evidence is rewritten |
 | Retry/details UI | Product QA owner | `false` | Set `OPENSTORYLINE_RETRY_UX_ENABLED=true` last | Set it to `false` | Focused desktop/mobile comparison flow passes without console errors | Retry action, comparison, accessibility, or activity regression |
 
@@ -38,9 +38,14 @@ and the two FFMPEGA schemas move together.
 3. Add `edit_plan.v1,edit_plan_repair.v1`
 4. Add `semantic_qa.v1`
 5. Add `ffmpega_agentic_finishing.v1,ffmpega_deterministic_effects.v1`
-6. Set repair to `report`, then separately to `enforce`
-7. Set delivery to `technical_pass_guaranteed`
-8. Enable retry/details UI
+6. Set repair to `report` while agentic editing remains `shadow`.
+7. Switch the production profile atomically: agentic `render`, repair
+   `enforce`, baseline fallbacks `true`, promotion `enforce`, delivery
+   `technical_pass_guaranteed`, and retry/details UI `true`.
+
+The production cutover is one validated configuration edit because partial
+render combinations are intentionally invalid. `off` and `shadow` remain the
+only profiles for staged observation and rollback.
 
 Example fully staged canary values:
 
@@ -50,6 +55,7 @@ OPENSTORYLINE_STRUCTURED_OUTPUT_CAPABILITY_VERIFIED=true
 OPENSTORYLINE_STRUCTURED_OUTPUT_BOUNDARIES=shorts_selection.v1,visual_understanding.v1,edit_plan.v1,edit_plan_repair.v1,semantic_qa.v1,ffmpega_agentic_finishing.v1,ffmpega_deterministic_effects.v1
 OPENSTORYLINE_AGENTIC_EDITING_MODE=render
 OPENSTORYLINE_LLM_DEFECT_REPAIR_MODE=enforce
+OPENSTORYLINE_BASELINE_FALLBACKS_ENABLED=true
 OPENSTORYLINE_RENDER_PROMOTION_MODE=enforce
 OPENSTORYLINE_DELIVERY_POLICY=technical_pass_guaranteed
 OPENSTORYLINE_RETRY_UX_ENABLED=true
@@ -108,6 +114,8 @@ Review thresholds are emitted in `outcome_slo_summary.v1`:
 
 - repair provider latency p95 at or below 180 seconds;
 - repair cost per trigger at or below USD 0.25;
+- primary and contingency call counts remain separately attributable, with no
+  third plan-repair attempt;
 - zero new-defect rate;
 - playable output rate at or above 99%.
 
@@ -145,8 +153,12 @@ implementation sequence.
 
 ## Rollback
 
-1. Set `OPENSTORYLINE_LLM_DEFECT_REPAIR_MODE=off`.
-2. Restore `OPENSTORYLINE_DELIVERY_POLICY=qa_enforced`.
+1. In one configuration edit, leave production render mode by setting
+   `OPENSTORYLINE_AGENTIC_EDITING_MODE=off` (or the documented shadow profile)
+   and `OPENSTORYLINE_LLM_DEFECT_REPAIR_MODE=off`; the validator rejects either
+   half-applied combination.
+2. Restore `OPENSTORYLINE_BASELINE_FALLBACKS_ENABLED=false` and
+   `OPENSTORYLINE_DELIVERY_POLICY=qa_enforced`.
 3. Remove FFMPEGA, semantic QA, edit-plan, visual, and shorts strict boundaries
    in reverse order, then restore `OPENSTORYLINE_STRUCTURED_OUTPUT_MODE=json_object`.
 4. Set `OPENSTORYLINE_RETRY_UX_ENABLED=false`.

@@ -360,18 +360,24 @@ class CreativeQATests(unittest.IsolatedAsyncioTestCase):
         fixture_paths = sorted(FIXTURES.glob("*.json"))
         self.assertGreaterEqual(len(fixture_paths), 8)
         identifiers = set()
+        covered_metrics = set()
+        cross_niche_count = 0
         for path in fixture_paths:
             payload = json.loads(path.read_text(encoding="utf-8"))
+            serialized = json.dumps(payload).lower()
+            self.assertNotIn("sesion prueba 1", serialized)
+            self.assertNotIn("api_key", serialized)
+            self.assertNotIn("/home/", serialized)
+            if payload.get("version") != "mvp_agentic_fixture.v1":
+                continue
+            cross_niche_count += 1
             identifiers.add(payload["id"])
             self.assertEqual(payload["version"], "mvp_agentic_fixture.v1")
             self.assertTrue(payload["expected_roles"])
             self.assertTrue(payload["expected_capabilities"])
             self.assertIn(payload["expected_asset_calls"], {0, 1})
-            serialized = json.dumps(payload).lower()
-            self.assertNotIn("sesion prueba 1", serialized)
-            self.assertNotIn("api_key", serialized)
-            self.assertNotIn("/home/", serialized)
-        self.assertEqual(len(identifiers), len(fixture_paths))
+            covered_metrics.update(payload["metrics"])
+        self.assertEqual(len(identifiers), cross_niche_count)
         self.assertTrue({
             "two-speaker-interview",
             "product-presentation",
@@ -382,11 +388,6 @@ class CreativeQATests(unittest.IsolatedAsyncioTestCase):
             "sparse-visual-monologue",
             "source-only-no-asset",
         } <= identifiers)
-        covered_metrics = {
-            metric
-            for path in fixture_paths
-            for metric in json.loads(path.read_text(encoding="utf-8"))["metrics"]
-        }
         self.assertTrue({
             "schema_validity", "source_bounds", "target_visibility",
             "center_fallbacks", "asset_calls", "plan_execution", "qa_status",

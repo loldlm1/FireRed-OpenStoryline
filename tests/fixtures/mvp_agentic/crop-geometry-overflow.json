@@ -46,5 +46,53 @@
     "threshold": 1.12,
     "width_overflow_ratio_min": 1.16,
     "width_overflow_ratio_max": 1.17
+  },
+  "recovery_contract": {
+    "private_data": false,
+    "clip_index": 1,
+    "source_window": {
+      "start_ms": 0,
+      "end_ms": 8000
+    },
+    "timeline_window": {
+      "start_ms": 0,
+      "end_ms": 8000
+    },
+    "output_name": "synthetic-short-01.mp4",
+    "asset_ids": ["synthetic-diagram-1"],
+    "subtitles_required": true,
+    "max_plan_calls": 2
+  },
+  "recovery_scenarios": {
+    "primary_success": {
+      "plan_calls": ["primary"],
+      "terminal": false,
+      "fallback": false
+    },
+    "primary_provider_failure": {
+      "plan_calls": ["primary"],
+      "terminal": false,
+      "fallback": true
+    },
+    "candidate_only_rejection": {
+      "plan_calls": ["primary"],
+      "terminal": false,
+      "candidate_disposition": "rejected"
+    },
+    "new_authoritative_contingency_success": {
+      "plan_calls": ["primary", "contingency"],
+      "terminal": false,
+      "fallback": false
+    },
+    "contingency_provider_failure": {
+      "plan_calls": ["primary", "contingency"],
+      "terminal": false,
+      "fallback": true
+    },
+    "no_safe_baseline": {
+      "plan_calls": ["primary", "contingency"],
+      "terminal": true,
+      "error_code": "REPAIR_EXECUTION_DRY_RUN_FAILED"
+    }
   }
 }
