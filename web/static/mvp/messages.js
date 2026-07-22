@@ -57,6 +57,7 @@ const ERROR_MESSAGES = Object.freeze({
   UPLOAD_METADATA_CONFLICT: 'Selecciona exactamente el mismo archivo para continuar esta carga.',
   UPLOAD_OFFSET_MISMATCH: 'El servidor tiene un avance diferente. Ajustaremos la carga al punto confirmado.',
   UPLOAD_CHUNK_INVALID: 'Una parte del video no pudo cargarse. Puedes reintentar sin empezar desde cero.',
+  UPLOAD_CHUNK_TIMEOUT: 'La carga dejó de avanzar. Reintentaremos desde el último punto confirmado.',
   UPLOAD_STATE_INVALID: 'Esta carga cambió de estado. Actualiza el avance antes de continuar.',
   SOURCE_UPLOAD_BUSY: 'El servidor está registrando otra parte del video. Reintentaremos en breve.',
   SOURCE_UPLOAD_NOT_FOUND: 'La carga incompleta ya no está disponible. Inicia una nueva carga.',

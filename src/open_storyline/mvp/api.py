@@ -91,6 +91,8 @@ def _http_error(exc: JobStoreError) -> HTTPException:
         status = 409
     elif exc.code == "UPLOAD_TOO_LARGE":
         status = 413
+    elif exc.code == "UPLOAD_CHUNK_TIMEOUT":
+        status = 408
     elif exc.code == "VIDEO_TYPE_UNSUPPORTED":
         status = 415
     elif exc.code in {

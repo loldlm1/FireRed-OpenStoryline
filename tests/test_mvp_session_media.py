@@ -282,6 +282,98 @@ class SessionMediaPostgresTests(unittest.IsolatedAsyncioTestCase):
         status = await self.media.status(editing_session["id"])
         self.assertEqual(status["received_bytes"], 5)
 
+    async def test_stalled_chunk_times_out_reconciles_and_resumes(self):
+        media = SessionMediaStore(
+            self.root / "mvp_sessions",
+            self.database,
+            max_upload_bytes=32 * 1024 * 1024,
+            max_chunk_bytes=1024 * 1024,
+            upload_idle_timeout_seconds=0.05,
+            now=lambda: self.now,
+        )
+        editing_session = await self.store.create_session(
+            "Stalled upload", workflow_version=2
+        )
+        initialized = await media.initialize(
+            editing_session["id"],
+            original_filename="clip.mp4",
+            expected_size=12,
+            media_type="video/mp4",
+        )
+
+        async def stalled_body():
+            yield b"partial"
+            await asyncio.Event().wait()
+
+        with self.assertRaises(SessionMediaError) as stalled:
+            await media.append_chunk(
+                editing_session["id"],
+                initialized["upload_id"],
+                offset=0,
+                chunks=stalled_body(),
+                content_length=12,
+            )
+        self.assertEqual(stalled.exception.code, "UPLOAD_CHUNK_TIMEOUT")
+
+        reconciled = await media.status(editing_session["id"])
+        self.assertEqual(reconciled["received_bytes"], 7)
+        resumed = await media.append_chunk(
+            editing_session["id"],
+            initialized["upload_id"],
+            offset=7,
+            chunks=_body(b"-done"),
+            content_length=5,
+        )
+        self.assertEqual(resumed["upload_offset"], 12)
+
+    async def test_status_uses_committed_snapshot_while_upload_lock_is_busy(self):
+        media = SessionMediaStore(
+            self.root / "mvp_sessions",
+            self.database,
+            max_upload_bytes=32 * 1024 * 1024,
+            max_chunk_bytes=1024 * 1024,
+            upload_idle_timeout_seconds=5,
+            now=lambda: self.now,
+        )
+        editing_session = await self.store.create_session(
+            "Readable upload", workflow_version=2
+        )
+        initialized = await media.initialize(
+            editing_session["id"],
+            original_filename="clip.mp4",
+            expected_size=11,
+            media_type="video/mp4",
+        )
+        waiting = asyncio.Event()
+        release = asyncio.Event()
+
+        async def blocked_body():
+            yield b"first"
+            waiting.set()
+            await release.wait()
+            yield b"second"
+
+        upload = asyncio.create_task(
+            media.append_chunk(
+                editing_session["id"],
+                initialized["upload_id"],
+                offset=0,
+                chunks=blocked_body(),
+                content_length=11,
+            )
+        )
+        await asyncio.wait_for(waiting.wait(), timeout=1)
+        try:
+            snapshot = await asyncio.wait_for(
+                media.status(editing_session["id"]), timeout=1
+            )
+            self.assertEqual(snapshot["state"], "uploading")
+            self.assertEqual(snapshot["received_bytes"], 0)
+        finally:
+            release.set()
+            uploaded = await upload
+        self.assertEqual(uploaded["upload_offset"], 11)
+
     async def test_retention_previews_then_idempotently_purges_incomplete_source(self):
         editing_session = await self.store.create_session("Expiring", workflow_version=2)
         initialized = await self.media.initialize(
@@ -561,6 +653,50 @@ class SessionMediaPostgresTests(unittest.IsolatedAsyncioTestCase):
             )
             self.assertEqual(cancelled.status_code, 200)
             self.assertEqual(cancelled.json()["failure_code"], "UPLOAD_CANCELLED")
+
+            timeout_session = await client.post(
+                "/api/mvp/sessions",
+                headers=csrf,
+                json={"title": "Timeout contract"},
+            )
+            timeout_id = timeout_session.json()["id"]
+            timeout_upload = await client.post(
+                f"/api/mvp/sessions/{timeout_id}/input-video/uploads",
+                headers=csrf,
+                json={
+                    "original_filename": "timeout.mp4",
+                    "expected_size": 10,
+                    "media_type": "video/mp4",
+                },
+            )
+
+            async def stalled_request():
+                yield b"abc"
+                await asyncio.Event().wait()
+
+            previous_timeout = self.media.upload_idle_timeout_seconds
+            self.media.upload_idle_timeout_seconds = 0.05
+            try:
+                timed_out = await client.patch(
+                    f"/api/mvp/sessions/{timeout_id}/input-video/uploads/"
+                    f"{timeout_upload.json()['upload_id']}",
+                    headers={
+                        **csrf,
+                        "Upload-Offset": "0",
+                        "Content-Type": "application/offset+octet-stream",
+                    },
+                    content=stalled_request(),
+                )
+            finally:
+                self.media.upload_idle_timeout_seconds = previous_timeout
+            self.assertEqual(timed_out.status_code, 408)
+            self.assertEqual(timed_out.json()["detail"]["code"], "UPLOAD_CHUNK_TIMEOUT")
+            self.assertNotIn("timeout.mp4", timed_out.text)
+            recovered = await client.get(
+                f"/api/mvp/sessions/{timeout_id}/input-video"
+            )
+            self.assertEqual(recovered.status_code, 200)
+            self.assertEqual(recovered.json()["upload_offset"], 3)
 
 
 if __name__ == "__main__":

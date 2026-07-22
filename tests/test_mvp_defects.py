@@ -45,6 +45,7 @@ class DefectRegistryTests(unittest.TestCase):
             "RENDER_PROMOTION_BLOCKED",
             "REQUESTED_ASSETS_MISSING",
             "TRANSITION_FALLBACK",
+            "UPLOAD_CHUNK_TIMEOUT",
             "VISUAL_FRAME_UNKNOWN",
             "VISUAL_REFRAME_FALLBACK",
         }

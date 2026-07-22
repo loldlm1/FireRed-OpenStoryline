@@ -35,6 +35,7 @@ CANONICAL_VIDEO_MEDIA_TYPES = {
     for suffix, media_types in ALLOWED_VIDEO_MEDIA_TYPES.items()
 }
 DEFAULT_UPLOAD_CHUNK_BYTES = 8 * 1024 * 1024
+DEFAULT_UPLOAD_IDLE_TIMEOUT_SECONDS = 45.0
 MAX_UPLOAD_CHUNK_BYTES = 64 * 1024 * 1024
 MAX_PROBE_OUTPUT_BYTES = 1024 * 1024
 SESSION_MEDIA_LOCK_SEED = 7_303_110_792_765
@@ -151,6 +152,7 @@ class SessionMediaStore:
         incomplete_upload_hours: int = 24,
         max_upload_bytes: int | None = None,
         max_chunk_bytes: int | None = None,
+        upload_idle_timeout_seconds: float = DEFAULT_UPLOAD_IDLE_TIMEOUT_SECONDS,
         probe_timeout_seconds: int = 30,
         now: Callable[[], datetime] | None = None,
     ) -> None:
@@ -170,6 +172,16 @@ class SessionMediaStore:
             raise SessionMediaError(
                 "SESSION_MEDIA_CONFIG_INVALID",
                 "session upload chunk size is invalid",
+            )
+        self.upload_idle_timeout_seconds = float(upload_idle_timeout_seconds)
+        if (
+            not math.isfinite(self.upload_idle_timeout_seconds)
+            or self.upload_idle_timeout_seconds <= 0
+            or self.upload_idle_timeout_seconds > 300
+        ):
+            raise SessionMediaError(
+                "SESSION_MEDIA_CONFIG_INVALID",
+                "session upload idle timeout is invalid",
             )
         self.probe_timeout_seconds = max(1, min(int(probe_timeout_seconds), 120))
         self._now = now or _utcnow
@@ -284,26 +296,17 @@ class SessionMediaStore:
             return state
 
     async def status(self, session_id: str) -> dict[str, Any]:
-        async with self._session_lock(session_id) as connection:
-            try:
-                async with self._session(connection) as session:
-                    async with session.begin():
-                        await self._active_owner(session, session_id)
-                        row = await session.scalar(
-                            select(SessionInputVideo)
-                            .where(SessionInputVideo.editing_session_id == session_id)
-                            .with_for_update()
-                        )
-                        if row is None:
-                            return self._missing_state(session_id)
-                        self._reconcile_locked(row)
-                        return self._state(row)
-            except JobStoreError:
+        try:
+            async with self._session_lock(session_id) as connection:
+                return await self._status(
+                    session_id, connection=connection, reconcile=True
+                )
+        except SessionMediaError as exc:
+            if exc.code != "SOURCE_UPLOAD_BUSY":
                 raise
-            except SQLAlchemyError:
-                raise SessionMediaError(
-                    "DATABASE_UNAVAILABLE", "session source status is unavailable"
-                ) from None
+            # An active writer may be ahead of PostgreSQL, but its committed snapshot
+            # is still safe to display and keeps the workspace readable.
+            return await self._status(session_id, reconcile=False)
 
     async def append_chunk(
         self,
@@ -921,6 +924,35 @@ class SessionMediaStore:
             return self.database.sessions()
         return AsyncSession(bind=connection, expire_on_commit=False)
 
+    async def _status(
+        self,
+        session_id: str,
+        *,
+        connection: AsyncConnection | None = None,
+        reconcile: bool,
+    ) -> dict[str, Any]:
+        try:
+            async with self._session(connection) as session:
+                async with session.begin():
+                    await self._active_owner(session, session_id)
+                    query = select(SessionInputVideo).where(
+                        SessionInputVideo.editing_session_id == session_id
+                    )
+                    if reconcile:
+                        query = query.with_for_update()
+                    row = await session.scalar(query)
+                    if row is None:
+                        return self._missing_state(session_id)
+                    if reconcile:
+                        self._reconcile_locked(row)
+                    return self._state(row)
+        except JobStoreError:
+            raise
+        except SQLAlchemyError:
+            raise SessionMediaError(
+                "DATABASE_UNAVAILABLE", "session source status is unavailable"
+            ) from None
+
     async def _append_stream(
         self,
         path: Path,
@@ -939,9 +971,20 @@ class SessionMediaStore:
         try:
             stream = await asyncio.to_thread(path.open, mode)
             await asyncio.to_thread(stream.seek, offset)
-            async for chunk in chunks:
-                if not chunk:
-                    continue
+            iterator = chunks.__aiter__()
+            while True:
+                try:
+                    async with asyncio.timeout(self.upload_idle_timeout_seconds):
+                        chunk = b""
+                        while not chunk:
+                            chunk = await anext(iterator)
+                except StopAsyncIteration:
+                    break
+                except TimeoutError:
+                    raise SessionMediaError(
+                        "UPLOAD_CHUNK_TIMEOUT",
+                        "upload chunk stopped making progress",
+                    ) from None
                 if (
                     written + len(chunk) > self.max_chunk_bytes
                     or offset + written + len(chunk) > expected_size
