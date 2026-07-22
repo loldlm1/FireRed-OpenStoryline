@@ -163,6 +163,36 @@ class OutcomeTests(unittest.TestCase):
         self.assertEqual(report["grade"], "terminal_failure")
         self.assertEqual(report["technical_status"], "blocked")
 
+    def test_completed_outcome_preserves_bounded_semantic_qa_evidence(self):
+        report = build_completed_outcome_report(
+            outputs=[{"video": "short-01.mp4", "subtitles": None}],
+            semantic_review={
+                "status": "pass",
+                "provider_calls": 1,
+                "frame_count": 4,
+                "observations": [{"frame_id": f"frame-{index}"} for index in range(4)],
+                "attempts": [{
+                    "duration_ms": 1500,
+                    "input_tokens": 100,
+                    "output_tokens": 20,
+                    "reasoning_tokens": 10,
+                    "total_tokens": 130,
+                    "cost_usd": 0.01,
+                }],
+            },
+        )
+
+        semantic = report["semantic_qa"]
+        compact = outcome_summary(report)["semantic_qa"]
+        self.assertEqual(semantic["status"], "pass")
+        self.assertTrue(semantic["schema_valid"])
+        self.assertEqual(semantic["frame_count"], 4)
+        self.assertEqual(semantic["observation_count"], 4)
+        self.assertEqual(semantic["metrics"]["provider_latency_ms"], 1500)
+        self.assertEqual(semantic["metrics"]["total_tokens"], 130)
+        self.assertEqual(semantic["metrics"]["cost_usd"], 0.01)
+        self.assertEqual(compact, semantic)
+
     def test_summary_ignores_untrusted_stored_presentation(self):
         report = build_completed_outcome_report(
             outputs=[{"video": "clip-01.mp4", "subtitles": None}],

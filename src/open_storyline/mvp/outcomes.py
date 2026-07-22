@@ -324,6 +324,77 @@ def _compact_repair_metrics(value: Any) -> dict[str, Any]:
     }
 
 
+def _semantic_qa_summary(value: Any) -> dict[str, Any]:
+    source = value if isinstance(value, dict) else {}
+    status = str(source.get("status") or "unavailable")[:40]
+    if status not in {"disabled", "pass", "review", "unavailable"}:
+        status = "unavailable"
+    attempts = [
+        item for item in (source.get("attempts") or [])[:6]
+        if isinstance(item, dict)
+    ]
+    observations = [
+        item for item in (source.get("observations") or [])[:8]
+        if isinstance(item, dict)
+    ]
+    compact_metrics = (
+        source.get("metrics") if isinstance(source.get("metrics"), dict) else None
+    )
+    metrics = (
+        {
+            "attempts": _metric_int(compact_metrics.get("attempts"), 6),
+            "provider_latency_ms": _metric_int(
+                compact_metrics.get("provider_latency_ms"),
+                3_600_000,
+            ),
+            "input_tokens": _metric_int(compact_metrics.get("input_tokens")),
+            "output_tokens": _metric_int(compact_metrics.get("output_tokens")),
+            "reasoning_tokens": _metric_int(
+                compact_metrics.get("reasoning_tokens")
+            ),
+            "total_tokens": _metric_int(compact_metrics.get("total_tokens")),
+            "cost_usd": _metric_float(compact_metrics.get("cost_usd")),
+        }
+        if compact_metrics is not None
+        else {
+            "attempts": len(attempts),
+            "provider_latency_ms": sum(
+                _metric_int(item.get("duration_ms"), 3_600_000)
+                for item in attempts
+            ),
+            "input_tokens": sum(
+                _metric_int(item.get("input_tokens")) for item in attempts
+            ),
+            "output_tokens": sum(
+                _metric_int(item.get("output_tokens")) for item in attempts
+            ),
+            "reasoning_tokens": sum(
+                _metric_int(item.get("reasoning_tokens")) for item in attempts
+            ),
+            "total_tokens": sum(
+                _metric_int(item.get("total_tokens")) for item in attempts
+            ),
+            "cost_usd": round(
+                sum(_metric_float(item.get("cost_usd")) for item in attempts),
+                8,
+            ),
+        }
+    )
+    return {
+        "status": status,
+        "schema_valid": status in {"pass", "review"},
+        "provider_calls": _metric_int(source.get("provider_calls"), 1),
+        "frame_count": _metric_int(source.get("frame_count"), 8),
+        "observation_count": (
+            _metric_int(source.get("observation_count"), 8)
+            if source.get("observation_count") is not None
+            else len(observations)
+        ),
+        "error_code": str(source.get("error_code") or "")[:80],
+        "metrics": metrics,
+    }
+
+
 def repair_defect_lifecycle(repair: dict[str, Any]) -> list[dict[str, Any]]:
     records: dict[str, dict[str, Any]] = {}
 
@@ -421,6 +492,7 @@ def build_completed_outcome_report(
     prior_limitation_codes: Iterable[str] = (),
     repair_report: dict[str, Any] | None = None,
     rollout_attribution: dict[str, Any] | None = None,
+    semantic_review: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     fallbacks = tuple(fallback_entries)
     promotion = promotion_report if isinstance(promotion_report, dict) else {}
@@ -525,6 +597,7 @@ def build_completed_outcome_report(
             ),
             "blocker_codes": _codes(promotion.get("blocker_codes") or ()),
         },
+        "semantic_qa": _semantic_qa_summary(semantic_review),
         "delivery": {
             "policy": delivery_policy,
             "decision": delivery_decision,
@@ -724,6 +797,11 @@ def outcome_summary(value: Any) -> dict[str, Any] | None:
     repair = value.get("repair") if isinstance(value.get("repair"), dict) else {}
     delivery = value.get("delivery") if isinstance(value.get("delivery"), dict) else {}
     strict_qa = value.get("strict_qa") if isinstance(value.get("strict_qa"), dict) else {}
+    semantic_qa = (
+        value.get("semantic_qa")
+        if isinstance(value.get("semantic_qa"), dict)
+        else {}
+    )
     attribution = (
         value.get("attribution") if isinstance(value.get("attribution"), dict) else {}
     )
@@ -750,6 +828,7 @@ def outcome_summary(value: Any) -> dict[str, Any] | None:
             )[:40],
             "blocker_codes": _codes(strict_qa.get("blocker_codes") or ()),
         },
+        "semantic_qa": _semantic_qa_summary(semantic_qa),
         "delivery": {
             "policy": str(delivery.get("policy") or "")[:40],
             "decision": str(delivery.get("decision") or "")[:40],

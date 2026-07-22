@@ -434,6 +434,20 @@ async def _workspace_command(
                     "PROMPT_RUN_TIMEOUT", "the queued prompt run did not finish in time"
                 )
         outcome = run.get("outcome") if isinstance(run.get("outcome"), dict) else {}
+        semantic = (
+            outcome.get("semantic_qa")
+            if isinstance(outcome.get("semantic_qa"), dict)
+            else {}
+        )
+        delivery = (
+            outcome.get("delivery")
+            if isinstance(outcome.get("delivery"), dict)
+            else {}
+        )
+        limitations = [
+            item for item in (outcome.get("limitations") or [])
+            if isinstance(item, dict) and item.get("code")
+        ]
         return {
             "ok": True,
             "editing_session_id": arguments.session_id,
@@ -443,9 +457,18 @@ async def _workspace_command(
             "state": run.get("state"),
             "stage": run.get("stage"),
             "technical_status": outcome.get("technical_status"),
-            "semantic_status": outcome.get("semantic_status"),
-            "delivery_decision": outcome.get("delivery_decision"),
-            "limitation_codes": outcome.get("limitation_codes") or [],
+            "semantic_status": (
+                outcome.get("semantic_status") or semantic.get("status")
+            ),
+            "semantic_provider_calls": semantic.get("provider_calls"),
+            "semantic_frame_count": semantic.get("frame_count"),
+            "delivery_decision": (
+                outcome.get("delivery_decision") or delivery.get("decision")
+            ),
+            "limitation_codes": (
+                outcome.get("limitation_codes")
+                or [str(item["code"]) for item in limitations]
+            ),
         }
     raise JobStoreError("WORKSPACE_COMMAND_INVALID", "workspace command is invalid")
 

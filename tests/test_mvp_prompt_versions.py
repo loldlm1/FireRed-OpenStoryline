@@ -312,9 +312,13 @@ class PromptVersionPostgresTests(unittest.IsolatedAsyncioTestCase):
                 "clip_count": 1,
                 "outcome": {
                     "technical_status": "pass",
-                    "semantic_status": "pass",
-                    "delivery_decision": "publish",
-                    "limitation_codes": [],
+                    "semantic_qa": {
+                        "status": "pass",
+                        "provider_calls": 1,
+                        "frame_count": 4,
+                    },
+                    "delivery": {"decision": "publish"},
+                    "limitations": [],
                 },
             }
 
@@ -343,6 +347,10 @@ class PromptVersionPostgresTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result["attempt_number"], 2)
         self.assertEqual(result["state"], "completed")
         self.assertEqual(result["technical_status"], "pass")
+        self.assertEqual(result["semantic_status"], "pass")
+        self.assertEqual(result["semantic_provider_calls"], 1)
+        self.assertEqual(result["semantic_frame_count"], 4)
+        self.assertEqual(result["delivery_decision"], "publish")
         self.assertNotIn("private prompt", json.dumps(result))
 
     async def test_queue_source_and_atomicity_failures_leave_no_orphans(self):

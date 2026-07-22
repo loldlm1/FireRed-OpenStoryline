@@ -2765,6 +2765,13 @@ class MVPJobProcessor:
 
         render_qa_report: dict[str, Any] | None = None
         creative_conformance_report: dict[str, Any] | None = None
+        semantic_review_report: dict[str, Any] = {
+            "status": "disabled",
+            "provider_calls": 0,
+            "frame_count": 0,
+            "observations": [],
+            "attempts": [],
+        }
         promotion_report: dict[str, Any] | None = None
         if agentic_requested and server_mode == "render":
             qa_manifest: dict[str, Any] = {"enabled": False, "status": "disabled"}
@@ -2808,6 +2815,14 @@ class MVPJobProcessor:
                     }
                     render_qa_report = qa_artifacts.render_qa
                     creative_conformance_report = qa_artifacts.conformance
+                    semantic_review_report = (
+                        qa_artifacts.conformance.get("semantic_review")
+                        if isinstance(
+                            qa_artifacts.conformance.get("semantic_review"),
+                            dict,
+                        )
+                        else semantic_review_report
+                    )
                     await activity.emit_safely(
                         job_id,
                         stage="post_render_qa",
@@ -2835,6 +2850,14 @@ class MVPJobProcessor:
                     "enabled": True,
                     "status": "unavailable",
                     "error_code": error_code,
+                }
+                semantic_review_report = {
+                    "status": "unavailable",
+                    "provider_calls": 0,
+                    "frame_count": 0,
+                    "error_code": error_code,
+                    "observations": [],
+                    "attempts": [],
                 }
                 await activity.emit_safely(
                     job_id,
@@ -3044,6 +3067,7 @@ class MVPJobProcessor:
                 (),
             ),
             repair_report=repair_report,
+            semantic_review=semantic_review_report,
             rollout_attribution={
                 "model": getattr(remote_client, "model", "unknown"),
                 "reasoning_effort": getattr(

@@ -91,26 +91,46 @@ class FakeSemanticClient:
 
     async def complete_structured(self, **kwargs):
         self.calls += 1
-        self.last_attempts = (NineRouterAttempt(1, 200, "ok"),)
+        self.last_attempts = (NineRouterAttempt(
+            1,
+            200,
+            "ok",
+            duration_ms=1250,
+            input_tokens=100,
+            output_tokens=20,
+            reasoning_tokens=10,
+            total_tokens=130,
+            cost_usd=0.01,
+        ),)
         if self.fail:
             raise NineRouterError(
                 "NINEROUTER_REQUEST_FAILED",
                 "synthetic provider failure",
                 attempts=[NineRouterAttempt(1, 503, "service unavailable")],
             )
-        record = json.loads(kwargs["user_prompt"])["frames_in_image_order"][0]
+        records = json.loads(kwargs["user_prompt"])["frames_in_image_order"]
         return {
             "status": "pass",
             "summary": "The planned focus is visible and relevant.",
-            "observations": [{
-                "clip_index": record["clip_index"],
-                "frame_id": record["frame_id"],
-                "planned_focus_visible": True,
-                "relevant": True,
-                "confidence": 0.9,
-                "note": "The intended subject is visible.",
-            }],
+            "observations": [
+                {
+                    "clip_index": record["clip_index"],
+                    "frame_id": record["frame_id"],
+                    "planned_focus_visible": True,
+                    "relevant": True,
+                    "confidence": 0.9,
+                    "note": "The intended subject is visible.",
+                }
+                for record in records
+            ],
         }
+
+
+class IncompleteSemanticClient(FakeSemanticClient):
+    async def complete_structured(self, **kwargs):
+        result = await super().complete_structured(**kwargs)
+        result["observations"] = result["observations"][:1]
+        return result
 
 
 class CreativeQATests(unittest.IsolatedAsyncioTestCase):
@@ -226,7 +246,17 @@ class CreativeQATests(unittest.IsolatedAsyncioTestCase):
             encoded_bytes=4,
             data_url="data:image/jpeg;base64,ZmFrZQ==",
         )
-        manifest = FrameManifest(2000, 180, 320, (frame,))
+        second_frame = SampledFrame(
+            id="frame-002",
+            timestamp_ms=1500,
+            scene_id="scene-001",
+            width=180,
+            height=320,
+            extraction_reason="uniform_coverage",
+            encoded_bytes=4,
+            data_url="data:image/jpeg;base64,ZmFrZTI=",
+        )
+        manifest = FrameManifest(2000, 180, 320, (frame, second_frame))
         source = QAInput(1, Path("short-01.mp4"), 2000)
         media = {"duration_ms": 2000, "width": 180, "height": 320}
 
@@ -235,18 +265,36 @@ class CreativeQATests(unittest.IsolatedAsyncioTestCase):
             patch("open_storyline.mvp.creative_qa._probe", return_value=media),
             patch("open_storyline.mvp.creative_qa.sample_frames", return_value=manifest),
         ):
-            report = await build_semantic_review([source], client=success, max_frames=1)
+            report = await build_semantic_review([source], client=success, max_frames=2)
         self.assertEqual(report["status"], "pass")
         self.assertTrue(report["non_mutating"])
         self.assertEqual(report["provider_calls"], 1)
+        self.assertEqual(report["frame_count"], 2)
+        self.assertEqual(len(report["observations"]), 2)
+        self.assertEqual(report["attempts"][0]["duration_ms"], 1250)
+        self.assertEqual(report["attempts"][0]["total_tokens"], 130)
+        self.assertEqual(report["attempts"][0]["cost_usd"], 0.01)
         self.assertNotIn("data:image", json.dumps(report))
+
+        incomplete = IncompleteSemanticClient()
+        with (
+            patch("open_storyline.mvp.creative_qa._probe", return_value=media),
+            patch("open_storyline.mvp.creative_qa.sample_frames", return_value=manifest),
+        ):
+            rejected = await build_semantic_review(
+                [source],
+                client=incomplete,
+                max_frames=2,
+            )
+        self.assertEqual(rejected["status"], "unavailable")
+        self.assertEqual(rejected["error_code"], "SEMANTIC_QA_RESPONSE_INVALID")
 
         failure = FakeSemanticClient(fail=True)
         with (
             patch("open_storyline.mvp.creative_qa._probe", return_value=media),
             patch("open_storyline.mvp.creative_qa.sample_frames", return_value=manifest),
         ):
-            unavailable = await build_semantic_review([source], client=failure, max_frames=1)
+            unavailable = await build_semantic_review([source], client=failure, max_frames=2)
         self.assertEqual(unavailable["status"], "unavailable")
         self.assertEqual(unavailable["error_code"], "NINEROUTER_REQUEST_FAILED")
         self.assertEqual(unavailable["attempts"][0]["reason"], "service unavailable")
