@@ -118,10 +118,16 @@ isolated so upstream behavior can continue to be merged into this fork.
 - Conformance evidence compares validated planned operations and requested
   assets with executed operations, used assets, and explained fallbacks.
 - `creative_intent.v2` folds accents for bounded English/Spanish requirement
-  detection and turns explicit opening-title, 2-4 reframe/zoom, and restrained
-  transition requests into executable count and timing contracts. Missing
-  operations enter the same LLM-first plan-repair batch as other objective
-  pre-render defects.
+  detection and turns explicit opening-title, exact 2/3/4 or ranged 2-4
+  reframe/zoom, and restrained-transition requests into executable count and
+  timing contracts. Missing operations enter the same LLM-first plan-repair
+  batch as other objective pre-render defects.
+- The planner and repair request share an intent-aware executable template.
+  After an outbound LLM attempt, that bounded template may preserve the title,
+  reframe count, restrained transitions, subtitles, source windows, and output
+  count instead of collapsing to a one-segment baseline. Track targets retain
+  their semantic role so clip-local observations can safely replace a sparse
+  track without inventing private evidence or external assets.
 - Final post-render conformance also consumes the plan-level intent verdict. If
   a repaired or deterministic baseline still cannot satisfy a required creative
   operation, strict QA remains blocked and technical-pass delivery labels the

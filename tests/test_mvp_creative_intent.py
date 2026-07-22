@@ -67,6 +67,22 @@ class CreativeIntentTests(unittest.TestCase):
                 )
                 self.assertNotIn(prompt, json.dumps(intent.to_dict()))
 
+    def test_extracts_exact_reframe_counts_in_english_and_spanish(self):
+        for prompt in (
+            "Apply exactly 3 gentle reframes or zooms.",
+            "Aplica exactamente 3 reencuadres o zooms suaves.",
+        ):
+            with self.subTest(prompt=prompt):
+                intent = build_creative_intent(
+                    prompt,
+                    {"asset_policy": "off", "stock_policy": "off"},
+                    selected_clip_count=1,
+                )
+
+                operation = intent.operation_intents[0]
+                self.assertEqual(operation.kind, "reframe_sequence")
+                self.assertEqual((operation.count_min, operation.count_max), (3, 3))
+
     def test_negative_operation_language_does_not_create_requirements(self):
         intent = build_creative_intent(
             (

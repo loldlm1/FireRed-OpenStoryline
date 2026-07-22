@@ -13,6 +13,7 @@ from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_valida
 from open_storyline.mvp.creative_intent import (
     CreativeIntent,
     CreativeIntentDecision,
+    CreativeOperationIntent,
     creative_intent_conformance_evidence,
     validate_creative_intent_conformance,
 )
@@ -549,10 +550,25 @@ def _catalog_template(snapshot: dict[str, Any] | None) -> dict[str, Any]:
     }
 
 
+def _opening_title_text(editing_prompt: str, fallback: str) -> str:
+    prompt = str(editing_prompt or "")
+    patterns = (
+        r"(?:with\s+(?:the\s+)?(?:text|words)|that\s+says?|saying)\s*[:=-]?\s*['\"]([^'\"]{1,120})['\"]",
+        r"(?:con\s+el\s+texto|que\s+diga|titulado)\s*[:=-]?\s*['\"]([^'\"]{1,120})['\"]",
+    )
+    for pattern in patterns:
+        match = re.search(pattern, prompt, flags=re.IGNORECASE)
+        if match is not None:
+            return _safe_text(match.group(1), limit=120)
+    return _safe_text(fallback, limit=120)
+
+
 def _valid_clip_plan_template(
     clip_context: dict[str, Any],
     *,
     catalog_snapshot: dict[str, Any] | None = None,
+    creative_intent: CreativeIntent | None = None,
+    opening_title_text: str = "",
 ) -> dict[str, Any]:
     source_window = dict(clip_context["source_window"])
     duration_ms = int(source_window["end_ms"]) - int(source_window["start_ms"])
@@ -565,9 +581,9 @@ def _valid_clip_plan_template(
     if valid_tracks:
         track = max(valid_tracks, key=lambda item: float(item.get("confidence") or 0))
         focal_target = {
-            "region_id": None,
+            "region_id": "",
             "track_id": str(track["id"]),
-            "semantic_role": None,
+            "semantic_role": str(track.get("role") or ""),
         }
         evidence_ids.append(str(track["id"]))
     elif valid_regions:
@@ -580,8 +596,8 @@ def _valid_clip_plan_template(
         )
         focal_target = {
             "region_id": str(region["id"]),
-            "track_id": None,
-            "semantic_role": None,
+            "track_id": "",
+            "semantic_role": str(region.get("role") or ""),
         }
         evidence_ids.append(str(region["id"]))
     layout = {
@@ -593,33 +609,187 @@ def _valid_clip_plan_template(
         "max_zoom": 1.0,
     }
     catalog_defaults = _catalog_template(catalog_snapshot)
+    operation_intents = tuple(
+        item
+        for item in (creative_intent.operation_intents if creative_intent else ())
+        if item.requirement == "required"
+    )
+    reframe_intent = next(
+        (item for item in operation_intents if item.kind == "reframe_sequence"),
+        None,
+    )
+    transition_intent = next(
+        (item for item in operation_intents if item.kind == "restrained_transitions"),
+        None,
+    )
+    title_intent = next(
+        (item for item in operation_intents if item.kind == "opening_title"),
+        None,
+    )
+    segment_count = 1
+    if reframe_intent is not None and focal_target is not None:
+        segment_count = max(segment_count, int(reframe_intent.count_min))
+    if transition_intent is not None:
+        segment_count = max(segment_count, int(transition_intent.count_min) + 1)
+    segment_count = min(segment_count, max(1, duration_ms))
+    title_duration_ms = 0
+    if title_intent is not None and duration_ms >= title_intent.duration_min_ms:
+        title_duration_ms = min(
+            int(title_intent.duration_max_ms),
+            max(int(title_intent.duration_min_ms), min(2200, duration_ms)),
+        )
+    minimum_first_duration = title_duration_ms or 1
+    if duration_ms < minimum_first_duration + segment_count - 1:
+        segment_count = 1
+
+    lengths: list[int] = []
+    if segment_count == 1:
+        lengths = [duration_ms]
+    else:
+        first_length = max(duration_ms // segment_count, minimum_first_duration)
+        remaining = duration_ms - first_length
+        base, extra = divmod(remaining, segment_count - 1)
+        lengths = [first_length] + [
+            base + (1 if index < extra else 0)
+            for index in range(segment_count - 1)
+        ]
+
+    segments: list[dict[str, Any]] = []
+    source_cursor = int(source_window["start_ms"])
+    timeline_cursor = 0
+    for index, length in enumerate(lengths, start=1):
+        source_end = source_cursor + length
+        timeline_end = timeline_cursor + length
+        segment_layout = deepcopy(layout)
+        if reframe_intent is not None and segment_layout["mode"] == "crop":
+            segment_layout["max_zoom"] = (1.04, 1.08, 1.06, 1.1)[
+                (index - 1) % 4
+            ]
+        segment_id = f"clip-{int(clip_context['clip_index']):02d}-segment-{index:02d}"
+        overlays: list[dict[str, Any]] = []
+        if index == 1 and title_intent is not None and title_duration_ms:
+            overlays.append({
+                "id": f"clip-{int(clip_context['clip_index']):02d}-opening-title",
+                "kind": "text",
+                "timeline_window": {
+                    "start_ms": 0,
+                    "end_ms": title_duration_ms,
+                },
+                "text": _safe_text(
+                    opening_title_text or clip_context.get("title") or "Opening",
+                    limit=120,
+                ),
+                "opacity": 1.0,
+                "width_ratio": 0.82,
+                "margin_ratio": 0.06,
+                "transition_ms": min(180, title_duration_ms // 3),
+                "z_index": 20,
+                "protect_subtitles": True,
+                "position": "top",
+            })
+        transition_enabled = (
+            index > 1
+            and transition_intent is not None
+            and index - 1 <= int(transition_intent.count_max)
+        )
+        segments.append({
+            "id": segment_id,
+            "source_window": {
+                "start_ms": source_cursor,
+                "end_ms": source_end,
+            },
+            "timeline_window": {
+                "start_ms": timeline_cursor,
+                "end_ms": timeline_end,
+            },
+            "layout": segment_layout,
+            "transition_in": {
+                "kind": "fade" if transition_enabled else "cut",
+                "duration_ms": (
+                    min(
+                        int(transition_intent.duration_max_ms),
+                        max(int(transition_intent.duration_min_ms), 220),
+                    )
+                    if transition_enabled
+                    else 0
+                ),
+                "catalog_id": (
+                    "" if transition_enabled else catalog_defaults["cut_transition_id"]
+                ),
+            },
+            "overlays": overlays,
+            "reason": (
+                "Apply the bounded prompt-required creative operation after the "
+                "remote planning attempt."
+            ),
+            "evidence_ids": evidence_ids,
+        })
+        source_cursor = source_end
+        timeline_cursor = timeline_end
+
+    segment_ids = [str(segment["id"]) for segment in segments]
+    crop_ids = [
+        str(segment["id"])
+        for segment in segments
+        if segment["layout"]["mode"] == "crop"
+    ]
+    transition_ids = [
+        str(segment["id"])
+        for segment in segments
+        if segment["transition_in"]["kind"] in {"fade", "xfade"}
+    ]
+    title_ids = [
+        str(overlay["id"])
+        for segment in segments
+        for overlay in segment["overlays"]
+        if overlay["kind"] == "text"
+    ]
+    intent_decisions = []
+    for intent in operation_intents:
+        operation_ids = (
+            title_ids
+            if intent.kind == "opening_title"
+            else crop_ids
+            if intent.kind in {"portrait_reframe", "reframe_sequence"}
+            else transition_ids
+            if intent.kind == "restrained_transitions"
+            else segment_ids
+            if intent.kind == "footer_captions"
+            else []
+        )
+        if intent.count_min and not (
+            int(intent.count_min) <= len(operation_ids) <= int(intent.count_max)
+        ):
+            continue
+        if operation_ids:
+            intent_decisions.append({
+                "intent_id": intent.id,
+                "decision": "execute",
+                "asset_ids": [],
+                "operation_ids": operation_ids,
+                "omission_reason": "",
+            })
+    requested_capabilities = {
+        "crop" if focal_target else "fit",
+        "hard_cut",
+        "subtitles",
+    }
+    if any(segment["layout"]["max_zoom"] > 1 for segment in segments):
+        requested_capabilities.add("focus_zoom")
+    if transition_ids:
+        requested_capabilities.add("fade")
+    if title_ids:
+        requested_capabilities.add("text_emphasis")
     return {
-        "requested_capabilities": [
-            "crop" if focal_target else "fit",
-            "hard_cut",
-            "subtitles",
-        ],
+        "requested_capabilities": sorted(requested_capabilities),
         "clips": [{
             "clip_index": int(clip_context["clip_index"]),
             "title": str(clip_context.get("title") or ""),
             "source_window": source_window,
             "output_name": str(clip_context["output_name"]),
-            "segments": [{
-                "id": f"clip-{int(clip_context['clip_index']):02d}-segment-01",
-                "source_window": source_window,
-                "timeline_window": {"start_ms": 0, "end_ms": duration_ms},
-                "layout": layout,
-                "transition_in": {
-                    "kind": "cut",
-                    "duration_ms": 0,
-                    "catalog_id": catalog_defaults["cut_transition_id"],
-                },
-                "overlays": [],
-                "reason": "Keep the strongest prompt-relevant source evidence visible.",
-                "evidence_ids": evidence_ids,
-            }],
+            "segments": segments,
             "asset_requests": [],
-            "intent_decisions": [],
+            "intent_decisions": intent_decisions,
             "catalog_selection": catalog_defaults["selection"],
         }],
     }
@@ -715,17 +885,10 @@ def _derive_missing_asset_overlays(clip: dict[str, Any]) -> None:
         used_asset_ids.add(asset_id)
 
 
-def _derive_operation_intent_mappings(
-    clip: dict[str, Any],
-    *,
-    creative_intent: CreativeIntent | None,
-) -> None:
-    if creative_intent is None:
-        return
-    segments = clip.get("segments")
-    decisions = clip.get("intent_decisions")
-    if not isinstance(segments, list) or not isinstance(decisions, list):
-        return
+def _operation_intent_candidates(
+    segments: list[Any],
+    intent: CreativeOperationIntent,
+) -> set[str]:
     segment_ids = {
         str(segment.get("id"))
         for segment in segments
@@ -740,6 +903,95 @@ def _derive_operation_intent_mappings(
         and overlay.get("id")
         and overlay.get("kind") == "text"
     }
+    if intent.kind == "footer_captions":
+        return segment_ids
+    if intent.kind in {"portrait_reframe", "reframe_sequence"}:
+        return {
+            str(segment.get("id"))
+            for segment in segments
+            if isinstance(segment, dict)
+            and isinstance(segment.get("layout"), dict)
+            and segment["layout"].get("mode") == "crop"
+            and segment.get("id")
+        }
+    if intent.kind == "opening_title":
+        return {
+            overlay_id
+            for overlay_id, overlay in text_overlays.items()
+            if (
+                (window := _window_bounds(overlay.get("timeline_window")))
+                and window[0] <= intent.start_max_ms
+                and intent.duration_min_ms
+                <= window[1] - window[0]
+                <= intent.duration_max_ms
+            )
+        }
+    if intent.kind == "restrained_transitions":
+        return {
+            str(segment.get("id"))
+            for index, segment in enumerate(segments)
+            if index > 0
+            and isinstance(segment, dict)
+            and segment.get("id")
+            and isinstance(segment.get("transition_in"), dict)
+            and segment["transition_in"].get("kind") in {"fade", "xfade"}
+            and isinstance(segment["transition_in"].get("duration_ms"), int)
+            and intent.duration_min_ms
+            <= segment["transition_in"]["duration_ms"]
+            <= intent.duration_max_ms
+        }
+    return set()
+
+
+def _operation_count_valid(intent: CreativeOperationIntent, count: int) -> bool:
+    if count <= 0:
+        return False
+    if intent.count_max == 0:
+        return True
+    return intent.count_min <= count <= intent.count_max
+
+
+def _derive_missing_operation_intent_decisions(
+    clip: dict[str, Any],
+    *,
+    creative_intent: CreativeIntent | None,
+) -> None:
+    if creative_intent is None:
+        return
+    segments = clip.get("segments")
+    decisions = clip.get("intent_decisions")
+    if not isinstance(segments, list) or not isinstance(decisions, list):
+        return
+    decided = {
+        str(decision.get("intent_id"))
+        for decision in decisions
+        if isinstance(decision, dict) and decision.get("intent_id")
+    }
+    for intent in creative_intent.operation_intents:
+        if intent.requirement != "required" or intent.id in decided:
+            continue
+        operation_ids = _operation_intent_candidates(segments, intent)
+        if _operation_count_valid(intent, len(operation_ids)):
+            decisions.append({
+                "intent_id": intent.id,
+                "decision": "execute",
+                "asset_ids": [],
+                "operation_ids": sorted(operation_ids),
+                "omission_reason": "",
+            })
+
+
+def _derive_operation_intent_mappings(
+    clip: dict[str, Any],
+    *,
+    creative_intent: CreativeIntent | None,
+) -> None:
+    if creative_intent is None:
+        return
+    segments = clip.get("segments")
+    decisions = clip.get("intent_decisions")
+    if not isinstance(segments, list) or not isinstance(decisions, list):
+        return
     operation_intents = {
         item.id: item for item in creative_intent.operation_intents
     }
@@ -751,54 +1003,17 @@ def _derive_operation_intent_mappings(
             continue
         current_ids = decision.get("operation_ids")
         current_ids = current_ids if isinstance(current_ids, (list, tuple)) else []
-        if intent.kind == "footer_captions":
-            executable_ids = segment_ids
-        elif intent.kind in {"portrait_reframe", "reframe_sequence"}:
-            executable_ids = {
-                str(segment.get("id"))
-                for segment in segments
-                if isinstance(segment, dict)
-                and isinstance(segment.get("layout"), dict)
-                and segment["layout"].get("mode") == "crop"
-                and segment.get("id")
-            }
-        elif intent.kind == "opening_title":
-            executable_ids = {
-                overlay_id
-                for overlay_id, overlay in text_overlays.items()
-                if (
-                    (window := _window_bounds(overlay.get("timeline_window")))
-                    and window[0] <= intent.start_max_ms
-                    and intent.duration_min_ms
-                    <= window[1] - window[0]
-                    <= intent.duration_max_ms
-                )
-            }
-        elif intent.kind == "restrained_transitions":
-            executable_ids = {
-                str(segment.get("id"))
-                for index, segment in enumerate(segments)
-                if index > 0
-                and isinstance(segment, dict)
-                and segment.get("id")
-                and isinstance(segment.get("transition_in"), dict)
-                and segment["transition_in"].get("kind") in {"fade", "xfade"}
-                and isinstance(segment["transition_in"].get("duration_ms"), int)
-                and intent.duration_min_ms
-                <= segment["transition_in"]["duration_ms"]
-                <= intent.duration_max_ms
-            }
-        else:
-            executable_ids = set()
-        count_valid = intent.count_min <= len(current_ids) <= intent.count_max
+        executable_ids = _operation_intent_candidates(segments, intent)
+        count_valid = _operation_count_valid(intent, len(current_ids))
         current_mapping_valid = (
             bool(current_ids)
             and all(isinstance(item, str) for item in current_ids)
             and set(current_ids) <= executable_ids
             and count_valid
         )
-        executable_count_valid = (
-            intent.count_min <= len(executable_ids) <= intent.count_max
+        executable_count_valid = _operation_count_valid(
+            intent,
+            len(executable_ids),
         )
         if executable_ids and executable_count_valid and not current_mapping_valid:
             decision["operation_ids"] = sorted(executable_ids)
@@ -941,6 +1156,10 @@ def _normalize_edit_plan_response(
                 normalized_overlays.append(overlay)
             segment["overlays"] = normalized_overlays
         _derive_missing_asset_overlays(clip)
+        _derive_missing_operation_intent_decisions(
+            clip,
+            creative_intent=creative_intent,
+        )
         _derive_operation_intent_mappings(
             clip,
             creative_intent=creative_intent,
@@ -1289,7 +1508,10 @@ def merge_repaired_edit_plan_response(
     catalog_snapshot: dict[str, Any] | None = None,
     creative_intent: CreativeIntent | None = None,
 ) -> EditPlan:
-    normalized = _normalize_edit_plan_response(value)
+    normalized = _normalize_edit_plan_response(
+        value,
+        creative_intent=creative_intent,
+    )
     if not isinstance(normalized, dict) or not isinstance(normalized.get("clips"), list):
         raise EditPlanError("EDIT_PLAN_INVALID", "repair response must contain clip plans")
     affected = tuple(sorted({int(index) for index in affected_clip_indexes}))
@@ -1622,6 +1844,11 @@ class AgenticEditPlanner:
             zip(shorts_plan.clips, clip_contexts),
             start=1,
         ):
+            clip_intent = (
+                creative_intent.for_clip(clip_index)
+                if creative_intent is not None
+                else None
+            )
             user_payload = {
                 **base_user_payload,
                 "clip_task": {
@@ -1631,6 +1858,11 @@ class AgenticEditPlanner:
                 "valid_output_template": _valid_clip_plan_template(
                     clip_context,
                     catalog_snapshot=catalog_snapshot,
+                    creative_intent=clip_intent,
+                    opening_title_text=_opening_title_text(
+                        editing_prompt,
+                        str(clip_context.get("title") or "Opening"),
+                    ),
                 ),
                 "clips": [clip_context],
                 "creative_intent": (
@@ -1639,12 +1871,6 @@ class AgenticEditPlanner:
                     else {"asset_intents": [], "operation_intents": []}
                 ),
             }
-            clip_intent = (
-                creative_intent.for_clip(clip_index)
-                if creative_intent is not None
-                else None
-            )
-
             def validate_response(value: Any, *, enforce_intent: bool = True) -> EditPlan:
                 payload = dict(_normalize_edit_plan_response(
                     value,

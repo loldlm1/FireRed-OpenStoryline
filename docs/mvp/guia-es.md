@@ -249,12 +249,14 @@ el video fuente.
 
 La intención creativa `creative_intent.v2` también reconoce, sin depender de
 acentos, requisitos explícitos en español o inglés para un título de apertura,
-una secuencia acotada de 2 a 4 reencuadres/zooms y transiciones breves y
-discretas. Cada requisito debe quedar unido a capas o segmentos ejecutables con
-conteos y tiempos válidos. Si el plan no los incluye, el defecto entra primero
-en el batch de reparación LLM. Si aun después del intento y del baseline seguro
-no puede cumplirse, la QA estricta lo conserva como limitación creativa y la
-entrega técnica nunca lo presenta como resultado mejorado.
+una cantidad exacta de 2, 3 o 4 —o una secuencia acotada de 2 a 4—
+reencuadres/zooms y transiciones breves y discretas. Cada requisito debe quedar
+unido a capas o segmentos ejecutables con conteos y tiempos válidos. El planner
+y la reparación comparten un template ejecutable que conserva esas operaciones
+después del intento LLM, sin cambiar el video fuente, la selección temporal ni
+el número de salidas. Si aun después del intento y del baseline seguro no puede
+cumplirse, la QA estricta lo conserva como limitación creativa y la entrega
+técnica nunca lo presenta como resultado mejorado.
 
 El análisis visual ahora tiene dos escalas. Las muestras globales ayudan a
 elegir el fragmento, pero cada fragmento seleccionado recibe además muestras

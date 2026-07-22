@@ -218,6 +218,10 @@ _REFRAME_RANGE_PATTERNS = (
     rf"\b(?:2|two|dos)\s*(?:-|to|a)\s*(?:4|four|cuatro)\b.{{0,60}}\b{_REFRAME_OPERATION}\b",
     rf"\b{_REFRAME_OPERATION}\b.{{0,60}}\b(?:between|entre)?\s*(?:2|two|dos)\s*(?:-|to|a|and|y)\s*(?:4|four|cuatro)\b",
 )
+_REFRAME_EXACT_PATTERNS = (
+    rf"\b(?:exactly|exactamente)?\s*(?P<count>2|3|4|two|three|four|dos|tres|cuatro)\b.{{0,60}}\b{_REFRAME_OPERATION}\b",
+    rf"\b{_REFRAME_OPERATION}\b.{{0,60}}\b(?:exactly|exactamente)?\s*(?P<count>2|3|4|two|three|four|dos|tres|cuatro)\b",
+)
 _RESTRAINED_TRANSITION_PATTERNS = (
     r"\b(?:subtle|restrained|gentle|smooth|soft|sutil(?:es)?|discret(?:as|os)?|suav(?:es)?)\b.{0,30}\b(?:transitions?|transiciones?)\b",
     r"\b(?:transitions?|transiciones?)\b.{0,30}\b(?:subtle|restrained|gentle|smooth|soft|sutil(?:es)?|discret(?:as|os)?|suav(?:es)?)\b",
@@ -301,6 +305,36 @@ def _positive_pattern(prompt: str, patterns: Sequence[str]) -> bool:
             ):
                 return True
     return False
+
+
+def _reframe_count_bounds(prompt: str) -> tuple[int, int] | None:
+    if _positive_pattern(prompt, _REFRAME_RANGE_PATTERNS):
+        return 2, 4
+    counts = {
+        "2": 2,
+        "two": 2,
+        "dos": 2,
+        "3": 3,
+        "three": 3,
+        "tres": 3,
+        "4": 4,
+        "four": 4,
+        "cuatro": 4,
+    }
+    for pattern in _REFRAME_EXACT_PATTERNS:
+        for match in re.finditer(pattern, prompt, flags=re.IGNORECASE):
+            prefix = prompt[max(0, match.start() - 80):match.start()]
+            prefix = re.split(r"[.!?;\n]", prefix)[-1]
+            if re.search(
+                r"\b(?:do\s+not|don't|without|avoid|no|sin|evita|evitar)\b",
+                prefix,
+                flags=re.IGNORECASE,
+            ):
+                continue
+            count = counts.get(match.group("count").lower())
+            if count is not None:
+                return count, count
+    return None
 
 
 def _duration_bounds(prompt: str, asset_pattern: str, default: tuple[int, int]) -> tuple[int, int]:
@@ -437,7 +471,8 @@ def build_creative_intent(
             duration_min_ms=800,
             duration_max_ms=5000,
         ))
-    if _positive_pattern(folded_prompt, _REFRAME_RANGE_PATTERNS):
+    reframe_bounds = _reframe_count_bounds(folded_prompt)
+    if reframe_bounds is not None:
         operations.append(CreativeOperationIntent(
             id="prompt-reframe-sequence",
             source="user_prompt",
@@ -445,8 +480,8 @@ def build_creative_intent(
             scope="plan",
             kind="reframe_sequence",
             purpose="apply the requested bounded sequence of visible reframes or focus zooms",
-            count_min=2,
-            count_max=4,
+            count_min=reframe_bounds[0],
+            count_max=reframe_bounds[1],
         ))
     if _positive_pattern(folded_prompt, _RESTRAINED_TRANSITION_PATTERNS):
         operations.append(CreativeOperationIntent(

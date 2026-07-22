@@ -206,6 +206,57 @@ class EditPlanContractTests(unittest.TestCase):
             ["asset-overlay-01"],
         )
 
+    def test_derives_missing_required_operation_decisions(self):
+        prompt = (
+            "Start with an opening title, apply exactly 3 reframes or zooms, "
+            "and use restrained transitions."
+        )
+        intent = build_creative_intent(
+            prompt,
+            {"asset_policy": "off", "stock_policy": "off"},
+            selected_clip_count=1,
+        )
+        segments = []
+        for index, (start, end) in enumerate(
+            ((0, 7000), (7000, 14_000), (14_000, 20_000)),
+            start=1,
+        ):
+            segments.append({
+                "id": f"segment-{index}",
+                "source_window": {"start_ms": start, "end_ms": end},
+                "timeline_window": {"start_ms": start, "end_ms": end},
+                "layout": {"mode": "crop"},
+                "transition_in": {
+                    "kind": "cut" if index == 1 else "fade",
+                    "duration_ms": 0 if index == 1 else 220,
+                },
+                "overlays": ([{
+                    "id": "opening-title",
+                    "kind": "text",
+                    "timeline_window": {"start_ms": 0, "end_ms": 2200},
+                    "text": "Opening",
+                }] if index == 1 else []),
+            })
+
+        normalized = _normalize_edit_plan_response(
+            {"clips": [{"segments": segments, "intent_decisions": []}]},
+            creative_intent=intent,
+        )
+        decisions = {
+            item["intent_id"]: item["operation_ids"]
+            for item in normalized["clips"][0]["intent_decisions"]
+        }
+
+        self.assertEqual(decisions["prompt-opening-title"], ["opening-title"])
+        self.assertEqual(
+            decisions["prompt-reframe-sequence"],
+            ["segment-1", "segment-2", "segment-3"],
+        )
+        self.assertEqual(
+            decisions["prompt-restrained-transitions"],
+            ["segment-2", "segment-3"],
+        )
+
         executable = build_shadow_edit_plan(
             [ShortCandidate(0, 20_000, "Title", "Hook", "Reason", 0.9)],
             source_duration_ms=20_000,
@@ -649,6 +700,44 @@ class AgenticEditPlannerTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(
             plan.clips[0].intent_decisions[0].operation_ids,
             ("segment-1",),
+        )
+
+    async def test_deferred_repair_template_preserves_required_operations(self):
+        prompt = (
+            "Start with an opening title that says 'A Clear Opening', apply "
+            "exactly 3 gentle reframes or zooms, and use restrained transitions."
+        )
+        planner, client, kwargs = planner_fixture("speaker", prompt)
+        kwargs.update({
+            "creative_intent": build_creative_intent(
+                prompt,
+                {"asset_policy": "off", "stock_policy": "off"},
+                selected_clip_count=1,
+            ),
+            "defer_registry_repair": True,
+        })
+
+        plan = await planner.plan(**kwargs)
+        clip = plan.clips[0]
+        decisions = {
+            item.intent_id: item.operation_ids for item in clip.intent_decisions
+        }
+
+        self.assertEqual(len(client.calls), 1)
+        self.assertEqual(len(planner.deferred_defects), 1)
+        self.assertEqual(len(clip.segments), 3)
+        self.assertEqual(
+            [segment.transition_in.kind for segment in clip.segments],
+            ["cut", "fade", "fade"],
+        )
+        self.assertEqual(clip.segments[0].overlays[0].text, "A Clear Opening")
+        self.assertEqual(
+            decisions["prompt-reframe-sequence"],
+            tuple(segment.id for segment in clip.segments),
+        )
+        self.assertEqual(
+            decisions["prompt-restrained-transitions"],
+            tuple(segment.id for segment in clip.segments[1:]),
         )
 
     async def test_maps_title_reframes_and_transitions_to_executable_operations(self):
