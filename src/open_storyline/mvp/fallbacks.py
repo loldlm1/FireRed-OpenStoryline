@@ -4,7 +4,7 @@ from dataclasses import asdict, dataclass
 from typing import Any, Iterable
 import os
 
-from open_storyline.mvp.defects import defect_definition
+from open_storyline.mvp.defects import RepairStrategy, defect_definition
 from open_storyline.mvp.edit_plan import EditPlan, required_capabilities
 from open_storyline.mvp.visual_coverage import ClipVisualCoverageReport
 
@@ -61,6 +61,7 @@ class FallbackDirective:
     code: str
     clip_index: int | None = None
     segment_id: str = ""
+    attempt_evidenced: bool = False
 
 
 def baseline_fallbacks_enabled(config: Any) -> bool:
@@ -109,6 +110,7 @@ def compile_baseline_plan(
     force_minimal: bool = False,
     cause_code: str = "",
     remaining_defects: Iterable[FallbackDirective] = (),
+    enforce_attempt_gate: bool = False,
     max_segments_per_clip: int = 48,
     max_overlays_per_clip: int = 16,
     max_assets_per_clip: int = 8,
@@ -118,6 +120,19 @@ def compile_baseline_plan(
     omitted_assets = {str(value) for value in omitted_asset_ids}
     blockers = _coverage_blockers(visual_coverage)
     directives = tuple(remaining_defects)
+    for directive in directives:
+        if (
+            enforce_attempt_gate
+            and defect_definition(directive.code).repair_strategy in {
+                RepairStrategy.LLM_PLAN_REPAIR,
+                RepairStrategy.CONDITIONAL_LLM_OR_FALLBACK,
+            }
+            and not directive.attempt_evidenced
+        ):
+            raise FallbackConfigurationError(
+                "REPAIR_ATTEMPT_REQUIRED",
+                "deterministic fallback requires matching outbound LLM attempt evidence",
+            )
     entries: list[FallbackEntry] = []
 
     for clip in payload["clips"]:
@@ -211,6 +226,8 @@ def compile_baseline_plan(
                 if directive.segment_id == segment_id
             }
             if segment_codes & {
+                "COMPOSITION_CROP_TARGET_TOO_WIDE",
+                "COMPOSITION_LAYOUT_UNSUPPORTED",
                 "EDIT_PLAN_REGION_UNKNOWN",
                 "EDIT_PLAN_REGION_OUTSIDE_CLIP",
                 "EDIT_PLAN_TRACK_UNKNOWN",
@@ -231,7 +248,12 @@ def compile_baseline_plan(
                     "max_zoom": 1.0,
                 })
                 segment["evidence_ids"] = []
-            if coverage_codes and layout.get("mode") == "crop":
+            directed_coverage_codes = tuple(
+                code
+                for code in coverage_codes
+                if not enforce_attempt_gate or code in segment_codes
+            )
+            if directed_coverage_codes and layout.get("mode") == "crop":
                 layout.update({
                     "mode": "fit",
                     "focal_target": None,
@@ -245,7 +267,7 @@ def compile_baseline_plan(
                     segment_id=segment_id,
                     requested="semantic_crop",
                     executed="content_preserving_fit",
-                    reason=",".join(coverage_codes)[:240],
+                    reason=",".join(directed_coverage_codes)[:240],
                 ))
             if layout.get("mode") == "crop" and available and "crop" not in available:
                 layout.update({

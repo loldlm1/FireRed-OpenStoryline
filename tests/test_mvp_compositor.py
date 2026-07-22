@@ -7,10 +7,12 @@ from open_storyline.mvp.compositor import (
     CROP_TARGET_MAX_OVERFLOW_RATIO,
     CompositionError,
     assess_segment_crop_geometry,
+    dry_run_edit_plan_composition,
     resolve_clip_composition,
 )
 from open_storyline.mvp.edit_plan import (
     ClipEditPlan,
+    EditPlan,
     EditSegment,
     FocalTarget,
     LayoutSpec,
@@ -52,6 +54,40 @@ def clip_plan(segments):
 
 
 class CompositorTests(unittest.TestCase):
+    def test_plan_dry_run_fails_before_any_renderer_execution(self):
+        plan = EditPlan(
+            planner_version="test.v1",
+            source_duration_ms=4000,
+            requested_capabilities=("crop", "hard_cut", "subtitles"),
+            clips=(clip_plan([EditSegment(
+                id="unsafe-crop",
+                source_window=TimeWindow(start_ms=0, end_ms=4000),
+                timeline_window=TimeWindow(start_ms=0, end_ms=4000),
+                layout=LayoutSpec(
+                    mode="crop",
+                    focal_target=FocalTarget(semantic_role="speaker"),
+                    fallback="crop",
+                ),
+                reason="keep both speakers visible",
+            )]),),
+        )
+        observations = (
+            region("left", "frame-1", x=0.05, width=0.35),
+            region("right", "frame-1", x=0.60, width=0.35),
+        )
+        with self.assertRaises(CompositionError) as caught:
+            dry_run_edit_plan_composition(
+                plan,
+                visual=visual(
+                    [{"id": "frame-1", "timestamp_ms": 1000}],
+                    observations,
+                ),
+                source_media=MediaInfo(4000, 1920, 1080, True),
+                output_width=1080,
+                output_height=1920,
+            )
+        self.assertEqual(caught.exception.code, "COMPOSITION_CROP_TARGET_TOO_WIDE")
+
     def test_shared_assessment_detects_incident_shaped_crop_overflow(self):
         fixture = json.loads(
             (

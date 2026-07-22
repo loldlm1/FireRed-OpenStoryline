@@ -18,6 +18,8 @@ from open_storyline.mvp.prompts import (
     REPAIR_SYSTEM_PROMPT_VERSION,
 )
 from open_storyline.mvp.repair import (
+    PlanRepairRound,
+    PlanRepairState,
     RepairBudget,
     RepairContractError,
     RepairEvidence,
@@ -25,9 +27,12 @@ from open_storyline.mvp.repair import (
     RepairMode,
     RepairStage,
     TranscriptExcerpt,
+    authoritative_plan_fingerprint,
+    bounded_repair_findings,
     build_repair_batch,
     build_repair_report,
     evaluate_repair_quality_floor,
+    make_repair_finding,
     predict_plan_findings,
     repair_disposition,
     resolve_repair_mode,
@@ -163,7 +168,7 @@ class RepairEligibilityTests(unittest.TestCase):
         self.assertFalse(dispositions[RepairMode.REPORT].call_allowed)
         self.assertTrue(dispositions[RepairMode.ENFORCE].call_allowed)
 
-    def test_stage_budgets_are_independent_and_single_use(self):
+    def test_visual_budget_is_single_use_and_plan_budget_allows_two_rounds(self):
         visual = finding_for("VISUAL_RESPONSE_INVALID")
         plan = finding_for("EDIT_PLAN_INVALID")
         self.assertTrue(repair_disposition(
@@ -184,12 +189,119 @@ class RepairEligibilityTests(unittest.TestCase):
             mode=RepairMode.ENFORCE,
             budget=RepairBudget(visual_attempts_used=1),
         ).eligible)
-        self.assertFalse(repair_disposition(
+        self.assertTrue(repair_disposition(
             plan,
             stage=RepairStage.PLAN_REPAIR,
             mode=RepairMode.ENFORCE,
             budget=RepairBudget(plan_attempts_used=1),
         ).eligible)
+        self.assertFalse(repair_disposition(
+            plan,
+            stage=RepairStage.PLAN_REPAIR,
+            mode=RepairMode.ENFORCE,
+            budget=RepairBudget(plan_attempts_used=2),
+        ).eligible)
+
+    def test_plan_repair_state_requires_matching_outbound_attempt_before_fallback(self):
+        finding = make_repair_finding(
+            "COMPOSITION_CROP_TARGET_TOO_WIDE",
+            clip_index=1,
+            objective=True,
+            values={"segment_id": "segment-1", "observed": "overflow"},
+        )
+        fingerprint = authoritative_plan_fingerprint(shadow_plan())
+        state = PlanRepairState()
+        state.record_round(
+            round=PlanRepairRound.PRIMARY,
+            findings=(finding,),
+            authoritative_plan_fingerprint=fingerprint,
+            provider_attempts=({"number": 1, "reason": "timeout"},),
+            provider_outcome="NINEROUTER_REQUEST_FAILED",
+            schema_valid=False,
+            semantic_valid=False,
+        )
+
+        evidence = state.require_fallback_evidence(
+            (finding,),
+            authoritative_plan_fingerprint=fingerprint,
+        )
+        self.assertEqual(evidence[0].round, PlanRepairRound.PRIMARY)
+        different_segment = make_repair_finding(
+            "COMPOSITION_CROP_TARGET_TOO_WIDE",
+            clip_index=1,
+            objective=True,
+            values={"segment_id": "segment-2", "observed": "overflow"},
+        )
+        with self.assertRaises(RepairContractError) as caught:
+            state.require_fallback_evidence(
+                (different_segment,),
+                authoritative_plan_fingerprint=fingerprint,
+            )
+        self.assertEqual(caught.exception.code, "REPAIR_ATTEMPT_REQUIRED")
+
+    def test_same_code_on_two_segments_remains_two_defect_instances(self):
+        findings = tuple(
+            make_repair_finding(
+                "COMPOSITION_CROP_TARGET_TOO_WIDE",
+                clip_index=1,
+                objective=True,
+                values={"segment_id": segment_id, "observed": "overflow"},
+            )
+            for segment_id in ("segment-1", "segment-2")
+        )
+        selected, overflow = bounded_repair_findings(findings)
+        self.assertEqual(len(selected), 2)
+        self.assertEqual(overflow, ())
+        request, _ = build_repair_batch(
+            stage=RepairStage.PLAN_REPAIR,
+            mode=RepairMode.ENFORCE,
+            findings=selected,
+            budget=RepairBudget(),
+            candidate_clips={1: {"segments": []}},
+            available_capabilities=("crop", "fit", "subtitles"),
+            catalog_context={},
+            immutable_constraints={"preserve_source_windows": True},
+            editing_prompt="Repair both synthetic segment defects.",
+            authoritative_plan_sha256="a" * 64,
+        )
+        self.assertEqual(len(request.to_report_dict()["defect_instance_ids"]), 2)
+        self.assertEqual(
+            len(set(request.to_report_dict()["defect_instance_ids"])),
+            2,
+        )
+
+    def test_report_only_does_not_satisfy_fallback_gate_and_third_round_is_rejected(self):
+        primary = finding_for("EDIT_PLAN_INVALID")
+        contingency = finding_for("EDIT_PLAN_EVIDENCE_UNKNOWN")
+        fingerprint = authoritative_plan_fingerprint(shadow_plan())
+        state = PlanRepairState()
+        state.record_round(
+            round=PlanRepairRound.PRIMARY,
+            findings=(primary,),
+            authoritative_plan_fingerprint=fingerprint,
+            provider_attempts=(),
+            provider_outcome="report_only",
+            schema_valid=False,
+            semantic_valid=False,
+        )
+        with self.assertRaises(RepairContractError) as caught:
+            state.require_fallback_evidence(
+                (primary,),
+                authoritative_plan_fingerprint=fingerprint,
+            )
+        self.assertEqual(caught.exception.code, "REPAIR_ATTEMPT_REQUIRED")
+        state.record_round(
+            round=PlanRepairRound.CONTINGENCY,
+            findings=(contingency,),
+            authoritative_plan_fingerprint=fingerprint,
+            provider_attempts=({"number": 1},),
+            provider_outcome="ok",
+            schema_valid=True,
+            semantic_valid=True,
+        )
+        with self.assertRaises(RepairContractError) as caught:
+            state.next_round()
+        self.assertEqual(caught.exception.code, "REPAIR_PLAN_CALL_LIMIT_EXCEEDED")
 
     def test_missing_evidence_and_advisory_only_findings_make_no_call(self):
         missing = RepairFinding(
@@ -480,6 +592,51 @@ class RepairQualityFloorTests(unittest.TestCase):
         self.assertEqual(
             result.resolution.introduced_codes,
             ("EDIT_PLAN_EVIDENCE_UNKNOWN",),
+        )
+
+    def test_geometry_repair_cannot_mutate_fields_outside_segment_layout_allowlist(self):
+        original = shadow_plan()
+        payload = original.to_dict()
+        segment = payload["clips"][0]["segments"][0]
+        segment["layout"].update({
+            "mode": "fit",
+            "fallback": "fit",
+            "allow_full_frame_fallback": True,
+            "max_zoom": 1.0,
+        })
+        accepted = evaluate_repair_quality_floor(
+            original,
+            EditPlan.model_validate(payload),
+            original_codes=("COMPOSITION_CROP_TARGET_TOO_WIDE",),
+            repaired_codes=(),
+            available_capabilities=original.requested_capabilities,
+            affected_clip_indexes=(1,),
+            affected_operation_ids=(segment["id"],),
+            allowed_mutations_by_operation={
+                segment["id"]: (
+                    "layout.mode",
+                    "layout.fallback",
+                    "layout.allow_full_frame_fallback",
+                    "layout.max_zoom",
+                ),
+            },
+        )
+        self.assertTrue(accepted.accepted)
+
+        payload["clips"][0]["segments"][0]["reason"] = "unapproved rewrite"
+        rejected = evaluate_repair_quality_floor(
+            original,
+            EditPlan.model_validate(payload),
+            original_codes=("COMPOSITION_CROP_TARGET_TOO_WIDE",),
+            repaired_codes=(),
+            available_capabilities=original.requested_capabilities,
+            affected_clip_indexes=(1,),
+            affected_operation_ids=(segment["id"],),
+            allowed_mutations_by_operation={segment["id"]: ("layout.mode",)},
+        )
+        self.assertIn(
+            "REPAIR_MUTATION_OUTSIDE_ALLOWLIST",
+            rejected.violation_codes,
         )
 
 

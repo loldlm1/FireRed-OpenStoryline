@@ -31,3 +31,11 @@ The bounded finding records only normalized identifiers and numeric geometry;
 it never stores frames or raw provider content. Composition configuration,
 source integrity, executable validation, authentication, database, and unsafe
 path failures remain deterministic fail-closed boundaries.
+
+Plan repair is bounded to one primary batch plus one contingency batch for
+new authoritative defects. Every deterministic repair fallback in enforce mode
+must reference an outbound attempt for the same code, clip, operation, and
+authoritative plan fingerprint. Candidate-only defects reject that candidate
+without consuming the contingency batch. The contingency call can add one
+provider round of latency and cost, so rollout metrics keep its call rate,
+latency, tokens, and cost separate; existing release thresholds are unchanged.

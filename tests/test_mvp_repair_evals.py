@@ -286,7 +286,9 @@ class RepairEvalMatrixTests(unittest.TestCase):
         ):
             exhausted = RepairBudget(
                 visual_attempts_used=int(stage is RepairStage.VISUAL_UNDERSTANDING),
-                plan_attempts_used=int(stage is RepairStage.PLAN_REPAIR),
+                plan_attempts_used=(
+                    2 if stage is RepairStage.PLAN_REPAIR else 0
+                ),
             )
             disposition = repair_disposition(
                 finding_for(repair_code),

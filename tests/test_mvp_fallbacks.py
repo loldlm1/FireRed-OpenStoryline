@@ -77,6 +77,7 @@ class BaselineFallbackTests(unittest.TestCase):
                 code="REGION_REFERENCE_UNKNOWN",
                 clip_index=1,
                 segment_id="speaker",
+                attempt_evidenced=True,
             ),),
         )
 
@@ -123,6 +124,12 @@ class BaselineFallbackTests(unittest.TestCase):
             plan_with_segment(segment),
             visual_coverage=coverage,
             available_capabilities={"fit", "hard_cut", "subtitles"},
+            remaining_defects=(FallbackDirective(
+                code="CROP_VISUAL_OBSERVATION_MISSING",
+                clip_index=1,
+                segment_id="speaker",
+                attempt_evidenced=True,
+            ),),
         )
 
         compiled = result.plan.clips[0].segments[0]
@@ -130,6 +137,60 @@ class BaselineFallbackTests(unittest.TestCase):
         self.assertIsNone(compiled.layout.focal_target)
         self.assertEqual(result.entries[0].code, "VISUAL_REFRAME_FALLBACK")
         self.assertEqual(result.ledger()["status"], "with_limitations")
+
+    def test_repairable_fallback_requires_attempt_evidence_and_is_segment_local(self):
+        affected = EditSegment(
+            id="affected",
+            source_window=TimeWindow(start_ms=0, end_ms=2000),
+            timeline_window=TimeWindow(start_ms=0, end_ms=2000),
+            layout=LayoutSpec(mode="crop", fallback="crop"),
+            reason="affected crop",
+        )
+        untouched = EditSegment(
+            id="untouched",
+            source_window=TimeWindow(start_ms=2000, end_ms=4000),
+            timeline_window=TimeWindow(start_ms=2000, end_ms=4000),
+            layout=LayoutSpec(mode="crop", fallback="crop"),
+            reason="unaffected crop",
+        )
+        plan = EditPlan(
+            planner_version="test.v1",
+            source_duration_ms=4000,
+            requested_capabilities=("crop", "fit", "hard_cut", "subtitles"),
+            clips=(ClipEditPlan(
+                clip_index=1,
+                source_window=TimeWindow(start_ms=0, end_ms=4000),
+                output_name="short-01.mp4",
+                segments=(affected, untouched),
+            ),),
+        )
+        directive = FallbackDirective(
+            code="COMPOSITION_CROP_TARGET_TOO_WIDE",
+            clip_index=1,
+            segment_id="affected",
+        )
+        with self.assertRaises(FallbackConfigurationError) as caught:
+            compile_baseline_plan(
+                plan,
+                remaining_defects=(directive,),
+                enforce_attempt_gate=True,
+            )
+        self.assertEqual(caught.exception.code, "REPAIR_ATTEMPT_REQUIRED")
+
+        result = compile_baseline_plan(
+            plan,
+            remaining_defects=(FallbackDirective(
+                **{**directive.__dict__, "attempt_evidenced": True},
+            ),),
+            enforce_attempt_gate=True,
+        )
+        segments = result.plan.clips[0].segments
+        self.assertEqual(segments[0].layout.mode, "fit")
+        self.assertEqual(segments[1], untouched)
+        self.assertIn(
+            "VISUAL_REFRAME_FALLBACK",
+            {entry.code for entry in result.entries},
+        )
 
     def test_missing_asset_is_removed_and_caption_zone_is_repaired(self):
         window = TimeWindow(start_ms=0, end_ms=2000)

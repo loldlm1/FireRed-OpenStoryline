@@ -4,7 +4,7 @@ from dataclasses import asdict, dataclass, replace
 from typing import Any, Mapping, Sequence
 import math
 
-from open_storyline.mvp.edit_plan import ClipEditPlan, EditSegment, TimeWindow
+from open_storyline.mvp.edit_plan import ClipEditPlan, EditPlan, EditSegment, TimeWindow
 from open_storyline.mvp.visual_understanding import (
     RegionObservation,
     VisualUnderstanding,
@@ -717,3 +717,45 @@ def resolve_clip_composition(
             max_crop_velocity_ratio_per_second=max_crop_velocity_ratio_per_second,
         ),
     )
+
+
+def dry_run_edit_plan_composition(
+    edit_plan: EditPlan,
+    *,
+    visual: VisualUnderstanding,
+    source_media: Any,
+    output_width: int,
+    output_height: int,
+    hysteresis_ratio: float = 0.03,
+    smoothing_alpha: float = 0.65,
+    max_crop_velocity_ratio_per_second: float = 0.45,
+    transition_presets: Mapping[str, Mapping[str, Any]] | None = None,
+) -> dict[str, Any]:
+    clips = tuple(
+        resolve_clip_composition(
+            clip,
+            visual=visual,
+            source_media=source_media,
+            output_width=output_width,
+            output_height=output_height,
+            hysteresis_ratio=hysteresis_ratio,
+            smoothing_alpha=smoothing_alpha,
+            max_crop_velocity_ratio_per_second=(
+                max_crop_velocity_ratio_per_second
+            ),
+            transition_presets=transition_presets,
+        )
+        for clip in edit_plan.clips
+    )
+    return {
+        "version": "composition_dry_run.v1",
+        "status": "pass",
+        "clips": [
+            {
+                "clip_index": clip.clip_index,
+                "segment_count": len(clip.segments),
+                "fallback_count": clip.fallback_count,
+            }
+            for clip in clips
+        ],
+    }
