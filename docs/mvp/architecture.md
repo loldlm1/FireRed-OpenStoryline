@@ -127,10 +127,11 @@ isolated so upstream behavior can continue to be merged into this fork.
   reframe count, restrained transitions, subtitles, source windows, and output
   count instead of collapsing to a one-segment baseline. Restrained transitions
   select an executable fade from a compatible creative-catalog style instead
-  of emitting an empty or invented catalog ID. When a required reframe has low
-  temporal evidence after its bounded LLM attempts, the segment uses a target-free
-  center reframe instead of silently becoming a static fit; semantic output QA
-  remains authoritative for the rendered focus. Track targets retain
+  of emitting an empty or invented catalog ID. When a required reframe has
+  missing, sparse, or portrait-unsafe target evidence after its bounded LLM
+  attempts, the segment uses a target-free center reframe instead of silently
+  becoming a static fit; semantic output QA remains authoritative for the
+  rendered focus. Track targets retain
   their semantic role so clip-local observations can safely replace a sparse
   track without inventing private evidence or external assets.
 - Final post-render conformance also consumes the plan-level intent verdict. If

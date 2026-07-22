@@ -256,10 +256,11 @@ y la reparación comparten un template ejecutable que conserva esas operaciones
 después del intento LLM, sin cambiar el video fuente, la selección temporal ni
 el número de salidas. Las transiciones discretas seleccionan un fundido
 ejecutable de un estilo compatible del catálogo creativo, sin emitir un ID de
-catálogo vacío o inventado. Si un reencuadre obligatorio conserva poca evidencia
-temporal después de sus intentos LLM acotados, el segmento usa un reencuadre
-central sin objetivo inventado en vez de convertirse silenciosamente en un fit
-estático; la QA semántica del resultado sigue siendo autoritativa. Si aun después del intento y del baseline seguro no puede
+catálogo vacío o inventado. Si un reencuadre obligatorio tiene evidencia del
+objetivo ausente, escasa o insegura para el recorte vertical después de sus
+intentos LLM acotados, el segmento usa un reencuadre central sin objetivo
+inventado en vez de convertirse silenciosamente en un fit estático; la QA
+semántica del resultado sigue siendo autoritativa. Si aun después del intento y del baseline seguro no puede
 cumplirse, la QA estricta lo conserva como limitación creativa y la entrega
 técnica nunca lo presenta como resultado mejorado.
 

@@ -193,11 +193,23 @@ class BaselineFallbackTests(unittest.TestCase):
                 ),),
             ),),
         )
-        coverage = SimpleNamespace(segments=(SimpleNamespace(
-            clip_index=1,
-            segment_id="reframe-2",
-            blocker_codes=("CROP_VISUAL_TEMPORAL_COVERAGE_LOW",),
-        ),))
+        coverage = SimpleNamespace(segments=(
+            SimpleNamespace(
+                clip_index=1,
+                segment_id="reframe-1",
+                blocker_codes=("COMPOSITION_CROP_TARGET_TOO_WIDE",),
+            ),
+            SimpleNamespace(
+                clip_index=1,
+                segment_id="reframe-2",
+                blocker_codes=("CROP_VISUAL_TEMPORAL_COVERAGE_LOW",),
+            ),
+            SimpleNamespace(
+                clip_index=1,
+                segment_id="reframe-3",
+                blocker_codes=("COMPOSITION_CROP_TARGET_TOO_WIDE",),
+            ),
+        ))
 
         result = compile_baseline_plan(
             plan,
@@ -205,12 +217,26 @@ class BaselineFallbackTests(unittest.TestCase):
             available_capabilities={
                 "crop", "fit", "focus_zoom", "hard_cut", "subtitles"
             },
-            remaining_defects=(FallbackDirective(
-                code="CROP_VISUAL_TEMPORAL_COVERAGE_LOW",
-                clip_index=1,
-                segment_id="reframe-2",
-                attempt_evidenced=True,
-            ),),
+            remaining_defects=(
+                FallbackDirective(
+                    code="COMPOSITION_CROP_TARGET_TOO_WIDE",
+                    clip_index=1,
+                    segment_id="reframe-1",
+                    attempt_evidenced=True,
+                ),
+                FallbackDirective(
+                    code="CROP_VISUAL_TEMPORAL_COVERAGE_LOW",
+                    clip_index=1,
+                    segment_id="reframe-2",
+                    attempt_evidenced=True,
+                ),
+                FallbackDirective(
+                    code="COMPOSITION_CROP_TARGET_TOO_WIDE",
+                    clip_index=1,
+                    segment_id="reframe-3",
+                    attempt_evidenced=True,
+                ),
+            ),
             enforce_attempt_gate=True,
         )
 
@@ -226,6 +252,10 @@ class BaselineFallbackTests(unittest.TestCase):
         self.assertEqual(compiled.layout.max_zoom, 1.08)
         self.assertEqual(compiled.evidence_ids, ())
         self.assertEqual(result.entries[0].executed, "bounded_center_reframe")
+        self.assertGreaterEqual(
+            sum(item.executed == "bounded_center_reframe" for item in result.entries),
+            3,
+        )
         intent = build_creative_intent(
             "Apply exactly 3 gentle reframes or zooms.",
             {"asset_policy": "off", "stock_policy": "off"},

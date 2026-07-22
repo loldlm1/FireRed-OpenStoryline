@@ -233,6 +233,11 @@ def compile_baseline_plan(
                 for directive in clip_directives
                 if directive.segment_id == segment_id
             }
+            preserve_required_reframe = (
+                segment_id in required_reframe_segment_ids
+                and layout.get("mode") == "crop"
+                and (not available or "crop" in available)
+            )
             if segment_codes & {
                 "COMPOSITION_CROP_TARGET_TOO_WIDE",
                 "COMPOSITION_LAYOUT_UNSUPPORTED",
@@ -248,13 +253,22 @@ def compile_baseline_plan(
                 "EVIDENCE_REFERENCE_UNKNOWN",
                 "FULL_FRAME_FALLBACK_UNAPPROVED",
             }:
-                layout.update({
-                    "mode": "fit",
-                    "focal_target": None,
-                    "fallback": "fit",
-                    "allow_full_frame_fallback": True,
-                    "max_zoom": 1.0,
-                })
+                layout.update(
+                    {
+                        "mode": "crop",
+                        "focal_target": None,
+                        "fallback": "crop",
+                        "allow_full_frame_fallback": False,
+                    }
+                    if preserve_required_reframe
+                    else {
+                        "mode": "fit",
+                        "focal_target": None,
+                        "fallback": "fit",
+                        "allow_full_frame_fallback": True,
+                        "max_zoom": 1.0,
+                    }
+                )
                 segment["evidence_ids"] = []
             if (
                 "PREDICTIVE_ACTIVE_PICTURE_RISK" in segment_codes
@@ -273,10 +287,6 @@ def compile_baseline_plan(
                 if not enforce_attempt_gate or code in segment_codes
             )
             if directed_coverage_codes and layout.get("mode") == "crop":
-                preserve_required_reframe = (
-                    segment_id in required_reframe_segment_ids
-                    and (not available or "crop" in available)
-                )
                 layout.update(
                     {
                         "mode": "crop",
@@ -466,7 +476,20 @@ def compile_baseline_plan(
                 clip_index=clip_index,
                 segment_id=directive.segment_id or "plan",
                 requested=directive.code,
-                executed=fallback_code,
+                executed=(
+                    "bounded_center_reframe"
+                    if (
+                        fallback_code == "VISUAL_REFRAME_FALLBACK"
+                        and directive.segment_id in required_reframe_segment_ids
+                        and any(
+                            str(segment.get("id")) == directive.segment_id
+                            and segment.get("layout", {}).get("mode") == "crop"
+                            and segment.get("layout", {}).get("fallback") == "crop"
+                            for segment in clip.get("segments") or []
+                        )
+                    )
+                    else fallback_code
+                ),
                 reason=(
                     "The bounded semantic repair left this registered creative "
                     "defect unresolved, so its deterministic fallback was applied."
