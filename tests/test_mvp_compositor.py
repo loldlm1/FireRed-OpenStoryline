@@ -163,6 +163,7 @@ class CompositorTests(unittest.TestCase):
         overlay = payload["segments"][0]["overlays"][0]
         self.assertEqual(overlay["timeline_window"], {"start_ms": 1000, "end_ms": 3000})
         self.assertEqual(overlay["source_window"], {"start_ms": 500, "end_ms": 2500})
+        self.assertEqual(payload["segments"][0]["expected_active_area_ratio"], 1.0)
 
     def test_tracks_a_semantic_target_and_falls_back_for_wide_content(self):
         source = MediaInfo(4000, 640, 360, True)
@@ -535,7 +536,23 @@ class CompositorTests(unittest.TestCase):
         )
         self.assertEqual((video, audio), ("vout", "a0"))
         self.assertIn("trim=start=0.000:end=4.000", graph)
+        self.assertIn("gblur=sigma=", graph)
+        self.assertIn("overlay=(W-w)/2:(H-h)/2:shortest=1", graph)
         self.assertNotIn("../", graph)
+
+        letterbox = SimpleNamespace(**{
+            **segment.__dict__,
+            "strategy": "letterbox",
+        })
+        letterbox_graph, _, _ = build_reframe_filtergraph(
+            [letterbox],
+            output_width=180,
+            output_height=320,
+            subtitle_filename=None,
+            has_audio=True,
+        )
+        self.assertIn("pad=180:320", letterbox_graph)
+        self.assertNotIn("gblur=sigma=", letterbox_graph)
 
         second = SimpleNamespace(
             source_window=TimeWindow(start_ms=4000, end_ms=8000),

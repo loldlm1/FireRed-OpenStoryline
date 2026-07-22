@@ -183,6 +183,13 @@ isolated so upstream behavior can continue to be merged into this fork.
   fallback. Source windows, timing, output count, assets, subtitles, and
   unrelated operations remain immutable. An unattempted repairable defect or a
   baseline that fails the final dry-run remains terminal.
+- `fit` preserves the complete foreground over a dimmed, blurred version of the
+  same source that fills the output canvas. Explicit `letterbox` preserves solid
+  padding and remains subject to predictive active-picture repair when a narrow
+  landscape band would dominate a portrait output. Frame QA treats blurred
+  `fit` as full-canvas composition while retaining active-picture enforcement;
+  source-reference metrics that require identical full-frame backgrounds are
+  skipped only for that intentional blur treatment.
 
 ## External asset controls
 

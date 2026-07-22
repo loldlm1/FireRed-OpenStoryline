@@ -32,6 +32,14 @@ it never stores frames or raw provider content. Composition configuration,
 source integrity, executable validation, authentication, database, and unsafe
 path failures remain deterministic fail-closed boundaries.
 
+Full-frame composition keeps two distinct contracts. `fit` places the complete
+foreground over a dimmed blurred full-canvas background and is the registered
+content-preserving baseline. Explicit `letterbox` keeps solid padding. When
+predictive geometry shows that letterbox would leave too little active picture,
+`PREDICTIVE_ACTIVE_PICTURE_RISK` receives the same LLM-first treatment as other
+repairable plan defects; its attempted deterministic fallback changes only that
+segment to blurred `fit` before the final compositor dry-run.
+
 Plan repair is bounded to one primary batch plus one contingency batch for
 new authoritative defects. Every deterministic repair fallback in enforce mode
 must reference an outbound attempt for the same code, clip, operation, and

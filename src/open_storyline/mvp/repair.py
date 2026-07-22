@@ -1783,7 +1783,7 @@ def predict_plan_findings(
                         {"position": overlay.get("position")},
                     ))
             ratio = _finite_number(ratios.get(clip_index))
-            if layout.get("mode") in {"fit", "letterbox"} and ratio and ratio > 0:
+            if layout.get("mode") == "letterbox" and ratio and ratio > 0:
                 predicted_height = min(1.0, (9 / 16) / ratio)
                 if predicted_height < 0.35:
                     findings.append(_predictive(

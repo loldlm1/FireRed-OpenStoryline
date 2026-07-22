@@ -825,7 +825,7 @@ class PredictiveRepairPolicyTests(unittest.TestCase):
                 "segments": [{
                     "id": "segment-1",
                     "timeline_window": {"start_ms": 0, "end_ms": 12_000},
-                    "layout": {"mode": "fit"},
+                    "layout": {"mode": "letterbox"},
                     "overlays": [
                         {
                             "id": "overlay-1",
@@ -871,6 +871,26 @@ class PredictiveRepairPolicyTests(unittest.TestCase):
             budget=RepairBudget(),
         )
         self.assertFalse(advisory.call_allowed)
+
+        blurred_fit = {
+            "clips": [{
+                "clip_index": 1,
+                "segments": [{
+                    "id": "fit-segment",
+                    "timeline_window": {"start_ms": 0, "end_ms": 4_000},
+                    "layout": {"mode": "fit"},
+                    "overlays": [],
+                }],
+            }],
+        }
+        fit_codes = {
+            item.code
+            for item in predict_plan_findings(
+                blurred_fit,
+                source_aspect_ratios={1: 16 / 9},
+            )
+        }
+        self.assertNotIn("PREDICTIVE_ACTIVE_PICTURE_RISK", fit_codes)
 
 
 if __name__ == "__main__":

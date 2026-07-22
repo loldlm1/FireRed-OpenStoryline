@@ -187,6 +187,24 @@ def _fit_active_area_ratio(
     return round(active_area / (output_width * output_height), 6)
 
 
+def _expected_active_area_ratio(
+    strategy: str,
+    *,
+    source_width: int,
+    source_height: int,
+    output_width: int,
+    output_height: int,
+) -> float:
+    if strategy == "fit":
+        return 1.0
+    return _fit_active_area_ratio(
+        source_width,
+        source_height,
+        output_width,
+        output_height,
+    )
+
+
 def _union_box(regions: Sequence[RegionObservation], margin_ratio: float) -> tuple[float, float, float, float]:
     x1 = min(region.bbox.x for region in regions)
     y1 = min(region.bbox.y for region in regions)
@@ -427,11 +445,12 @@ def _resolve_segment(
             fallback_used=False,
             fallback_allowed=False,
             fallback_cause="explicit_layout",
-            expected_active_area_ratio=_fit_active_area_ratio(
-                source_width,
-                source_height,
-                output_width,
-                output_height,
+            expected_active_area_ratio=_expected_active_area_ratio(
+                segment.layout.mode,
+                source_width=source_width,
+                source_height=source_height,
+                output_width=output_width,
+                output_height=output_height,
             ),
             smoothed=False,
         )
@@ -455,11 +474,12 @@ def _resolve_segment(
             fallback_used=False,
             fallback_allowed=False,
             fallback_cause="explicit_source_cutaway",
-            expected_active_area_ratio=_fit_active_area_ratio(
-                source_width,
-                source_height,
-                output_width,
-                output_height,
+            expected_active_area_ratio=_expected_active_area_ratio(
+                "fit",
+                source_width=source_width,
+                source_height=source_height,
+                output_width=output_width,
+                output_height=output_height,
             ),
             smoothed=False,
         )
@@ -519,11 +539,12 @@ def _resolve_segment(
             expected_active_area_ratio=(
                 1.0
                 if assessment.fallback == "crop"
-                else _fit_active_area_ratio(
-                    source_width,
-                    source_height,
-                    output_width,
-                    output_height,
+                else _expected_active_area_ratio(
+                    assessment.fallback,
+                    source_width=source_width,
+                    source_height=source_height,
+                    output_width=output_width,
+                    output_height=output_height,
                 )
             ),
             smoothed=False,
@@ -554,11 +575,12 @@ def _resolve_segment(
             fallback_used=True,
             fallback_allowed=segment.layout.allow_full_frame_fallback,
             fallback_cause="protected_target_exceeds_crop",
-            expected_active_area_ratio=_fit_active_area_ratio(
-                source_width,
-                source_height,
-                output_width,
-                output_height,
+            expected_active_area_ratio=_expected_active_area_ratio(
+                assessment.fallback,
+                source_width=source_width,
+                source_height=source_height,
+                output_width=output_width,
+                output_height=output_height,
             ),
             smoothed=False,
         )

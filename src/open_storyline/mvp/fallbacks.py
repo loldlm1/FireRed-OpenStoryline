@@ -248,6 +248,17 @@ def compile_baseline_plan(
                     "max_zoom": 1.0,
                 })
                 segment["evidence_ids"] = []
+            if (
+                "PREDICTIVE_ACTIVE_PICTURE_RISK" in segment_codes
+                and layout.get("mode") == "letterbox"
+            ):
+                layout.update({
+                    "mode": "fit",
+                    "focal_target": None,
+                    "fallback": "fit",
+                    "allow_full_frame_fallback": True,
+                    "max_zoom": 1.0,
+                })
             directed_coverage_codes = tuple(
                 code
                 for code in coverage_codes

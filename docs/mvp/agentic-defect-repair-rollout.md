@@ -139,6 +139,7 @@ the pinned FFMPEGA service.
 | Authoritative repeatability | PASS | Two consecutive immutable same-source/same-prompt outputs pass deterministic, semantic, asset-visibility, playback, subtitle, promotion, and direct-inspection gates. |
 | Typed FFMPEGA execution | PASS | The existing targeted prompt selects typed `sharpen(amount=0.4)` and registers a playable effects output with zero omission or introduced defects. |
 | Healthy-path unavailable analysis | PASS | Zero semantic- or asset-analysis-unavailable codes in the final consecutive pair and final-image effect canary. |
+| Portrait active-picture composition | REQUIRED | A landscape source rendered with `fit` must show the full foreground over a dimmed blurred full-canvas background; explicit `letterbox` must retain solid padding and trigger repair when predictive active-picture thresholds fail. Inspect opening, midpoint/transition, subtitle or overlay moments, and ending frames directly. |
 | Broad 99% reliability | OPEN | `claim_ready=false`; 7 classified attempts yield `0.857143` playable rate and Wilson `[0.486872, 0.974320]`. |
 | Quantified effect quality lift | OPEN | Execution and non-regression are proven, but the subtle sharpen result lacks a retained native A/B artifact showing strong lift. |
 | Authenticated production browser | OPEN | Artifact registration and direct decode pass; the operator-held plaintext password is unavailable to automation and authentication must not be bypassed. |

@@ -256,7 +256,12 @@ planificación con más frames; si todavía falla, termina antes de buscar asset
 renderizar. `clip_visual_coverage.json` conserva sólo IDs, timestamps, métricas
 y códigos de bloqueo. Un fallback a `fit`/letterbox debe estar autorizado de
 forma explícita; el motor ya no convierte silenciosamente un recorte en una
-imagen horizontal pequeña dentro del lienzo vertical.
+imagen horizontal pequeña dentro del lienzo vertical. `fit` conserva el primer
+plano completo sobre una copia atenuada y desenfocada del mismo video que llena
+el lienzo; `letterbox` conserva relleno sólido sólo cuando se pide de forma
+explícita. Si ese relleno deja muy poca imagen activa, el defecto recibe primero
+un intento LLM y su fallback determinista cambia únicamente ese segmento a
+`fit` antes del dry-run final.
 
 En dominio/HTTPS, la sesión usa una cookie opaca `HttpOnly`, `Secure` y
 `SameSite`, junto con un token CSRF separado para operaciones que modifican

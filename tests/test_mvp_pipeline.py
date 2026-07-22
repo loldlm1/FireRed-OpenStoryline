@@ -23,6 +23,7 @@ from open_storyline.mvp.edit_plan import (
 )
 from open_storyline.mvp.frame_sampling import FrameManifest, SampledFrame
 from open_storyline.mvp.creative_qa import CreativeQAArtifacts
+from open_storyline.mvp.fallbacks import compile_baseline_plan
 from open_storyline.mvp.ffmpega import FFMPEGAError
 from open_storyline.mvp.ninerouter import NineRouterAttempt, NineRouterError
 from open_storyline.mvp.pipeline import MVPJobProcessor
@@ -770,6 +771,27 @@ class MVPAgenticPipelineTests(unittest.IsolatedAsyncioTestCase):
                 execution_order.append("dry_run")
                 return dry_run_edit_plan_composition(*args, **kwargs)
 
+            compilation_calls = 0
+
+            def compile_with_new_authoritative_defect(*args, **kwargs):
+                nonlocal compilation_calls
+                compilation_calls += 1
+                result = compile_baseline_plan(*args, **kwargs)
+                if compilation_calls != 1:
+                    return result
+                payload = result.plan.to_dict()
+                layout = payload["clips"][0]["segments"][0]["layout"]
+                layout.update({"mode": "letterbox", "fallback": "letterbox"})
+                payload["requested_capabilities"] = [
+                    "letterbox",
+                    "hard_cut",
+                    "subtitles",
+                ]
+                return type(result)(
+                    plan=EditPlan.model_validate(payload),
+                    entries=result.entries,
+                )
+
             class OrderedRenderer(FakeAgenticRenderer):
                 def preflight_plan(self, **kwargs):
                     execution_order.append("ffmpeg_preflight")
@@ -824,6 +846,10 @@ class MVPAgenticPipelineTests(unittest.IsolatedAsyncioTestCase):
                 patch(
                     "open_storyline.mvp.pipeline.dry_run_edit_plan_composition",
                     side_effect=tracked_dry_run,
+                ),
+                patch(
+                    "open_storyline.mvp.pipeline.compile_baseline_plan",
+                    side_effect=compile_with_new_authoritative_defect,
                 ),
                 patch(
                     "open_storyline.mvp.pipeline.build_frame_quality_report",
@@ -922,7 +948,7 @@ class MVPAgenticPipelineTests(unittest.IsolatedAsyncioTestCase):
                     "asset_policy": "off",
                 },
             )
-            remote = FakeGeometryRepairClient(fail_calls=(1, 2))
+            remote = FakeGeometryRepairClient(fail_calls=(1,))
             processor = object.__new__(MVPJobProcessor)
             processor.config = config("render")
             processor.config.agentic_editing.baseline_fallbacks_enabled = True
@@ -991,19 +1017,19 @@ class MVPAgenticPipelineTests(unittest.IsolatedAsyncioTestCase):
                     await processor("6" * 32, store)
 
             self.assertEqual(caught.exception.code, "REPAIR_EXECUTION_DRY_RUN_FAILED")
-            self.assertEqual(len(remote.calls), 2)
+            self.assertEqual(len(remote.calls), 1)
             self.assertFalse((root / "output" / "short-01.mp4").exists())
             repair_report = json.loads(
                 (root / "output" / "repair_report.json").read_text(
                     encoding="utf-8"
                 )
             )
-            self.assertEqual(len(repair_report["attempt_ledger"]), 2)
+            self.assertEqual(len(repair_report["attempt_ledger"]), 1)
             self.assertEqual(
                 repair_report["summary"]["repair_invariant_violation_count"],
                 0,
             )
-            self.assertEqual(repair_report["summary"]["jobs_at_two_call_cap"], 1)
+            self.assertEqual(repair_report["summary"]["jobs_at_two_call_cap"], 0)
 
     async def test_enforced_plan_repair_is_batched_and_checkpointed_once(self):
         with TemporaryDirectory() as directory:

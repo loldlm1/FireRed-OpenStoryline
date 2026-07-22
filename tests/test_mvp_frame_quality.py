@@ -9,6 +9,8 @@ import unittest
 from unittest.mock import patch
 
 from open_storyline.mvp.creative_qa import QAInput
+from open_storyline.mvp.edit_plan import TimeWindow
+from open_storyline.mvp.ffmpeg_filters import build_reframe_filtergraph
 from open_storyline.mvp.frame_quality import (
     FRAME_QUALITY_VERSION,
     build_frame_quality_report,
@@ -288,8 +290,9 @@ class FrameQualityRenderTests(unittest.TestCase):
             generated = subprocess.run([
                 "ffmpeg", "-y", "-v", "error", "-f", "lavfi", "-i",
                 "testsrc2=size=320x180:rate=24:duration=3",
-                "-c:v", "libx264", "-preset", "ultrafast", "-crf", "10",
-                "-pix_fmt", "yuv420p", str(source),
+                "-f", "lavfi", "-i", "sine=frequency=440:sample_rate=16000:duration=3",
+                "-shortest", "-c:v", "libx264", "-preset", "ultrafast", "-crf", "10",
+                "-pix_fmt", "yuv420p", "-c:a", "aac", str(source),
             ], capture_output=True, text=True, check=False, timeout=120)
             self.assertEqual(generated.returncode, 0, generated.stderr)
 
@@ -315,6 +318,35 @@ class FrameQualityRenderTests(unittest.TestCase):
                 self.assertEqual(rendered.returncode, 0, rendered.stderr)
                 outputs[name] = output
 
+            fit_segment = SimpleNamespace(
+                source_window=TimeWindow(start_ms=0, end_ms=3000),
+                timeline_window=TimeWindow(start_ms=0, end_ms=3000),
+                strategy="fit",
+                crop=None,
+                overlays=(),
+                transition_kind="cut",
+                transition_duration_ms=0,
+                transition_name="hard_cut",
+                transition_color="black",
+            )
+            fit_graph, fit_video, fit_audio = build_reframe_filtergraph(
+                [fit_segment],
+                output_width=180,
+                output_height=320,
+                subtitle_filename=None,
+                has_audio=True,
+            )
+            fit_output = root / "fit.mp4"
+            fit_rendered = subprocess.run([
+                "ffmpeg", "-y", "-v", "error", "-i", str(source),
+                "-filter_complex", fit_graph,
+                "-map", f"[{fit_video}]", "-map", f"[{fit_audio}]",
+                "-c:v", "libx264", "-preset", "veryfast", "-crf", "23",
+                "-pix_fmt", "yuv420p", "-c:a", "aac", str(fit_output),
+            ], capture_output=True, text=True, check=False, timeout=120)
+            self.assertEqual(fit_rendered.returncode, 0, fit_rendered.stderr)
+            outputs["fit"] = fit_output
+
             fill = build_frame_quality_report(
                 [QAInput(1, outputs["fill"], 3000)],
                 source=source,
@@ -331,10 +363,18 @@ class FrameQualityRenderTests(unittest.TestCase):
                 expected_height=320,
                 timeout=60,
             )
-            intentional_fit = build_frame_quality_report(
+            intentional_letterbox = build_frame_quality_report(
                 [QAInput(1, outputs["letterbox"], 3000)],
                 source=source,
-                render_execution=execution(strategy="fit", expected_ratio=0.3125),
+                render_execution=execution(strategy="letterbox", expected_ratio=0.3125),
+                expected_width=180,
+                expected_height=320,
+                timeout=60,
+            )
+            intentional_fit = build_frame_quality_report(
+                [QAInput(1, outputs["fit"], 3000)],
+                source=source,
+                render_execution=execution(strategy="fit", expected_ratio=1.0),
                 expected_width=180,
                 expected_height=320,
                 timeout=60,
@@ -351,8 +391,16 @@ class FrameQualityRenderTests(unittest.TestCase):
         self.assertEqual(fill["version"], FRAME_QUALITY_VERSION)
         self.assertEqual(fill["status"], "pass")
         self.assertEqual(fill["clips"][0]["frame_rate"]["decoded_frames"], 72)
+        self.assertEqual(intentional_letterbox["status"], "pass")
+        self.assertEqual(
+            intentional_letterbox["clips"][0]["active_picture"]["summary"]["fill_samples"],
+            0,
+        )
         self.assertEqual(intentional_fit["status"], "pass")
-        self.assertEqual(intentional_fit["clips"][0]["active_picture"]["summary"]["fill_samples"], 0)
+        self.assertGreater(
+            intentional_fit["clips"][0]["active_picture"]["summary"]["fill_samples"],
+            0,
+        )
         incident_codes = {item["code"] for item in incident["findings"]}
         self.assertIn("ACTIVE_PICTURE_TOO_SMALL", incident_codes)
         self.assertAlmostEqual(

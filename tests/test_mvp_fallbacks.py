@@ -138,6 +138,39 @@ class BaselineFallbackTests(unittest.TestCase):
         self.assertEqual(result.entries[0].code, "VISUAL_REFRAME_FALLBACK")
         self.assertEqual(result.ledger()["status"], "with_limitations")
 
+    def test_active_picture_risk_replaces_letterbox_with_blurred_fit(self):
+        segment = EditSegment(
+            id="wide-source",
+            source_window=TimeWindow(start_ms=0, end_ms=4000),
+            timeline_window=TimeWindow(start_ms=0, end_ms=4000),
+            layout=LayoutSpec(
+                mode="letterbox",
+                fallback="letterbox",
+                allow_full_frame_fallback=True,
+            ),
+            reason="preserve the full landscape source",
+        )
+
+        result = compile_baseline_plan(
+            plan_with_segment(segment),
+            available_capabilities={"fit", "letterbox", "hard_cut", "subtitles"},
+            remaining_defects=(FallbackDirective(
+                code="PREDICTIVE_ACTIVE_PICTURE_RISK",
+                clip_index=1,
+                segment_id="wide-source",
+                attempt_evidenced=True,
+            ),),
+            enforce_attempt_gate=True,
+        )
+
+        compiled = result.plan.clips[0].segments[0]
+        self.assertEqual(compiled.layout.mode, "fit")
+        self.assertEqual(compiled.layout.fallback, "fit")
+        self.assertIn(
+            "VISUAL_REFRAME_FALLBACK",
+            {entry.code for entry in result.entries},
+        )
+
     def test_repairable_fallback_requires_attempt_evidence_and_is_segment_local(self):
         affected = EditSegment(
             id="affected",
