@@ -1,6 +1,7 @@
 **
 !.dockerignore
 !Dockerfile.remote
+!Dockerfile.ffmpega
 !Dockerfile.quality
 !requirements-remote.txt
 !requirements-quality.txt

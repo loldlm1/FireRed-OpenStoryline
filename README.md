@@ -57,8 +57,8 @@ progress, SSE reconnect, and polling fallback keep long-running work visible.
 To edit a different source video, create a new session.
 
 The service also includes PostgreSQL-backed browser sessions, resumable source
-uploads, direct Voxtral STT, GPT‑5.6 Sol planning, and an optional no-model
-ComfyUI-FFMPEGA pass. The reusable page remains disabled by default through
+uploads, direct Voxtral STT, GPT‑5.6 Sol planning, and an optional pinned,
+model-free FFMPEGA sidecar. The reusable page remains disabled by default through
 `OPENSTORYLINE_SESSION_WORKSPACE_MODE=legacy`; enabling it is a separately
 authorized rollout action.
 Production deployment uses Kamal with automatic server bootstrap, IP:port or

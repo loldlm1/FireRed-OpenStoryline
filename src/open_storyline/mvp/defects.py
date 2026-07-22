@@ -300,6 +300,7 @@ REGISTRY_V1_EXCLUSIONS = MappingProxyType({
         "PRIOR_QUALITY_EVIDENCE_UNAVAILABLE": "workspace retry request validation",
         "PRIOR_QUALITY_FEEDBACK_FLAG_REQUIRED": "workspace retry request validation",
         "PROMPT_RUN_CONFLICT": "workspace request conflict validation",
+        "PROMPT_RUN_TIMEOUT": "operator workspace rerun wait timeout",
         "PROMPT_VERSION_CONFLICT": "workspace request conflict validation",
         "PROMPT_VERSION_ID_INVALID": "internal identifier validation",
         "RETENTION_BATCH_INVALID": "operator retention batch validation",
@@ -318,6 +319,7 @@ REGISTRY_V1_EXCLUSIONS = MappingProxyType({
         "WORKSPACE_COMMAND_INVALID": "operator CLI validation",
         "WORKSPACE_BACKFILL_BUSY": "operator workspace backfill state",
         "WORKSPACE_BACKFILL_INVALID": "operator workspace backfill validation",
+        "WORKSPACE_RERUN_INVALID": "operator workspace rerun validation",
     }.items()
 })
 

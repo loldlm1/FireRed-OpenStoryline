@@ -237,6 +237,28 @@ run_mistral_release_gate() {
     || fail "direct-Mistral STT gate failed; kamal $command_name was not started"
 }
 
+run_ffmpega_release_gate() {
+  local command_name="$1"
+  local enabled="${OPENSTORYLINE_FFMPEGA_ENABLED:-false}"
+  case "${enabled,,}" in
+    false|0|no|off)
+      return
+      ;;
+    true|1|yes|on)
+      ;;
+    *)
+      fail "OPENSTORYLINE_FFMPEGA_ENABLED must be true or false"
+      ;;
+  esac
+
+  require_exact_value FFMPEGA_URL "http://openstoryline-mvp-ffmpega:8188"
+  require_exact_value \
+    FFMPEGA_REMOTE_OUTPUT_ROOT \
+    "${KAMAL_OUTPUTS_DIR:-/var/lib/openstoryline/outputs}"
+  printf 'Checking the pinned deterministic FFMPEGA service before kamal %s...\n' "$command_name"
+  "$ROOT_DIR/scripts/mvp-ffmpega-service.sh" readiness
+}
+
 validate_pexels_release_config() {
   local command_name="$1"
   local enabled="${OPENSTORYLINE_PEXELS_ENABLED:-false}"
@@ -455,6 +477,11 @@ if [[ "${1:-}" == "db" ]]; then
   exit 0
 fi
 
+if [[ "${1:-}" == "ffmpega" ]]; then
+  shift
+  exec "$ROOT_DIR/scripts/mvp-ffmpega-service.sh" "$@"
+fi
+
 if [[ "${1:-}" == "audit" || "${1:-}" == "retention" || "${1:-}" == "workspace" ]]; then
   admin_command="$1"
   shift
@@ -529,6 +556,7 @@ if [[ -n "$release_command" ]]; then
   validate_pexels_release_config "$release_command"
   run_ninerouter_release_gate "$release_command"
   run_mistral_release_gate "$release_command"
+  run_ffmpega_release_gate "$release_command"
 fi
 
 ensure_secrets_file

@@ -60,6 +60,20 @@ independent feature flags. They may become `true` only after their strict
 boundaries are present. FFMPEGA failure always uses native deterministic render
 fallback or fails safely; it never adds a semantic repair call.
 
+Before enabling FFMPEGA, deploy and verify the separate pinned, model-free
+service. It is private to the Kamal network and shares only the outputs root:
+
+```bash
+./bin/kamal-mvp ffmpega deploy
+./bin/kamal-mvp ffmpega readiness
+```
+
+The application release wrapper refuses an enabled FFMPEGA deployment unless
+the service is healthy, reports the pinned upstream commit, uses
+`http://openstoryline-mvp-ffmpega:8188`, and maps the exact
+`KAMAL_OUTPUTS_DIR`. Disable the application flag before stopping or rolling
+back the sidecar.
+
 ## Release and canary gate
 
 Before production enablement:

@@ -64,8 +64,8 @@ EFFECT_PARAMETER_INVENTORY: dict[str, dict[str, EffectParameter]] = {
     },
     "fade": {
         "type": EffectParameter("choice", "in", choices=("in", "out", "both")),
-        "start": EffectParameter("float", 0),
-        "duration": EffectParameter("float", 1),
+        "start": EffectParameter("time", 0),
+        "duration": EffectParameter("time", 1),
     },
     "film_grain": {
         "intensity": EffectParameter(

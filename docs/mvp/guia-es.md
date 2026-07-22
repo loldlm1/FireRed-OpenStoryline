@@ -423,29 +423,46 @@ ejecuta `./bin/kamal-mvp rollback VERSION_EXPLICITA` al release previo. Restaura
 sólo ante una migración incompatible revisada por separado; esta entrega no añade
 migraciones.
 
-## 8. Activa ComfyUI-FFMPEGA, si lo deseas
+## 8. Activa el servicio FFMPEGA determinista, si lo deseas
 
-El despliegue base ya incluye todos los componentes obligatorios. FFMPEGA es un
-servicio opcional separado: instala ComfyUI y
-<https://github.com/AEmotionStudio/ComfyUI-FFMPEGA> en el mismo VPS, hazlo
-escuchar en el puerto 8188 y dale acceso de lectura/escritura a
-`/var/lib/openstoryline/outputs`.
+El despliegue base ya incluye todos los componentes obligatorios. FFMPEGA corre
+como un sidecar opcional, privado y separado de la imagen web. El builder fija
+el código de <https://github.com/AEmotionStudio/ComfyUI-FFMPEGA> al commit
+`0cfe2db05df104f95c98cc45e11f129fa5ef5193`, instala sólo FFmpeg y el contrato
+Python necesario, y no instala Torch, Whisper, modelos ni la interfaz completa
+de ComfyUI. Primero construye, entrega y verifica el servicio:
 
-Después cambia:
+```bash
+./bin/kamal-mvp ffmpega deploy
+./bin/kamal-mvp ffmpega readiness
+```
+
+El contenedor corre sin root, sin puertos públicos, con filesystem raíz de sólo
+lectura, límites de CPU/memoria/procesos y acceso de lectura/escritura únicamente
+a `KAMAL_OUTPUTS_DIR`. Después cambia:
 
 ```dotenv
 OPENSTORYLINE_FFMPEGA_ENABLED=true
-FFMPEGA_URL=http://host.docker.internal:8188
+FFMPEGA_URL=http://openstoryline-mvp-ffmpega:8188
 FFMPEGA_REMOTE_OUTPUT_ROOT=/var/lib/openstoryline/outputs
 ```
 
-Y ejecuta `./bin/kamal-mvp deploy`. La configuración Kamal crea el alias
-`host.docker.internal` dentro del contenedor. El adaptador sólo permite una
-lista blanca de efectos FFmpeg deterministas, usa el modo manual sin LLM,
-prohíbe descargas de modelos y falla todo el trabajo si FFMPEGA falla.
+Y ejecuta `./bin/kamal-mvp deploy`. El release falla antes de Kamal cuando el
+sidecar no está saludable, el commit no coincide o las rutas compartidas no son
+exactas. El adaptador y el servicio validan la misma lista blanca tipada, usan
+modo manual sin LLM y prohíben descargas de modelos. Si planificación,
+ejecución, descubrimiento o validación de FFMPEGA falla, el trabajo conserva el
+primer render nativo reproducible y registra la limitación exacta.
 
-En un VPS sin GPU esta ruta determinista puede correr en CPU. Los efectos que
-requieran modelos de ComfyUI quedan fuera de este MVP remoto-only.
+En un VPS sin GPU esta ruta corre en CPU. Los efectos que requieran modelos de
+ComfyUI quedan fuera del MVP remoto-only. Para rollback usa, en orden:
+
+```bash
+# Primero desactiva OPENSTORYLINE_FFMPEGA_ENABLED y redeploya la aplicación.
+./bin/kamal-mvp ffmpega rollback
+# Si sólo necesitas detener el sidecar ya desactivado:
+./bin/kamal-mvp ffmpega stop
+```
 
 ## 9. Diagnóstico rápido
 

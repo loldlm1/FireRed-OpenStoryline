@@ -122,7 +122,7 @@ env:
     OPENSTORYLINE_TRUST_PROXY_HEADERS: "true"
 <% end %>
     OPENSTORYLINE_FFMPEGA_ENABLED: <%= ENV.fetch("OPENSTORYLINE_FFMPEGA_ENABLED", "false") %>
-    FFMPEGA_URL: <%= ENV.fetch("FFMPEGA_URL", "http://host.docker.internal:8188") %>
+    FFMPEGA_URL: <%= ENV.fetch("FFMPEGA_URL", "http://openstoryline-mvp-ffmpega:8188") %>
     FFMPEGA_LOCAL_OUTPUT_ROOT: /app/outputs
     FFMPEGA_REMOTE_OUTPUT_ROOT: "<%= ENV.fetch("FFMPEGA_REMOTE_OUTPUT_ROOT", "") %>"
   secret:

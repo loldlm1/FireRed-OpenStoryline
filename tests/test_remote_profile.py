@@ -36,6 +36,7 @@ class RemoteProfileTests(unittest.TestCase):
             set(dockerignore[1:]),
             {
                 "!.dockerignore",
+                "!Dockerfile.ffmpega",
                 "!Dockerfile.remote",
                 "!Dockerfile.quality",
                 "!requirements-remote.txt",

@@ -36,6 +36,8 @@ class FFMPEGAContractTests(unittest.TestCase):
     def test_inventory_is_complete_and_pinned(self):
         self.assertEqual(len(DETERMINISTIC_SKILLS), 26)
         self.assertEqual(len(AGENTIC_FINISHING_SKILLS), 21)
+        self.assertEqual(EFFECT_PARAMETER_INVENTORY["fade"]["start"].kind, "time")
+        self.assertEqual(EFFECT_PARAMETER_INVENTORY["fade"]["duration"].kind, "time")
         self.assertEqual(
             FFMPEGA_SOURCE_COMMIT,
             "0cfe2db05df104f95c98cc45e11f129fa5ef5193",

@@ -2,8 +2,8 @@
 
 **Generated**: 2026-07-21
 **Status**: Sprints 1-6, authorized production rollout, and sanitized canary
-validation complete; Sprint 7 planned for quality-first production proof and
-awaiting the pre-execution approval gate; pull request pending
+validation complete; Sprint 7 approved, locally implemented, and in staged
+production execution; pull request pending
 **Estimated Complexity**: High
 
 ## Overview
@@ -39,14 +39,14 @@ and already validated assets. No plan can honestly promise that a fallback
 preserves an unavailable enhancement itself.
 
 Sprint 7 extends the completed rollout by production-enabling semantic video QA
-and typed FFMPEGA finishing, then measuring whether the complete agentic path
-improves creative quality over the current baseline. Latency, token usage, and
-provider cost remain observable capacity signals rather than quality rejection
-thresholds while calls stay bounded, jobs complete inside operational timeouts,
-and the measured quality improvement is positive. A trustworthy-MVP claim must
-combine deterministic media evidence, model semantic evidence, independent
-paired review, and the existing statistical playable-output gate; the model is
-never the sole judge of its own work.
+and typed FFMPEGA finishing, then debugging, fixing, and improving every affected
+remote-MVP stage required to make the current uploaded session video succeed
+reliably with the latest prompt. Latency, token usage, and provider cost remain
+observable capacity signals rather than quality rejection thresholds while
+calls stay bounded, jobs complete inside operational timeouts, and the measured
+quality improvement is positive. The trustworthy-MVP gate combines deterministic
+media evidence, model semantic evidence, direct output inspection, and repeatable
+same-session behavior; the model is never the sole judge of its own work.
 
 ## Current Verified Context
 
@@ -126,8 +126,9 @@ recorded below.
   - Separate analysis-unavailable limitations from genuine source constraints
     and creative shortcomings so healthy production dependencies cannot hide
     behind a generic technical-pass limitation.
-  - Compare baseline and complete agentic outputs through blinded operator
-    review across representative video niches before making a quality claim.
+  - Compare baseline and complete agentic outputs for the current uploaded
+    session video, using the latest prompt and at most two targeted prompt
+    variants only when additional residual-risk evidence is required.
 - **Out of scope**:
   - The full local LangChain/MCP profile and `.storyline/skills/` behavior.
   - Multi-agent repair, open-ended autonomous loops, more than one semantic
@@ -1389,45 +1390,46 @@ schema compatibility review. No additive evidence is deleted.
 ## Sprint 7: Prove Quality-First Production Semantic QA And Agentic Finishing
 
 **Goal**: Production-enable strict semantic video QA and typed FFMPEGA effect
-execution, prove that the complete agentic path improves creative output over a
-controlled baseline without technical regressions, and collect enough diverse,
-sanitized evidence to support a trustworthy remote-MVP claim.
+execution, then debug, fix, and improve the complete remote-MVP path until the
+current uploaded session video produces correct, robust agentic output with the
+latest prompt and no known in-scope regression.
 
 **Dependencies**: Sprint 6 gate complete, the current production image healthy,
 the semantic and FFMPEGA strict-capability probes passing for the exact deployed
 route/model, FFMPEGA service/storage readiness verified, and explicit approval
 of this Sprint 7 title before implementation or production execution.
 
-**Tracked scope**: semantic-QA evidence selection and execution, FFMPEGA service
-and typed effect execution, limitation taxonomy, paired quality evals, private
-production canaries, outcome/claim metrics, browser presentation, rollout docs,
-deployment controls, and rollback evidence.
+**Tracked scope**: the affected remote-MVP upload/session, job, provider,
+planning, repair, rendering, semantic-QA, FFMPEGA, outcome, audit,
+preview/download, browser, deployment, observability, and rollback paths. Sprint
+7 is authorized to debug and fix defects discovered anywhere in those paths,
+with focused regression tests and preserved public contracts.
 
 **Commit**: `feat: prove quality-first agentic video editing`
 
 **Demo/Validation**:
 
-- Reuse the same authorized private session, immutable prompt version, and
-  source lineage to compare the current baseline, semantic-QA-only, and complete
-  semantic-QA-plus-FFMPEGA agentic paths without recording private values.
-- Run a representative canary matrix across interview, product presentation,
-  tutorial, cooking, trading/screen, multi-speaker, sparse-visual, and no-asset
-  cases using authorized private sources or sanitized fixtures.
+- Reuse the current authorized private session, uploaded source, immutable
+  lineage, and latest prompt without recording private values in Git or PR text.
+- Run the latest prompt first. Add only one or two targeted prompt variants when
+  a measured residual risk cannot be proven or disproven with the latest prompt.
 - Verify strict semantic responses, frame/evidence references, typed effect
   plans, actual effect execution, native-render fallback, output registration,
   playback/download, subtitles, technical media properties, and defect/audit
   attribution.
-- Run blinded paired operator review against the baseline. Semantic QA may
-  explain or prioritize evidence, but it cannot be the sole quality authority.
-- Continue the classified outcome cohort until the existing 99% Wilson gate is
-  satisfied. With zero observed failures, at least 381 classified outputs are
-  mathematically required for the 95% lower bound to reach 99%; any failure
-  increases the required sample.
+- Inspect and compare the rendered outputs directly against prompt intent,
+  deterministic evidence, semantic-QA findings, and the previously published
+  baseline. Semantic QA may explain or prioritize evidence, but it cannot be the
+  sole quality authority.
+- After the final code/config/prompt fix, require repeatable clean execution of
+  the latest prompt. The existing broad 99% Wilson gate remains reported but is
+  not a Sprint 7 blocker because this sprint makes a scoped same-session MVP
+  readiness claim rather than a cross-population reliability claim.
 
 **Quality-first cost policy**: Provider latency, tokens, and cost are recorded
 and attributed but do not fail Sprint 7 merely for exceeding the Sprint 6 review
-thresholds when the agentic variant demonstrates a statistically supported
-quality improvement. Hard call-count limits, payload bounds, provider/job
+thresholds when the agentic variant demonstrates a verified output-quality
+improvement. Hard call-count limits, payload bounds, provider/job
 timeouts, checkpoint idempotency, queue capacity, and kill switches remain
 mandatory. Additional spend without measured quality improvement fails the
 quality-value gate.
@@ -1440,11 +1442,22 @@ compatibility is implicated. If agentic quality regresses, set repair to
 schema, database, checkpoint, and artifact compatibility review. Retain all
 sanitized outcome, repair, semantic-QA, effect, and audit evidence.
 
-### Task 7.1: Define The Trustworthy-MVP Quality And Limitation Contract
+### Task 7.1: Debug And Harden The Complete Same-Session MVP Path
 
-- **Location**: outcome/defect policy, audit summaries, rollout documentation,
-  eval fixtures, and operator review rubric.
+- **Location**: all affected remote-MVP backend, provider, pipeline, renderer,
+  persistence, API, browser, deployment, tests, and documentation paths.
 - **Description**:
+  - Trace the current session from stored upload/source lineage through planning,
+    repair, render, semantic QA, FFMPEGA, promotion, registration, preview,
+    download, retry, and audit evidence.
+  - Reproduce every discovered failure with the smallest safe local fixture,
+    sanitized production diagnostic, or focused test before changing behavior.
+  - Fix in-scope implementation, prompt, schema, configuration, deployment,
+    observability, and browser defects discovered during Sprint 7. Preserve auth,
+    CSRF, job scoping, artifact safety, API/status shapes, and profile boundaries.
+  - Add focused regression coverage for each fixed defect and re-run adjacent
+    workflow tests. Do not defer a correctness defect merely because an output
+    remains technically playable.
   - Classify every published limitation as dependency/analysis unavailable,
     genuine source constraint, unresolved creative-quality gap, or technical
     blocker. A technical blocker remains unpublished.
@@ -1456,21 +1469,26 @@ sanitized outcome, repair, semantic-QA, effect, and audit evidence.
     visual evidence, an eligible repair fails its quality floor, or the requested
     enhancement cannot be produced safely. Publication remains truthful rather
     than pretending strict creative approval.
-  - Define a blinded paired-review rubric for intent fidelity, composition and
-    subject visibility, pacing/story continuity, caption readability, effect
-    appropriateness, artifact absence, and overall preference.
-  - Attribute each result to source niche, immutable prompt, model/reasoning,
+  - Use a direct comparison rubric for intent fidelity, composition and subject
+    visibility, pacing/story continuity, caption readability, effect
+    appropriateness, artifact absence, and overall correctness.
+  - Attribute each result to source characteristics, immutable prompt, model/reasoning,
     schema/prompt/registry/catalog versions, renderer, flags, and review rubric
     without persisting private content.
 - **Acceptance criteria**:
+  - Every Sprint 7 defect has a reproducible diagnosis, implemented fix or
+    explicit external blocker, regression coverage, and sanitized evidence.
+  - The same session remains authoritative; no replacement upload or unrelated
+    niche dataset is required to pass the sprint.
   - API, audit, and browser presentation distinguish technical status, semantic
     verdict, delivery decision, and limitation class without color-only cues.
   - Healthy-path dependency/analysis-unavailable limitation count is zero.
   - Technical-pass is never presented as synonymous with strict creative QA.
-  - The quality claim requires deterministic checks plus independent paired
-    review; semantic self-evaluation alone cannot pass the gate.
+  - The quality claim requires deterministic checks plus direct rendered-output
+    inspection; semantic self-evaluation alone cannot pass the gate.
 - **Validation**:
-  - Registry/outcome/audit/UI tests plus sanitized limitation fixtures.
+  - Focused regression tests for every fix, registry/outcome/audit/UI tests,
+    sanitized limitation fixtures, and same-session end-to-end verification.
 - **Rollback**: Keep raw codes and prior outcome readers; hide additive Sprint 7
   presentation if necessary without reclassifying historical evidence.
 
@@ -1504,7 +1522,7 @@ sanitized outcome, repair, semantic-QA, effect, and audit evidence.
     attribution are visible in sanitized audit evidence.
 - **Validation**:
   - Focused semantic-QA unit/integration suite, live strict probe, private
-    canary, and blinded operator comparison against deterministic evidence.
+    canary, and direct rendered-output comparison against deterministic evidence.
 - **Rollback**: Set `OPENSTORYLINE_SEMANTIC_QA_ENABLED=false`; retain strict
   schema code, redacted evidence, deterministic QA, and playable delivery.
 
@@ -1527,7 +1545,7 @@ sanitized outcome, repair, semantic-QA, effect, and audit evidence.
     planning, service execution, output discovery, validation, or registration
     fails. FFMPEGA never receives an independent LLM repair loop.
   - Include no-op and over-decoration controls so agentic finishing is accepted
-    only when it is relevant to the prompt and improves or preserves the paired
+    only when it is relevant to the prompt and improves or preserves the direct
     quality score.
 - **Acceptance criteria**:
   - Every healthy-path requested effect has a valid typed plan and verified
@@ -1537,8 +1555,9 @@ sanitized outcome, repair, semantic-QA, effect, and audit evidence.
     provider/service payload containing private media data is persisted.
   - Effect execution introduces zero technical blockers and zero new accepted
     defect codes compared with the native baseline.
-  - Agentic finishing wins the blinded quality-value gate; extra effects that do
-    not improve the rubric are omitted rather than rewarded for complexity.
+  - Agentic finishing passes the direct quality-value comparison; extra effects
+    that do not improve the current output are omitted rather than rewarded for
+    complexity.
 - **Validation**:
   - Every-effect contract/integration tests, service readiness and failure
     canaries, media probes, path-security checks, native-fallback comparison,
@@ -1546,44 +1565,44 @@ sanitized outcome, repair, semantic-QA, effect, and audit evidence.
 - **Rollback**: Set `OPENSTORYLINE_FFMPEGA_ENABLED=false`; retain the native
   output, typed contracts, omission evidence, and semantic QA independently.
 
-### Task 7.4: Run The Paired Quality-First Production Cohort
+### Task 7.4: Run Iterative Same-Session Production QA
 
 - **Location**: private operator procedure, outcome/audit summaries, eval
   fixtures, browser QA, and sanitized Sprint 7 evidence record.
 - **Description**:
-  - For the same session/prompt proof, produce immutable paired variants with
-    matched source lineage: baseline, semantic-QA-only, and complete agentic
-    finishing. Do not overwrite or mutate prior registered outputs.
-  - Run at least 40 blinded baseline-versus-agentic paired reviews, covering all
-    eight representative niches with at least five pairs per niche. Randomize
-    presentation order and hide variant labels during scoring.
-  - Require the complete agentic variant to win a majority of non-tied pairs and
-    the 95% Wilson lower bound for its preference rate to exceed 0.50. Report
-    ties and per-niche results rather than hiding weak categories in an overall
-    average.
-  - Continue production-classified outputs until `claim_ready=true`; report the
-    actual sample, failures, Wilson interval, limitation distribution, retry and
+  - Produce immutable same-session variants with matched uploaded source lineage:
+    the latest prompt first, then semantic-QA/FFMPEGA/repaired reruns required by
+    discovered fixes. Do not overwrite or mutate prior registered outputs.
+  - After the last implementation, configuration, or prompt fix, run the latest
+    prompt until two consecutive outputs pass the complete deterministic,
+    semantic, effect, playback, audit, and direct-inspection gate.
+  - Use at most one or two additional prompt versions only when a specific
+    residual risk needs targeted evidence, such as asset selection, pacing,
+    subject framing, captions, or effect appropriateness. Record why each variant
+    was necessary and stop when the risk is resolved or reproduced.
+  - Report the actual attempts, failures, limitation distribution, retry and
     fallback rates, semantic validity, FFMPEGA execution/omission, new defects,
-    latency, tokens, and available provider cost.
+    latency, tokens, and available provider cost. Continue to report the broad
+    Wilson gate honestly without requiring an unrelated large cohort.
   - Verify authenticated preview/download, mobile/desktop outcome details,
     Spanish/English limitation text, logs, health, queue behavior, PostgreSQL,
-    backup/restore readiness, and rollback switches during the cohort.
+    backup/restore readiness, and rollback switches during the QA attempts.
 - **Acceptance criteria**:
-  - `claim_ready=true`, with the 95% playable-output lower bound at or above 99%,
-    before making the 99% reliability statement.
-  - Paired creative preference passes the majority and Wilson-lower-bound gate,
-    with no niche showing a systematic technical or safety regression.
+  - Two consecutive latest-prompt outputs pass after the final fix, with no
+    intervening code, config, schema, model, source, or prompt change.
+  - Any targeted prompt variants pass their named residual-risk checks without
+    technical, privacy, authorization, or adjacent-workflow regression.
   - Accepted repairs and finishing introduce zero new defects; all technically
     valid candidates remain registered and playable.
   - Healthy-path semantic/asset-analysis unavailable limitations are zero;
     remaining creative limitations are genuine, specific, and reviewable.
-  - Latency/token/cost increases are accepted only with measured quality lift,
+  - Latency/token/cost increases are accepted only with verified quality lift,
     bounded execution, stable queue health, and explicit operator approval.
 - **Validation**:
   - Sanitized outcome/defect audit reports, deterministic artifact verification,
-    blinded rubric results, browser QA, production health/log observation, and
+    direct comparison results, browser QA, production health/log observation, and
     database backup/restore evidence.
-- **Rollback**: Stop the cohort, disable FFMPEGA, disable semantic QA, and keep
+- **Rollback**: Stop production QA, disable FFMPEGA, disable semantic QA, and keep
   prior playable outputs plus all redacted evidence for diagnosis.
 
 ### Task 7.5: Close The Trustworthy-MVP Release Gate
@@ -1592,8 +1611,8 @@ sanitized outcome, repair, semantic-QA, effect, and audit evidence.
   history, PR evidence, and operator handoff.
 - **Description**:
   - Publish a sanitized claim table separating deterministic technical proof,
-    statistical playable reliability, semantic-QA validity, paired creative
-    preference, limitations, latency/tokens/cost, and untested boundaries.
+    same-session repeatability, semantic-QA validity, direct creative-quality
+    comparison, limitations, latency/tokens/cost, and untested boundaries.
   - Keep `claim_ready` evidence-only. Explicit operator approval remains required
     to retain production flags after the canary and to make any public claim.
   - Document incident thresholds for semantic invalidity, FFMPEGA service/path
@@ -1616,13 +1635,17 @@ sanitized outcome, repair, semantic-QA, effect, and audit evidence.
 
 ### Sprint 7 Gate
 
-- [ ] The Sprint 7 title is presented and explicitly approved before execution.
+- [x] The Sprint 7 title is presented and explicitly approved before execution.
 - [ ] All Sprint 7 tasks complete.
 - [ ] Production semantic QA and typed FFMPEGA execution pass authorized
   canaries for the exact deployed route, model, service, schema, and image.
 - [ ] Healthy-path analysis-unavailable limitations are zero.
-- [ ] The blinded paired quality gate passes across every representative niche.
-- [ ] `claim_ready=true`; no 99% reliability statement is made before it passes.
+- [ ] The latest prompt produces two consecutive fully passing same-session
+  outputs after the final fix.
+- [ ] No more than two additional prompt versions are used, and only when a named
+  residual risk requires them.
+- [ ] The broad `claim_ready` value and Wilson interval remain reported; no 99%
+  cross-population reliability statement is made unless that separate gate passes.
 - [ ] Latency/token/cost increases have measured quality lift and remain bounded.
 - [ ] Full integration, security/privacy, browser, database, release, health,
   backup/restore, observability, and rollback validation passes.
@@ -1660,8 +1683,9 @@ sanitized outcome, repair, semantic-QA, effect, and audit evidence.
     navigation, and console cleanliness.
   - Optional authorized live 9Router strict-schema probe using no private data.
   - Optional authorized private production canary with sanitized reporting.
-  - Sprint 7 requires blinded paired baseline-versus-agentic review across all
-    representative niches, plus semantic-QA and FFMPEGA production canaries.
+  - Sprint 7 requires iterative same-session output inspection using the latest
+    prompt plus at most two evidence-driven variants, with semantic-QA and
+    FFMPEGA production canaries.
 - **Security/privacy**:
   - Stable schemas contain no job-private values. Repair reports, checkpoints,
     events, logs, screenshots, audit summaries, and persisted fixtures expose no
@@ -1680,7 +1704,7 @@ sanitized outcome, repair, semantic-QA, effect, and audit evidence.
     visual repair, evidence refresh, and plan repair.
   - Stage-specific checkpoints prevent duplicate spending after worker recovery.
   - Sprint 7 treats latency/token/cost thresholds as review signals rather than
-    quality blockers when paired evidence proves improvement, but it never
+    quality blockers when same-session evidence proves improvement, but it never
     removes bounded calls, timeouts, idempotency, queue controls, or kill switches.
 - **Accessibility**:
   - Outcome and repair status are not color-only; raw code and explanatory text
@@ -1697,8 +1721,9 @@ sanitized outcome, repair, semantic-QA, effect, and audit evidence.
   - Production/provider calls remain opt-in.
   - Semantic QA and FFMPEGA enable independently, in order, only after their
     exact strict boundaries, service dependencies, fallback, and rollback pass.
-  - Trustworthy-MVP claim language requires both the playable-output confidence
-    gate and independent paired creative-quality evidence.
+  - Trustworthy-MVP claim language is scoped to the current uploaded source and
+    tested prompt versions unless the broader playable-output confidence gate
+    separately passes.
 
 ## Risks And Gotchas
 
@@ -1723,11 +1748,11 @@ sanitized outcome, repair, semantic-QA, effect, and audit evidence.
 | Repair duplicates after worker interruption | Additional cost and latency | Fingerprinted `visual_repair` and `plan_repair` checkpoints and idempotent resume | Recovery tests show no repeated stage call |
 | JSON-backed agentic audit becomes too slow | Agents cannot query defect trends within bounded latency | Bounded indexed job selection, compact outcome/repair documents, measured thresholds, future normalized backfill gate | `audit defects` limit/latency tests remain within documented bounds |
 | PR #11 merged without formal GitHub checks | Baseline confidence depends on recorded manual evidence | Preserve the PR validation record and rerun focused regressions in every sprint | New sprint gates pass from merge SHA `dae7366` |
-| Semantic QA grades work produced by the same model family | Self-evaluation bias can overstate creative quality | Keep deterministic validation authoritative and require randomized blinded operator comparison | Paired preference gate passes independently of semantic verdict |
+| Semantic QA grades work produced by the same model family | Self-evaluation bias can overstate creative quality | Keep deterministic validation authoritative and directly inspect rendered output against prompt intent | Same-session output gate passes independently of semantic verdict |
 | Healthy dependency outage is mislabeled as an acceptable creative limitation | The MVP appears successful while creative analysis never ran | Separate dependency-unavailable, source-constraint, creative-gap, and technical classes | Healthy-path analysis-unavailable count is zero |
 | FFMPEGA service, queue, or shared-path failure loses the playable video | Agentic finishing reduces reliability | Preserve/register native render first, constrain paths, and fail back without semantic repair | Failure canaries retain playable native output and exact audit code |
-| More tokens/effects are mistaken for better editing | Cost and visual complexity rise without user value | Require paired quality lift and omit no-op or over-decoration effects | Agentic preference Wilson lower bound exceeds 0.50 and per-niche results remain healthy |
-| A small or homogeneous canary is presented as proof | Reliability/quality claim does not generalize | Use the existing 99% Wilson gate plus stratified paired review across eight niches | `claim_ready=true`, sample/failures reported, and every niche represented |
+| More tokens/effects are mistaken for better editing | Cost and visual complexity rise without user value | Require direct quality lift and omit no-op or over-decoration effects | Latest-prompt output improves while call counts remain bounded |
+| Same-session evidence is presented as universal proof | Reliability/quality claim does not generalize to unseen sources | Scope Sprint 7 claims to the uploaded video and tested prompts; continue reporting the separate Wilson gate | PR and docs name the tested source/prompt scope and untested boundaries |
 
 ## Rollback Plan
 
@@ -1764,24 +1789,27 @@ sanitized outcome, repair, semantic-QA, effect, and audit evidence.
 3. Reconfirm the production image, database revision, provider route/model,
    strict boundaries, FFMPEGA service, private-session authorization, backup,
    health, and rollback baseline.
-4. Implement Task 7.1 and the offline/test portions of Tasks 7.2-7.3 before
-   changing production flags.
+4. Trace and debug the complete current-session path, implementing Task 7.1 and
+   the offline/test portions of Tasks 7.2-7.3 before changing production flags.
 5. Run focused, full local, and connected-PostgreSQL validation; commit no
    production/private evidence.
 6. Enable semantic QA first, run and record its authorized sanitized canary, and
    roll back immediately if its gate fails.
 7. Enable FFMPEGA second, run service/failure/native-fallback canaries, and roll
    back immediately if its gate fails.
-8. Run the paired production cohort and continue the classified sample until
-   the quality and statistical claim gates pass or a stop condition is reached.
+8. Run iterative current-session production QA with the latest prompt. Fix and
+   retry defects, require two consecutive passing outputs after the final fix,
+   and use at most two targeted prompt variants when residual-risk evidence
+   requires them.
 9. Complete release, privacy, browser, database, health, backup/restore,
    observability, and rollback review.
 10. Create exactly one Sprint 7 implementation commit; keep any post-gate
     production fix separate and explicit.
 11. Push the branch and update the existing fork PR with sanitized evidence only
     after the Sprint 7 gate passes.
-12. Never describe a partial canary, model self-score, or planned result as a
-    completed trustworthy-MVP proof.
+12. Scope the trustworthy-MVP result to the current uploaded source and tested
+    prompts; never describe a partial canary, model self-score, or planned result
+    as universal proof.
 
 ## Completion Checklist
 
@@ -1816,5 +1844,7 @@ sanitized outcome, repair, semantic-QA, effect, and audit evidence.
 - [ ] Sprint 7 production semantic QA passes strict and semantic validation.
 - [ ] Sprint 7 typed FFMPEGA execution and native fallback pass production
   canaries without losing a playable output.
-- [ ] Sprint 7 paired creative-quality and 99% playable-output confidence gates
-  pass before the trustworthy-MVP claim is made.
+- [ ] Sprint 7 latest-prompt same-session output passes twice consecutively after
+  the final fix; targeted prompt variants are used only when required.
+- [ ] The trustworthy-MVP claim remains scoped to the tested source/prompts until
+  the separate 99% playable-output confidence gate passes.

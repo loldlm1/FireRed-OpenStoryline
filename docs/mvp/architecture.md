@@ -128,6 +128,14 @@ isolated so upstream behavior can continue to be merged into this fork.
   `OPENSTORYLINE_SEMANTIC_QA_MAX_FRAMES`, stores no frame bytes or raw provider
   body, cannot authorize actions or modify the edit plan, and degrades to an
   unavailable review note on provider failure.
+- Optional FFMPEGA finishing runs in a separate, non-root, model-free container
+  built from pinned upstream commit
+  `0cfe2db05df104f95c98cc45e11f129fa5ef5193`. The service exposes only the
+  required private prompt/history API on the Kamal network, validates the typed
+  deterministic allowlist again, prohibits raw FFmpeg/model/vision paths, and
+  can access only `KAMAL_OUTPUTS_DIR`. It is deployed and health-checked with
+  `./bin/kamal-mvp ffmpega deploy`; the web image remains unchanged and keeps
+  the native render when the optional finishing pass fails.
 - Cross-niche regression fixtures under `tests/fixtures/mvp_agentic/` contain
   only synthetic schema expectations. The private production session
   `Sesion prueba 1` is an operator-only regression gate and its media,

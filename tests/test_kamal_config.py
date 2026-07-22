@@ -239,6 +239,10 @@ class KamalConfigTests(unittest.TestCase):
         self.assertIs(config["env"]["clear"]["OPENSTORYLINE_SEMANTIC_QA_ENABLED"], False)
         self.assertEqual(config["env"]["clear"]["OPENSTORYLINE_SEMANTIC_QA_MAX_FRAMES"], 4)
         self.assertEqual(
+            config["env"]["clear"]["FFMPEGA_URL"],
+            "http://openstoryline-mvp-ffmpega:8188",
+        )
+        self.assertEqual(
             config["env"]["clear"]["OPENSTORYLINE_RENDER_QUALITY_PROFILE"],
             "high",
         )
@@ -332,6 +336,21 @@ class KamalConfigTests(unittest.TestCase):
         self.assertIn("require_value OPENSTORYLINE_PEXELS_LICENSE_REVIEWED_AT", wrapper)
         self.assertIn("PexelsClient.from_config", wrapper)
         self.assertNotIn("api.pexels.com/v1/search", wrapper)
+
+    def test_ffmpega_release_gate_requires_the_private_pinned_service(self):
+        wrapper = (ROOT / "bin" / "kamal-mvp").read_text(encoding="utf-8")
+        service = (ROOT / "scripts" / "mvp-ffmpega-service.sh").read_text(
+            encoding="utf-8"
+        )
+
+        self.assertIn('require_exact_value FFMPEGA_URL "http://openstoryline-mvp-ffmpega:8188"', wrapper)
+        self.assertIn('run_ffmpega_release_gate "$release_command"', wrapper)
+        self.assertIn('"${1:-}" == "ffmpega"', wrapper)
+        self.assertIn("0cfe2db05df104f95c98cc45e11f129fa5ef5193", service)
+        self.assertIn("--security-opt no-new-privileges", service)
+        self.assertIn("--cap-drop ALL", service)
+        self.assertIn("--read-only", service)
+        self.assertNotIn("--publish", service)
 
     def test_postgres_accessory_is_private_persistent_and_health_checked(self):
         config = yaml.safe_load(render_sample())
