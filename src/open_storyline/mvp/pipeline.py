@@ -1701,12 +1701,16 @@ class MVPJobProcessor:
                     ]
                     try:
                         validate_creative_intent_conformance(candidate, creative_intent)
-                    except ValueError:
+                    except ValueError as exc:
+                        intent_evidence = creative_intent_conformance_evidence(exc)
                         findings.append(make_repair_finding(
                             "EDIT_PLAN_INTENT_MISMATCH",
                             clip_index=1,
                             objective=True,
-                            values={"observed": "intent_mismatch"},
+                            values={
+                                "observed": "intent_mismatch",
+                                **intent_evidence,
+                            },
                             source="creative_intent",
                         ))
                     return candidate_preflight, findings
@@ -1803,6 +1807,7 @@ class MVPJobProcessor:
                             "asset_policy": effective_asset_policy,
                             "stock_policy": effective_stock_policy,
                             "subtitles_required": True,
+                            "creative_intent": creative_intent.to_dict(),
                         },
                         editing_prompt=state["prompt"],
                         transcript_excerpts=tuple(excerpts),
@@ -2441,6 +2446,7 @@ class MVPJobProcessor:
                                         agentic_config.max_assets_per_clip
                                     ),
                                     "subtitles_required": True,
+                                    "creative_intent": creative_intent.to_dict(),
                                 },
                                 editing_prompt=state["prompt"],
                                 transcript_excerpts=tuple(excerpts),
@@ -2989,46 +2995,39 @@ class MVPJobProcessor:
                                 "REPAIR_SAFE_BASELINE_INVALID",
                                 "the bounded recovery retained a non-executable composition defect",
                             )
-            if proposed_edit_plan.degraded:
+            try:
+                creative_conformance = validate_creative_intent_conformance(
+                    edit_plan,
+                    creative_intent,
+                ).to_dict()
+            except ValueError as exc:
+                if not (server_mode == "render" and fallback_enabled):
+                    raise EditPlanError(
+                        "EDIT_PLAN_INTENT_MISMATCH",
+                        str(exc),
+                        evidence={
+                            "intent_conformance": (
+                                creative_intent_conformance_evidence(exc)
+                            ),
+                        },
+                    ) from exc
                 creative_conformance = {
                     "version": creative_intent.version,
                     "status": "degraded",
-                    "error_code": "EDIT_PLAN_REPAIR_EXHAUSTED",
+                    "error_code": "EDIT_PLAN_INTENT_MISMATCH",
+                    "evidence": creative_intent_conformance_evidence(exc),
                 }
-            else:
-                try:
-                    creative_conformance = validate_creative_intent_conformance(
-                        edit_plan,
-                        creative_intent,
-                    ).to_dict()
-                except ValueError as exc:
-                    if not (server_mode == "render" and fallback_enabled):
-                        raise EditPlanError(
-                            "EDIT_PLAN_INTENT_MISMATCH",
-                            str(exc),
-                            evidence={
-                                "intent_conformance": (
-                                    creative_intent_conformance_evidence(exc)
-                                ),
-                            },
-                        ) from exc
-                    creative_conformance = {
-                        "version": creative_intent.version,
-                        "status": "degraded",
-                        "error_code": "EDIT_PLAN_INTENT_MISMATCH",
-                        "evidence": creative_intent_conformance_evidence(exc),
-                    }
-                    fallback_entries = merge_fallback_entries(
-                        fallback_entries,
-                        (FallbackEntry(
-                            code="CREATIVE_INTENT_UNMET",
-                            clip_index=1,
-                            segment_id="plan",
-                            requested="creative_intent",
-                            executed="validated_baseline_plan",
-                            reason="The proposed plan did not fully satisfy the creative intent contract.",
-                        ),),
-                    )
+                fallback_entries = merge_fallback_entries(
+                    fallback_entries,
+                    (FallbackEntry(
+                        code="CREATIVE_INTENT_UNMET",
+                        clip_index=1,
+                        segment_id="plan",
+                        requested="creative_intent",
+                        executed="validated_baseline_plan",
+                        reason="The final plan did not fully satisfy the creative intent contract.",
+                    ),),
+                )
             await activity.emit_safely(
                 job_id,
                 stage="planning_agentic_edit",
@@ -3787,6 +3786,7 @@ class MVPJobProcessor:
                         inputs=qa_inputs,
                         edit_plan=edit_plan.to_dict(),
                         render_execution=agentic_result.execution,
+                        intent_conformance=creative_conformance,
                         resolved_assets=asset_result.paths,
                         expected_width=render_settings.width,
                         expected_height=render_settings.height,

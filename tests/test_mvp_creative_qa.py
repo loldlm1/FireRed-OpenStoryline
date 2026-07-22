@@ -175,6 +175,34 @@ class CreativeQATests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(report["operations"]["conditional"], ["focus_zoom"])
         self.assertEqual(report["operations"]["missing"], [])
 
+    def test_conformance_blocks_a_truthfully_reported_unmet_creative_intent(self):
+        report = build_creative_conformance_report(
+            edit_plan=edit_plan(),
+            render_execution=execution(),
+            intent_conformance={
+                "version": "creative_intent.v2",
+                "status": "degraded",
+                "error_code": "EDIT_PLAN_INTENT_MISMATCH",
+                "evidence": {
+                    "constraint_code": "opening_title_invalid",
+                    "intent_id": "prompt-opening-title",
+                },
+            },
+            strict=True,
+        )
+
+        self.assertEqual(report["status"], "blocker")
+        self.assertEqual(report["intent_conformance"], {
+            "status": "degraded",
+            "error_code": "EDIT_PLAN_INTENT_MISMATCH",
+            "constraint_code": "opening_title_invalid",
+            "intent_id": "prompt-opening-title",
+        })
+        self.assertIn(
+            "creative_intent_unmet",
+            {item["code"] for item in report["findings"]},
+        )
+
     def test_duplicate_asset_visibility_blocks_conformance(self):
         rendered = execution(with_asset=True)
         duplicate = deepcopy(rendered["clips"][0]["segments"][0]["overlays"][0])
@@ -319,6 +347,10 @@ class CreativeQATests(unittest.IsolatedAsyncioTestCase):
                     inputs=[source],
                     edit_plan=edit_plan(),
                     render_execution=execution(),
+                    intent_conformance={
+                        "version": "creative_intent.v2",
+                        "status": "conformant",
+                    },
                     expected_width=180,
                     expected_height=320,
                     strict=True,
@@ -333,6 +365,10 @@ class CreativeQATests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(conformance["version"], CREATIVE_CONFORMANCE_VERSION)
             self.assertEqual(conformance["asset_visibility"]["status"], "pass")
             self.assertEqual(conformance["semantic_review"]["status"], "disabled")
+            self.assertEqual(
+                conformance["intent_conformance"]["status"],
+                "conformant",
+            )
 
     def test_environment_controls_are_strict_and_bounded(self):
         config = SimpleNamespace(

@@ -731,6 +731,15 @@ def _derive_operation_intent_mappings(
         for segment in segments
         if isinstance(segment, dict) and segment.get("id")
     }
+    text_overlays = {
+        str(overlay.get("id")): overlay
+        for segment in segments
+        if isinstance(segment, dict)
+        for overlay in segment.get("overlays") or []
+        if isinstance(overlay, dict)
+        and overlay.get("id")
+        and overlay.get("kind") == "text"
+    }
     operation_intents = {
         item.id: item for item in creative_intent.operation_intents
     }
@@ -744,7 +753,7 @@ def _derive_operation_intent_mappings(
         current_ids = current_ids if isinstance(current_ids, (list, tuple)) else []
         if intent.kind == "footer_captions":
             executable_ids = segment_ids
-        else:
+        elif intent.kind in {"portrait_reframe", "reframe_sequence"}:
             executable_ids = {
                 str(segment.get("id"))
                 for segment in segments
@@ -753,12 +762,45 @@ def _derive_operation_intent_mappings(
                 and segment["layout"].get("mode") == "crop"
                 and segment.get("id")
             }
+        elif intent.kind == "opening_title":
+            executable_ids = {
+                overlay_id
+                for overlay_id, overlay in text_overlays.items()
+                if (
+                    (window := _window_bounds(overlay.get("timeline_window")))
+                    and window[0] <= intent.start_max_ms
+                    and intent.duration_min_ms
+                    <= window[1] - window[0]
+                    <= intent.duration_max_ms
+                )
+            }
+        elif intent.kind == "restrained_transitions":
+            executable_ids = {
+                str(segment.get("id"))
+                for index, segment in enumerate(segments)
+                if index > 0
+                and isinstance(segment, dict)
+                and segment.get("id")
+                and isinstance(segment.get("transition_in"), dict)
+                and segment["transition_in"].get("kind") in {"fade", "xfade"}
+                and isinstance(segment["transition_in"].get("duration_ms"), int)
+                and intent.duration_min_ms
+                <= segment["transition_in"]["duration_ms"]
+                <= intent.duration_max_ms
+            }
+        else:
+            executable_ids = set()
+        count_valid = intent.count_min <= len(current_ids) <= intent.count_max
         current_mapping_valid = (
             bool(current_ids)
             and all(isinstance(item, str) for item in current_ids)
             and set(current_ids) <= executable_ids
+            and count_valid
         )
-        if executable_ids and not current_mapping_valid:
+        executable_count_valid = (
+            intent.count_min <= len(executable_ids) <= intent.count_max
+        )
+        if executable_ids and executable_count_valid and not current_mapping_valid:
             decision["operation_ids"] = sorted(executable_ids)
 
 
@@ -1540,6 +1582,9 @@ class AgenticEditPlanner:
                 "Use only the asset kinds and providers explicitly available in asset_providers.",
                 "Every creative_intent requirement needs an explicit intent_decision.",
                 "Required asset intent must map exact-count asset_requests to executed image overlays.",
+                "Opening-title intent must map one early text overlay that satisfies its timing bounds.",
+                "Reframe-sequence intent must map the requested bounded count of distinct crop or focus-zoom segments.",
+                "Restrained-transition intent must map non-initial fade or xfade segments within its duration bounds.",
                 "Required intent cannot be omitted; optional omission reasons are allowlisted by the schema.",
                 "Crop/focus segments should use same-window track evidence spanning the segment.",
                 "A fit or letterbox crop fallback is valid only with allow_full_frame_fallback=true.",

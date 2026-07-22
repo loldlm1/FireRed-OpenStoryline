@@ -1308,7 +1308,7 @@ class MVPAgenticPipelineTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(manifest["agentic"]["edit_planner"]["schema_version"], "edit_plan.v2")
             self.assertEqual(
                 manifest["agentic"]["edit_planner"]["prompt_version"],
-                "mvp-agentic-edit-plan.v8",
+                "mvp-agentic-edit-plan.v9",
             )
             registered_names = [name for name, _kind in store.registered]
             self.assertLess(

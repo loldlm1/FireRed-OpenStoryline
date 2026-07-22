@@ -200,6 +200,27 @@ class RenderPromotionTests(unittest.TestCase):
         self.assertEqual(mixed["delivery_decision"], "withhold_technical")
         self.assertFalse(mixed["download_available"])
 
+    def test_unmet_creative_intent_is_published_only_as_a_limitation(self):
+        report = build_render_promotion_report(
+            mode="enforce",
+            delivery="technical_pass_guaranteed",
+            frame_quality={"status": "pass", "findings": []},
+            render_qa={"status": "pass", "findings": []},
+            creative_conformance={
+                "status": "blocker",
+                "findings": [{
+                    "code": "creative_intent_unmet",
+                    "severity": "blocker",
+                }],
+            },
+            caption_footprints=[],
+        )
+
+        self.assertEqual(report["strict_decision"], "block")
+        self.assertEqual(report["delivery_decision"], "publish_with_limitations")
+        self.assertEqual(report["creative_limitation_codes"], ["CREATIVE_INTENT_UNMET"])
+        self.assertTrue(report["download_available"])
+
     def test_baseline_policy_blocks_missing_frame_evidence_and_structural_defects(self):
         report = build_render_promotion_report(
             mode="enforce",

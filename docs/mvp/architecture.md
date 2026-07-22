@@ -117,6 +117,15 @@ isolated so upstream behavior can continue to be merged into this fork.
   visual holds, attention gaps, and output-aligned subtitle cadence.
 - Conformance evidence compares validated planned operations and requested
   assets with executed operations, used assets, and explained fallbacks.
+- `creative_intent.v2` folds accents for bounded English/Spanish requirement
+  detection and turns explicit opening-title, 2-4 reframe/zoom, and restrained
+  transition requests into executable count and timing contracts. Missing
+  operations enter the same LLM-first plan-repair batch as other objective
+  pre-render defects.
+- Final post-render conformance also consumes the plan-level intent verdict. If
+  a repaired or deterministic baseline still cannot satisfy a required creative
+  operation, strict QA remains blocked and technical-pass delivery labels the
+  downloadable result as limited rather than enhanced.
 - `OPENSTORYLINE_COMPLETION_POLICY` defaults to `strict`.
   `baseline_guaranteed` takes effect only when
   `OPENSTORYLINE_LIMITED_OUTPUT_PROMOTION_ENABLED=true`; otherwise strict

@@ -1045,6 +1045,7 @@ def build_creative_conformance_report(
     *,
     edit_plan: dict[str, Any],
     render_execution: dict[str, Any],
+    intent_conformance: dict[str, Any] | None = None,
     strict: bool = True,
     semantic_review: dict[str, Any] | None = None,
     asset_visibility: dict[str, Any] | None = None,
@@ -1060,6 +1061,30 @@ def build_creative_conformance_report(
     missing_assets = sorted(requested_assets - used_assets)
     unrequested_assets = sorted(used_assets - requested_assets)
     findings: list[dict[str, Any]] = []
+    intent_status = _clean_text(
+        (intent_conformance or {}).get("status", "not_evaluated"),
+        limit=40,
+    )
+    intent_evidence = (
+        (intent_conformance or {}).get("evidence")
+        if isinstance((intent_conformance or {}).get("evidence"), dict)
+        else {}
+    )
+    if intent_conformance is not None and intent_status != "conformant":
+        findings.append(_finding(
+            "creative_intent_unmet",
+            "blocker" if strict else "warning",
+            "The final executable plan does not satisfy every required creative intent.",
+            error_code=_clean_text(
+                (intent_conformance or {}).get("error_code", "EDIT_PLAN_INTENT_MISMATCH"),
+                limit=80,
+            ),
+            constraint_code=_clean_text(
+                intent_evidence.get("constraint_code", "intent_conformance_failed"),
+                limit=80,
+            ),
+            intent_id=_clean_text(intent_evidence.get("intent_id", ""), limit=80),
+        ))
     if missing_operations:
         findings.append(_finding(
             "planned_operations_missing",
@@ -1168,6 +1193,18 @@ def build_creative_conformance_report(
             "used": sorted(used_assets),
             "missing": missing_assets,
             "unrequested": unrequested_assets,
+        },
+        "intent_conformance": {
+            "status": intent_status,
+            "error_code": _clean_text(
+                (intent_conformance or {}).get("error_code", ""),
+                limit=80,
+            ),
+            "constraint_code": _clean_text(
+                intent_evidence.get("constraint_code", ""),
+                limit=80,
+            ),
+            "intent_id": _clean_text(intent_evidence.get("intent_id", ""), limit=80),
         },
         "asset_visibility": visibility,
         "semantic_review": semantic,
@@ -1354,6 +1391,12 @@ def _unavailable_reports(code: str, *, strict: bool) -> tuple[dict[str, Any], di
             "extra": [],
         },
         "assets": {"requested": [], "used": [], "missing": [], "unrequested": []},
+        "intent_conformance": {
+            "status": "unavailable",
+            "error_code": code,
+            "constraint_code": "",
+            "intent_id": "",
+        },
         "asset_visibility": {
             "version": ASSET_VISIBILITY_VERSION,
             "status": "unavailable",
@@ -1394,6 +1437,7 @@ async def generate_creative_qa_artifacts(
     inputs: Sequence[QAInput],
     edit_plan: dict[str, Any],
     render_execution: dict[str, Any],
+    intent_conformance: dict[str, Any] | None = None,
     resolved_assets: dict[str, Path] | None = None,
     expected_width: int,
     expected_height: int,
@@ -1450,6 +1494,7 @@ async def generate_creative_qa_artifacts(
         conformance = build_creative_conformance_report(
             edit_plan=edit_plan,
             render_execution=render_execution,
+            intent_conformance=intent_conformance,
             strict=strict,
             semantic_review=semantic,
             asset_visibility=asset_visibility,

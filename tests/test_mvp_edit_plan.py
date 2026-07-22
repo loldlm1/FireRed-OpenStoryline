@@ -651,6 +651,119 @@ class AgenticEditPlannerTests(unittest.IsolatedAsyncioTestCase):
             ("segment-1",),
         )
 
+    async def test_maps_title_reframes_and_transitions_to_executable_operations(self):
+        prompt = (
+            "Agrega un t\u00edtulo de apertura, aplica entre 2 y 4 reencuadres "
+            "o zooms y usa transiciones suaves y discretas."
+        )
+        planner, client, kwargs = planner_fixture("speaker", prompt)
+        response = client.response
+        response["requested_capabilities"] = [
+            "crop",
+            "focus_zoom",
+            "hard_cut",
+            "fade",
+            "text_emphasis",
+            "subtitles",
+        ]
+        response["clips"][0]["segments"] = [
+            {
+                "id": "segment-1",
+                "source_window": {"start_ms": 0, "end_ms": 7000},
+                "timeline_window": {"start_ms": 0, "end_ms": 7000},
+                "layout": {
+                    "mode": "crop",
+                    "focal_target": {"region_id": "region-1"},
+                    "fallback": "fit",
+                    "max_zoom": 1.1,
+                },
+                "transition_in": {"kind": "cut", "duration_ms": 0},
+                "overlays": [{
+                    "id": "opening-title",
+                    "kind": "text",
+                    "timeline_window": {"start_ms": 0, "end_ms": 2200},
+                    "text": "Opening hook",
+                    "position": "top",
+                }],
+                "reason": "Open with a concise title and speaker focus.",
+                "evidence_ids": ["region-1"],
+            },
+            {
+                "id": "segment-2",
+                "source_window": {"start_ms": 7000, "end_ms": 14_000},
+                "timeline_window": {"start_ms": 7000, "end_ms": 14_000},
+                "layout": {
+                    "mode": "crop",
+                    "focal_target": {"region_id": "region-1"},
+                    "fallback": "fit",
+                    "max_zoom": 1.2,
+                },
+                "transition_in": {"kind": "fade", "duration_ms": 220},
+                "overlays": [],
+                "reason": "Shift the framing at the next editorial beat.",
+                "evidence_ids": ["region-1"],
+            },
+            {
+                "id": "segment-3",
+                "source_window": {"start_ms": 14_000, "end_ms": 20_000},
+                "timeline_window": {"start_ms": 14_000, "end_ms": 20_000},
+                "layout": {
+                    "mode": "crop",
+                    "focal_target": {"region_id": "region-1"},
+                    "fallback": "fit",
+                    "max_zoom": 1.15,
+                },
+                "transition_in": {"kind": "fade", "duration_ms": 220},
+                "overlays": [],
+                "reason": "Use a final restrained focus change.",
+                "evidence_ids": ["region-1"],
+            },
+        ]
+        response["clips"][0]["intent_decisions"] = [
+            {
+                "intent_id": "prompt-opening-title",
+                "decision": "execute",
+                "operation_ids": [{"id": "opening-title"}],
+            },
+            {
+                "intent_id": "prompt-reframe-sequence",
+                "decision": "execute",
+                "operation_ids": [{"id": "segment-1"}],
+            },
+            {
+                "intent_id": "prompt-restrained-transitions",
+                "decision": "execute",
+                "operation_ids": [{"id": "segment-2"}],
+            },
+        ]
+        kwargs["creative_intent"] = build_creative_intent(
+            prompt,
+            {"asset_policy": "off", "stock_policy": "off"},
+            selected_clip_count=1,
+        )
+
+        plan = await planner.plan(**kwargs)
+        decisions = {
+            item.intent_id: item.operation_ids
+            for item in plan.clips[0].intent_decisions
+        }
+
+        self.assertEqual(decisions["prompt-opening-title"], ("opening-title",))
+        self.assertEqual(
+            decisions["prompt-reframe-sequence"],
+            ("segment-1", "segment-2", "segment-3"),
+        )
+        self.assertEqual(
+            decisions["prompt-restrained-transitions"],
+            ("segment-2", "segment-3"),
+        )
+        payload = json.loads(client.call["user_prompt"])
+        operation_intents = {
+            item["kind"]: item for item in payload["creative_intent"]["operation_intents"]
+        }
+        self.assertEqual(operation_intents["reframe_sequence"]["count_min"], 2)
+        self.assertEqual(operation_intents["opening_title"]["start_max_ms"], 3500)
+
     async def test_does_not_invent_portrait_operation_without_a_crop(self):
         prompt = "Use a portrait reframe."
         planner, client, kwargs = planner_fixture("speaker", prompt)

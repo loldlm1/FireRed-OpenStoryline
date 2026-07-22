@@ -134,6 +134,55 @@ class RepairEligibilityTests(unittest.TestCase):
                 tested.add(code)
         self.assertTrue(tested)
 
+    def test_creative_intent_mismatch_reaches_the_llm_with_bounded_contract_evidence(self):
+        finding = make_repair_finding(
+            "EDIT_PLAN_INTENT_MISMATCH",
+            clip_index=1,
+            objective=True,
+            values={
+                "observed": "intent_mismatch",
+                "constraint_code": "opening_title_invalid",
+                "intent_id": "prompt-opening-title",
+            },
+            source="creative_intent",
+        )
+        request, dispositions = build_repair_batch(
+            stage=RepairStage.PLAN_REPAIR,
+            mode=RepairMode.ENFORCE,
+            findings=(finding,),
+            budget=RepairBudget(),
+            candidate_clips={1: {"segments": []}},
+            available_capabilities=("crop", "text_emphasis", "subtitles"),
+            catalog_context={},
+            immutable_constraints={
+                "creative_intent": {
+                    "version": "creative_intent.v2",
+                    "operation_intents": [{
+                        "id": "prompt-opening-title",
+                        "kind": "opening_title",
+                        "count_min": 1,
+                        "count_max": 1,
+                        "start_max_ms": 3500,
+                    }],
+                },
+            },
+            editing_prompt="Add an opening title.",
+            authoritative_plan_sha256="a" * 64,
+        )
+
+        provider = request.to_provider_dict()
+        self.assertTrue(dispositions[0].call_allowed)
+        self.assertEqual(
+            provider["evidence"][0]["values"]["constraint_code"],
+            "opening_title_invalid",
+        )
+        self.assertEqual(
+            provider["immutable_constraints"]["creative_intent"][
+                "operation_intents"
+            ][0]["start_max_ms"],
+            3500,
+        )
+
     def test_nonrepairable_unknown_technical_provider_and_ffmpega_codes_are_rejected(self):
         for code in (
             "UNKNOWN_PRIVATE_DEFECT",

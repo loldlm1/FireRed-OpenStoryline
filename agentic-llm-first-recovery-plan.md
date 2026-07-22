@@ -1,7 +1,7 @@
 # Plan: Agentic LLM-First Recovery Hardening
 
 **Generated**: 2026-07-22
-**Status**: Planning only; implementation not started
+**Status**: Sprints 1-5 implemented; final authorized production QA in progress
 **Estimated Complexity**: High
 
 ## Overview
@@ -317,13 +317,13 @@ not require data rollback.
 
 ### Sprint 1 Gate
 
-- [ ] All Sprint 1 tasks complete.
-- [ ] Sprint 1 focused validation passes and evidence is recorded.
-- [ ] The synthetic fixture contains no production identifiers or private data.
-- [ ] Residual registry-classification questions are documented.
-- [ ] Exactly one Sprint 1 commit is created with the proposed sprint message.
-- [ ] The Sprint 1 rollback commit/reference is recorded.
-- [ ] Sprint 2 has not started before this gate completes.
+- [x] All Sprint 1 tasks complete.
+- [x] Sprint 1 focused validation passes and evidence is recorded.
+- [x] The synthetic fixture contains no production identifiers or private data.
+- [x] Residual registry-classification questions are documented.
+- [x] Exactly one Sprint 1 commit is created: `14567f7`.
+- [x] The Sprint 1 rollback reference is `46ef5d6`.
+- [x] Sprint 2 started only after the Sprint 1 gate completed.
 
 ## Sprint 2: Bounded Two-Batch Recovery State Machine
 
@@ -471,13 +471,13 @@ their version/fingerprint rather than deleted.
 
 ### Sprint 2 Gate
 
-- [ ] All Sprint 2 tasks complete.
-- [ ] All primary/contingency/fallback branches have focused regression tests.
-- [ ] Tests prove no third plan-repair call and no FFmpeg-before-dry-run path.
-- [ ] Cost/latency implications are recorded without changing thresholds.
-- [ ] Exactly one Sprint 2 commit is created with the proposed sprint message.
-- [ ] The Sprint 2 rollback commit/reference is recorded.
-- [ ] Sprint 3 has not started before this gate completes.
+- [x] All Sprint 2 tasks complete.
+- [x] All primary/contingency/fallback branches have focused regression tests.
+- [x] Tests prove no third plan-repair call and no FFmpeg-before-dry-run path.
+- [x] Cost/latency implications are recorded without changing thresholds.
+- [x] Exactly one Sprint 2 commit is created: `04d1a23`.
+- [x] The Sprint 2 rollback reference is `14567f7`.
+- [x] Sprint 3 started only after the Sprint 2 gate completed.
 
 ## Sprint 3: Durable Repair Evidence And Failed-Outcome Recovery
 
@@ -588,12 +588,12 @@ ignore unsupported fields safely.
 
 ### Sprint 3 Gate
 
-- [ ] All Sprint 3 tasks complete.
-- [ ] Historical v1 repair/outcome fixtures remain readable.
-- [ ] Failed outcomes preserve real repair evidence and contain no private data.
-- [ ] Exactly one Sprint 3 commit is created with the proposed sprint message.
-- [ ] The Sprint 3 rollback commit/reference is recorded.
-- [ ] Sprint 4 has not started before this gate completes.
+- [x] All Sprint 3 tasks complete.
+- [x] Historical v1 repair/outcome fixtures remain readable.
+- [x] Failed outcomes preserve real repair evidence and contain no private data.
+- [x] Exactly one Sprint 3 commit is created: `e57505b`.
+- [x] The Sprint 3 rollback reference is `04d1a23`.
+- [x] Sprint 4 started only after the Sprint 3 gate completed.
 
 ## Sprint 4: Retained-Session Rerun API And UX
 
@@ -676,14 +676,14 @@ may proceed in parallel after the outcome capability semantics are defined.
 
 ### Sprint 4 Gate
 
-- [ ] All Sprint 4 tasks complete.
-- [ ] Plain rerun and quality-feedback retry are independently tested.
-- [ ] Authentication, CSRF, source retention, and session ownership remain
+- [x] All Sprint 4 tasks complete.
+- [x] Plain rerun and quality-feedback retry are independently tested.
+- [x] Authentication, CSRF, source retention, and session ownership remain
   enforced.
-- [ ] Focused browser validation passes with no console errors.
-- [ ] Exactly one Sprint 4 commit is created with the proposed sprint message.
-- [ ] The Sprint 4 rollback commit/reference is recorded.
-- [ ] Sprint 5 has not started before this gate completes.
+- [x] Focused browser validation passes with no console errors.
+- [x] Exactly one Sprint 4 commit is created: `bef1043`.
+- [x] The Sprint 4 rollback reference is `e57505b`.
+- [x] Sprint 5 started only after the Sprint 4 gate completed.
 
 ## Sprint 5: Regression Evals, Production Gates, And Runbooks
 
@@ -836,13 +836,13 @@ not downgrade PostgreSQL.
 
 ### Sprint 5 Gate
 
-- [ ] All Sprint 5 tasks complete.
-- [ ] Focused and full local validation evidence is recorded with exact skips.
-- [ ] Release-validator matrices and rollback procedure are verified offline.
-- [ ] No live provider, production rerun, deploy, or database mutation occurred
+- [x] All Sprint 5 tasks complete.
+- [x] Focused and full local validation evidence is recorded with exact skips.
+- [x] Release-validator matrices and rollback procedure are verified offline.
+- [x] No live provider, production rerun, deploy, or database mutation occurred
   without separate explicit authorization.
-- [ ] Exactly one Sprint 5 commit is created with the proposed sprint message.
-- [ ] The Sprint 5 rollback commit/reference is recorded.
+- [x] Exactly one Sprint 5 commit is created: `a2ca85a`.
+- [x] The Sprint 5 rollback reference is `bef1043`.
 - [ ] The active-plan execution state is marked complete only after all gates
   and documentation are current.
 

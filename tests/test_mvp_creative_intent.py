@@ -23,6 +23,61 @@ class CreativeIntentTests(unittest.TestCase):
             creative_intent_conformance_evidence(ValueError("private provider body")),
             {"constraint_code": "intent_conformance_failed"},
         )
+        self.assertEqual(
+            creative_intent_conformance_evidence(ValueError(
+                "required reframe sequence count is outside its contract"
+            )),
+            {"constraint_code": "reframe_sequence_count_invalid"},
+        )
+
+    def test_extracts_accent_insensitive_bounded_operation_requirements(self):
+        prompts = (
+            (
+                "Agrega un t\u00edtulo de apertura breve, aplica entre 2 y 4 "
+                "reencuadres o zooms y usa transiciones suaves y discretas."
+            ),
+            (
+                "Start with an opening title, use 2-4 reframes or zooms, "
+                "and add subtle transitions."
+            ),
+        )
+
+        for prompt in prompts:
+            with self.subTest(prompt=prompt):
+                intent = build_creative_intent(
+                    prompt,
+                    {"asset_policy": "off", "stock_policy": "off"},
+                    selected_clip_count=1,
+                )
+
+                self.assertEqual(
+                    [item.kind for item in intent.operation_intents],
+                    [
+                        "opening_title",
+                        "reframe_sequence",
+                        "restrained_transitions",
+                    ],
+                )
+                self.assertEqual(
+                    [
+                        (item.count_min, item.count_max)
+                        for item in intent.operation_intents
+                    ],
+                    [(1, 1), (2, 4), (1, 4)],
+                )
+                self.assertNotIn(prompt, json.dumps(intent.to_dict()))
+
+    def test_negative_operation_language_does_not_create_requirements(self):
+        intent = build_creative_intent(
+            (
+                "Do not add an opening title. Avoid 2-4 reframes or zooms. "
+                "Sin transiciones suaves."
+            ),
+            {"asset_policy": "off", "stock_policy": "off"},
+            selected_clip_count=1,
+        )
+
+        self.assertEqual(intent.operation_intents, ())
 
     def test_extracts_private_prompt_requirements_without_persisting_prompt_text(self):
         prompt = (
