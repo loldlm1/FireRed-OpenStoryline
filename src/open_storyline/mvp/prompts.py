@@ -1,4 +1,4 @@
-EDIT_PLAN_PROMPT_VERSION = "mvp-agentic-edit-plan.v10"
+EDIT_PLAN_PROMPT_VERSION = "mvp-agentic-edit-plan.v11"
 VISUAL_UNDERSTANDING_PROMPT_VERSION = "mvp-visual-understanding.v2"
 REPAIR_SYSTEM_PROMPT_VERSION = "mvp-defect-repair.v1"
 

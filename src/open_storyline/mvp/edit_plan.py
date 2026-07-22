@@ -495,7 +495,11 @@ def _catalog_candidate_map(snapshot: dict[str, Any] | None) -> dict[str, dict[st
     return result
 
 
-def _catalog_template(snapshot: dict[str, Any] | None) -> dict[str, Any]:
+def _catalog_template(
+    snapshot: dict[str, Any] | None,
+    *,
+    prefer_restrained_transitions: bool = False,
+) -> dict[str, Any]:
     candidates = _catalog_candidate_map(snapshot)
     if not candidates:
         return {
@@ -506,21 +510,45 @@ def _catalog_template(snapshot: dict[str, Any] | None) -> dict[str, Any]:
                 "recipe_ids": [],
             },
             "cut_transition_id": "",
+            "restrained_transition_id": "",
+            "restrained_transition_kind": "fade",
         }
-    style = next(
+    styles = [
         entry for entry in candidates.values() if entry["kind"] == "style_profile"
-    )
-    style_ids = [
-        str(value)
-        for value in (style.get("config") or {}).get("catalog_ids") or []
-        if str(value) in candidates
     ]
+
+    def style_ids(entry: dict[str, Any]) -> list[str]:
+        return [
+            str(value)
+            for value in (entry.get("config") or {}).get("catalog_ids") or []
+            if str(value) in candidates
+        ]
+
+    def restrained_transition(entry: dict[str, Any]) -> str:
+        return next(
+            (
+                entry_id
+                for entry_id in style_ids(entry)
+                if candidates[entry_id]["kind"] == "transition"
+                and (candidates[entry_id].get("config") or {}).get("operation")
+                == "fade"
+                and entry_id.startswith("transition.fade-")
+            ),
+            "",
+        )
+
+    style = (
+        next((entry for entry in styles if restrained_transition(entry)), styles[0])
+        if prefer_restrained_transitions
+        else styles[0]
+    )
+    selected_style_ids = style_ids(style)
 
     def select(kind: str) -> str:
         selected = next(
             (
                 entry_id
-                for entry_id in style_ids
+                for entry_id in selected_style_ids
                 if candidates[entry_id]["kind"] == kind
             ),
             "",
@@ -539,6 +567,7 @@ def _catalog_template(snapshot: dict[str, Any] | None) -> dict[str, Any]:
         if entry["kind"] == "transition"
         and (entry.get("config") or {}).get("operation") == "hard_cut"
     )
+    restrained_id = restrained_transition(style)
     return {
         "selection": {
             "style_profile_id": str(style["id"]),
@@ -547,6 +576,8 @@ def _catalog_template(snapshot: dict[str, Any] | None) -> dict[str, Any]:
             "recipe_ids": [],
         },
         "cut_transition_id": cut_id,
+        "restrained_transition_id": restrained_id,
+        "restrained_transition_kind": "fade",
     }
 
 
@@ -608,7 +639,6 @@ def _valid_clip_plan_template(
         "safe_margin_ratio": 0.08,
         "max_zoom": 1.0,
     }
-    catalog_defaults = _catalog_template(catalog_snapshot)
     operation_intents = tuple(
         item
         for item in (creative_intent.operation_intents if creative_intent else ())
@@ -625,6 +655,10 @@ def _valid_clip_plan_template(
     title_intent = next(
         (item for item in operation_intents if item.kind == "opening_title"),
         None,
+    )
+    catalog_defaults = _catalog_template(
+        catalog_snapshot,
+        prefer_restrained_transitions=transition_intent is not None,
     )
     segment_count = 1
     if reframe_intent is not None and focal_target is not None:
@@ -691,6 +725,10 @@ def _valid_clip_plan_template(
             index > 1
             and transition_intent is not None
             and index - 1 <= int(transition_intent.count_max)
+            and (
+                not _catalog_candidate_map(catalog_snapshot)
+                or bool(catalog_defaults["restrained_transition_id"])
+            )
         )
         segments.append({
             "id": segment_id,
@@ -704,7 +742,11 @@ def _valid_clip_plan_template(
             },
             "layout": segment_layout,
             "transition_in": {
-                "kind": "fade" if transition_enabled else "cut",
+                "kind": (
+                    catalog_defaults["restrained_transition_kind"]
+                    if transition_enabled
+                    else "cut"
+                ),
                 "duration_ms": (
                     min(
                         int(transition_intent.duration_max_ms),
@@ -714,7 +756,9 @@ def _valid_clip_plan_template(
                     else 0
                 ),
                 "catalog_id": (
-                    "" if transition_enabled else catalog_defaults["cut_transition_id"]
+                    catalog_defaults["restrained_transition_id"]
+                    if transition_enabled
+                    else catalog_defaults["cut_transition_id"]
                 ),
             },
             "overlays": overlays,

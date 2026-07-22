@@ -254,7 +254,9 @@ reencuadres/zooms y transiciones breves y discretas. Cada requisito debe quedar
 unido a capas o segmentos ejecutables con conteos y tiempos válidos. El planner
 y la reparación comparten un template ejecutable que conserva esas operaciones
 después del intento LLM, sin cambiar el video fuente, la selección temporal ni
-el número de salidas. Si aun después del intento y del baseline seguro no puede
+el número de salidas. Las transiciones discretas seleccionan un fundido
+ejecutable de un estilo compatible del catálogo creativo, sin emitir un ID de
+catálogo vacío o inventado. Si aun después del intento y del baseline seguro no puede
 cumplirse, la QA estricta lo conserva como limitación creativa y la entrega
 técnica nunca lo presenta como resultado mejorado.
 

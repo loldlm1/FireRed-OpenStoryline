@@ -740,6 +740,96 @@ class AgenticEditPlannerTests(unittest.IsolatedAsyncioTestCase):
             tuple(segment.id for segment in clip.segments[1:]),
         )
 
+    async def test_deferred_repair_template_uses_catalog_backed_transitions(self):
+        prompt = (
+            "Start with an opening title, apply exactly 3 gentle reframes or zooms, "
+            "and use restrained transitions."
+        )
+        planner, _client, kwargs = planner_fixture("speaker", prompt)
+        kwargs.update({
+            "creative_intent": build_creative_intent(
+                prompt,
+                {"asset_policy": "off", "stock_policy": "off"},
+                selected_clip_count=1,
+            ),
+            "defer_registry_repair": True,
+            "catalog_snapshot": {
+                "catalog_version": "2026.07.1",
+                "manifest_sha256": "b" * 64,
+                "entries": [
+                    {
+                        "id": "style.clean-product",
+                        "kind": "style_profile",
+                        "config": {"catalog_ids": [
+                            "caption.clean",
+                            "color.clean-contrast",
+                            "transition.crossfade",
+                        ]},
+                    },
+                    {
+                        "id": "style.restrained-cinematic",
+                        "kind": "style_profile",
+                        "config": {"catalog_ids": [
+                            "caption.editorial",
+                            "color.cinematic-soft",
+                            "transition.fade-black",
+                        ]},
+                    },
+                    {
+                        "id": "caption.clean",
+                        "kind": "caption_treatment",
+                        "config": {},
+                    },
+                    {
+                        "id": "color.clean-contrast",
+                        "kind": "color_treatment",
+                        "config": {},
+                    },
+                    {
+                        "id": "caption.editorial",
+                        "kind": "caption_treatment",
+                        "config": {},
+                    },
+                    {
+                        "id": "color.cinematic-soft",
+                        "kind": "color_treatment",
+                        "config": {},
+                    },
+                    {
+                        "id": "transition.hard-cut",
+                        "kind": "transition",
+                        "config": {"operation": "hard_cut", "duration_ms": 0},
+                    },
+                    {
+                        "id": "transition.crossfade",
+                        "kind": "transition",
+                        "config": {"operation": "fade", "duration_ms": 220},
+                    },
+                    {
+                        "id": "transition.fade-black",
+                        "kind": "transition",
+                        "config": {"operation": "fade", "duration_ms": 220},
+                    },
+                ],
+            },
+        })
+
+        plan = await planner.plan(**kwargs)
+        clip = plan.clips[0]
+
+        self.assertEqual(
+            [segment.transition_in.kind for segment in clip.segments],
+            ["cut", "fade", "fade"],
+        )
+        self.assertEqual(
+            [segment.transition_in.catalog_id for segment in clip.segments],
+            ["transition.hard-cut", "transition.fade-black", "transition.fade-black"],
+        )
+        self.assertEqual(
+            clip.catalog_selection.style_profile_id,
+            "style.restrained-cinematic",
+        )
+
     async def test_maps_title_reframes_and_transitions_to_executable_operations(self):
         prompt = (
             "Agrega un t\u00edtulo de apertura, aplica entre 2 y 4 reencuadres "

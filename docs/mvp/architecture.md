@@ -125,7 +125,9 @@ isolated so upstream behavior can continue to be merged into this fork.
 - The planner and repair request share an intent-aware executable template.
   After an outbound LLM attempt, that bounded template may preserve the title,
   reframe count, restrained transitions, subtitles, source windows, and output
-  count instead of collapsing to a one-segment baseline. Track targets retain
+  count instead of collapsing to a one-segment baseline. Restrained transitions
+  select an executable fade from a compatible creative-catalog style instead
+  of emitting an empty or invented catalog ID. Track targets retain
   their semantic role so clip-local observations can safely replace a sparse
   track without inventing private evidence or external assets.
 - Final post-render conformance also consumes the plan-level intent verdict. If
