@@ -1,8 +1,8 @@
 # Plan: Centralized Agentic Defect Registry And Bounded Repair Loop
 
 **Generated**: 2026-07-21
-**Status**: Implementation in progress; Sprints 1-5 complete; Sprint 6
-pre-deploy gate passed and authorized production canary pending
+**Status**: Complete; Sprints 1-6, authorized production rollout, and sanitized
+canary validation passed; pull request pending
 **Estimated Complexity**: High
 
 ## Overview
@@ -57,12 +57,15 @@ preserves an unavailable enhancement itself.
   `docs/mvp/implementation-history.md` and `docs/mvp/creative-catalog.md`.
 - The current approved 9Router text/vision route remains
   `cx/gpt-5.6-sol`. This plan does not change the model or provider.
-- The approved plan bootstrap and Sprints 1-3 are committed on the feature
-  branch. Sprint 4 is implemented and validated at the checkpoint recorded
-  below; Sprints 5-6 remain sequentially gated.
+- The approved plan bootstrap and all six sprint commits are present on the
+  feature branch. Two narrow post-Sprint-6 fixes preserve the release gate while
+  routing allowlisted strict schemas through the provider-compatible Responses
+  transport.
 
 No provider call, deployment, production database mutation, or production media
-mutation was performed while closing PR #11 and preparing this branch.
+mutation was performed while closing PR #11 and preparing this branch. The user
+later authorized the Sprint 6 deployment and private production canaries
+recorded below.
 
 ## Scope
 
@@ -178,8 +181,9 @@ mutation was performed while closing PR #11 and preparing this branch.
     Sprint 2 stops before inventing parameter contracts.
   - The existing immutable prompt-version, checkpoint, audit, promotion, and
     retry contracts remain authoritative.
-  - The user will authorize production canary/deployment separately after the PR
-    is reviewed.
+  - The user authorized production deployment and same-session canary validation
+    before PR creation on 2026-07-21; manual approval remains reserved for the
+    resulting PR.
 
 ## Recommended Repairability Classification
 
@@ -1194,11 +1198,12 @@ schema compatibility review. No additive evidence is deleted.
 
 **Pre-deploy evidence (2026-07-21)**:
 
-- The full local suite passed 443 tests with 76 expected environment skips; the
-  disposable connected PostgreSQL suite passed the same 443 tests with no
+- The final full local suite passed 444 tests with 76 expected environment
+  skips; the disposable connected PostgreSQL suite passed 443 tests with no
   skips.
 - The 49-test focused release/catalog suite, catalog manifest/runtime check,
-  configuration load, Python compilation, shell syntax, and diff checks passed.
+  the final 36-test client/schema/provider-preflight suite, configuration load,
+  Python compilation, shell syntax, and diff checks passed.
 - The remote image built as `openstoryline-mvp:sprint6-local`; console-strict
   Chromium smoke and the focused retry/comparison flow passed with one worker.
 - Authorized redacted 9Router text, vision, and image probes passed. The release
@@ -1207,8 +1212,40 @@ schema compatibility review. No additive evidence is deleted.
   plus a multimodal call and became the fail-closed strict boundary.
 - The production PostgreSQL backup and isolated restore check passed at schema
   revision `20260721_0003`, and the private rollout flags passed the offline
-  monotonic validator. Deployment and private-session canary evidence remain
-  intentionally pending until this sprint commit exists.
+  monotonic validator.
+
+**Post-deploy and canary evidence (2026-07-21 local / 2026-07-22 UTC)**:
+
+- Commit `002b4cdde9aa9a5392da2ea40fe945e9bda4f8da` deployed as the exact healthy
+  production image. `/up` and `/health` returned HTTP 200, PostgreSQL returned
+  `DATABASE_READY`, and recent logs contained no `ERROR` or `Traceback` lines.
+- Two runs reused the authorized private session, immutable prompt version, and
+  source lineage without recording those private values in Git. Both produced
+  one registered 1080x1920 H.264/AAC video at 60 fps with a 22.5-second duration,
+  ordered subtitles, and five passing deterministic structural checks.
+- The technical-pass candidate published with the truthful creative limitation
+  `ASSET_VISIBILITY_ANALYSIS_UNAVAILABLE`; strict QA remained blocked while
+  technical status passed. A separate run published as enhanced with no
+  limitations. Authenticated range requests returned HTTP 206 for both inline
+  preview and attachment download.
+- The same-session repair-only canary injected a deterministic, schema-valid
+  crop-coverage defect into a private copy of the current valid plan. Enforced
+  repair made exactly one semantic call and one transport attempt, used strict
+  `edit_plan_repair.v1`, returned HTTP 200 in 25,664 ms, consumed 5,193 input and
+  1,235 output tokens (6,428 total), resolved all three objective crop-coverage
+  codes through a valid `fit` layout, passed the quality floor, and introduced
+  zero defects. The provider did not report a cost value.
+- An exploratory replay against a historical pre-catalog artifact returned a
+  strict response but failed closed on catalog-version mismatch before quality
+  acceptance; it did not alter a job, register an output, or weaken validation.
+- The bounded outcome summary reports two playable outputs, a 100% observed
+  playable/publication rate, one enhanced and one limited outcome, six reused
+  and two recomputed stages, and `claim_ready=false`. The 95% Wilson lower bound
+  is 0.34238, far below the 99% claim gate.
+- Production FFMPEGA and semantic-QA execution flags remain disabled. Their
+  strict schemas and deterministic fallbacks are covered by local tests plus
+  the live strict-capability gate, but no production execution canary is claimed
+  for disabled features.
 
 ### Task 6.1: Build The Repair Eval Matrix
 
@@ -1317,12 +1354,14 @@ schema compatibility review. No additive evidence is deleted.
 
 ### Sprint 6 Gate
 
-- [ ] All Sprint 6 tasks complete.
-- [ ] Sprint 6 validation passes and evidence is recorded.
-- [ ] Residual risks are documented.
-- [ ] Exactly one Sprint 6 commit is created with the proposed sprint message.
-- [ ] The rollback point is recorded.
-- [ ] No production rollout occurs without separate authorization.
+- [x] All Sprint 6 tasks complete.
+- [x] Sprint 6 validation passes and evidence is recorded.
+- [x] Residual risks are documented.
+- [x] Exactly one Sprint 6 commit is created with the proposed sprint message.
+  Two later fix commits address provider-gate defects discovered during the
+  authorized deployment without rewriting the sprint commit.
+- [x] The rollback point is recorded.
+- [x] No production rollout occurs without separate authorization.
 
 ## Testing Strategy
 
@@ -1451,28 +1490,29 @@ schema compatibility review. No additive evidence is deleted.
 
 - [x] PR #11 is cleaned, pushed, merged, and verified against the expected refs.
 - [x] The new implementation branch starts from merged fork `main`.
-- [ ] Every Registry v1 outcome/promotion/fallback/retry/repair/audit/activity/
+- [x] Every Registry v1 outcome/promotion/fallback/retry/repair/audit/activity/
   workspace code is registered and bilingual; exclusions are inventoried.
-- [ ] Unknown codes fail closed and cannot trigger LLM repair.
-- [ ] Strict schema support is proven for the exact 9Router route/model.
-- [ ] Every core and FFMPEGA 9Router JSON boundary uses a stable strict schema
+- [x] Unknown codes fail closed and cannot trigger LLM repair.
+- [x] Strict schema support is proven for the exact 9Router route/model.
+- [x] Every core and FFMPEGA 9Router JSON boundary uses a stable strict schema
   when progressively enabled.
-- [ ] FFMPEGA has authoritative effect-specific schemas for both agentic and full
+- [x] FFMPEGA has authoritative effect-specific schemas for both agentic and full
   deterministic allowlists, with no arbitrary model-generated parameter keys.
-- [ ] Application semantic validation remains authoritative.
-- [ ] At most one visual repair and one plan repair occur per job; FFMPEGA adds no
+- [x] Application semantic validation remains authoritative.
+- [x] At most one visual repair and one plan repair occur per job; FFMPEGA adds no
   repair call.
-- [ ] Advisory-only predictive findings make zero semantic repair calls.
-- [ ] Every LLM-repairable code has success and failure/fallback coverage.
-- [ ] Every non-LLM code has coverage proving no semantic repair call occurs.
-- [ ] Failed repair preserves original real defect codes.
-- [ ] Fallback preserves unaffected quality and a technically valid output.
-- [ ] Every technical-pass candidate is published with truthful limitations even
+- [x] Advisory-only predictive findings make zero semantic repair calls.
+- [x] Every LLM-repairable code has success and failure/fallback coverage.
+- [x] Every non-LLM code has coverage proving no semantic repair call occurs.
+- [x] Failed repair preserves original real defect codes.
+- [x] Fallback preserves unaffected quality and a technically valid output.
+- [x] Every technical-pass candidate is published with truthful limitations even
   when strict creative QA remains blocked.
-- [ ] Strict QA verdict and delivery decision remain separate and auditable.
-- [ ] `audit defects` provides bounded agent-friendly queries without a migration.
-- [ ] Historical v1 outcomes remain readable and immutable.
-- [ ] Every sprint has passed its validation gate.
-- [ ] Every sprint has exactly one sprint-specific commit.
-- [ ] Final integration, security, browser, operational, and rollback checks pass.
-- [ ] Residual risks and statistical claim limits are current.
+- [x] Strict QA verdict and delivery decision remain separate and auditable.
+- [x] `audit defects` provides bounded agent-friendly queries without a migration.
+- [x] Historical v1 outcomes remain readable and immutable.
+- [x] Every sprint has passed its validation gate.
+- [x] Every sprint has exactly one sprint-specific commit; post-gate release fixes
+  remain separate and explicit.
+- [x] Final integration, security, browser, operational, and rollback checks pass.
+- [x] Residual risks and statistical claim limits are current.
