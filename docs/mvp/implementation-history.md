@@ -12,6 +12,11 @@ The completed agentic defect-repair working plan was retired after increments
 59-66 were consolidated into this history and the
 [`Agentic defect-repair rollout`](agentic-defect-repair-rollout.md) runbook.
 
+The completed LLM-first recovery plan was retired after increments 67-74 were
+consolidated into this history and the current
+[`Architecture`](architecture.md), [`Defect repair`](defect-repair.md), and
+[`Agentic defect-repair rollout`](agentic-defect-repair-rollout.md) guidance.
+
 | Increment | Scope | Required validation | Commit |
 | --- | --- | --- | --- |
 | 0 | Architecture, remote-only policy, key guide | Config examples parse; docs links checked | `docs: define MVP architecture` |
