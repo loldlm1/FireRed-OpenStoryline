@@ -386,8 +386,10 @@ def _measure_asset_visibility(
     command.extend([
         "-filter_complex",
         (
-            f"[0:v]crop={width}:{height}:{x}:{y},format=yuv420p[roi];"
-            f"[1:v]scale={width}:{height},format=yuv420p[asset];"
+            f"[0:v]crop={width}:{height}:{x}:{y},fps=1,settb=AVTB,setpts=PTS-STARTPTS,"
+            f"format=yuv420p[roi];"
+            f"[1:v]scale={width}:{height},fps=1,settb=AVTB,setpts=PTS-STARTPTS,"
+            f"format=yuv420p[asset];"
             "[roi][asset]ssim"
         ),
         "-frames:v",

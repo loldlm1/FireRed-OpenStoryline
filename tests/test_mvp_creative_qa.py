@@ -464,6 +464,59 @@ class CreativeQARenderTests(unittest.TestCase):
             {item["code"] for item in reports[1]["findings"]},
         )
 
+    def test_asset_visibility_normalizes_mismatched_video_timebases_at_clip_start(self):
+        with TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            asset = root / "asset.mp4"
+            visible = root / "visible.mp4"
+            commands = [
+                [
+                    "ffmpeg", "-y", "-v", "error", "-f", "lavfi", "-i",
+                    "color=c=red:size=60x80:rate=30:duration=6",
+                    "-c:v", "libx264", "-preset", "ultrafast",
+                    "-pix_fmt", "yuv420p", str(asset),
+                ],
+                [
+                    "ffmpeg", "-y", "-v", "error", "-f", "lavfi", "-i",
+                    "color=c=blue:size=180x320:rate=60:duration=6",
+                    "-i", str(asset),
+                    "-filter_complex", "[0:v][1:v]overlay=60:120:enable='between(t,0,4)'",
+                    "-t", "6", "-c:v", "libx264", "-preset", "ultrafast",
+                    "-pix_fmt", "yuv420p", str(visible),
+                ],
+            ]
+            for command in commands:
+                completed = subprocess.run(
+                    command,
+                    capture_output=True,
+                    text=True,
+                    check=False,
+                    timeout=120,
+                )
+                self.assertEqual(completed.returncode, 0, completed.stderr)
+
+            rendered = execution(with_asset=True)
+            overlay = rendered["clips"][0]["segments"][0]["overlays"][0]
+            overlay.update({
+                "timeline_window": {"start_ms": 0, "end_ms": 4000},
+                "width_ratio": 1 / 3,
+                "position": "center",
+                "opacity": 1.0,
+            })
+            report = build_asset_visibility_report(
+                [QAInput(1, visible, 6000)],
+                render_execution=rendered,
+                resolved_assets={"asset-1": asset},
+                expected_width=180,
+                expected_height=320,
+                strict=True,
+                timeout=60,
+            )
+
+        self.assertEqual(report["status"], "pass")
+        self.assertEqual(report["observations"][0]["error_code"], None)
+        self.assertGreaterEqual(report["observations"][0]["ssim"], 0.6)
+
     def test_structural_qa_probes_real_synthetic_output(self):
         with TemporaryDirectory() as tmpdir:
             root = Path(tmpdir)
