@@ -393,7 +393,7 @@ async def _workspace_command(
             limit=arguments.limit,
             batch_size=arguments.batch_size,
         )
-    if arguments.workspace_command == "rerun-latest":
+    if arguments.workspace_command in {"rerun-latest", "rerun-version"}:
         if not 30 <= int(arguments.timeout_seconds) <= 7200:
             raise JobStoreError(
                 "WORKSPACE_RERUN_INVALID", "timeout must be between 30 and 7200 seconds"
@@ -406,15 +406,26 @@ async def _workspace_command(
                 "only reusable sessions support immutable prompt reruns",
             )
         async with database.sessions() as db_session:
-            prompt_version_id = await db_session.scalar(
-                select(PromptVersion.id)
-                .where(PromptVersion.editing_session_id == arguments.session_id)
-                .order_by(PromptVersion.version_number.desc(), PromptVersion.id.desc())
-                .limit(1)
+            prompt_query = select(PromptVersion.id).where(
+                PromptVersion.editing_session_id == arguments.session_id
             )
+            if arguments.workspace_command == "rerun-version":
+                prompt_query = prompt_query.where(
+                    PromptVersion.id == arguments.prompt_version_id
+                )
+            else:
+                prompt_query = prompt_query.order_by(
+                    PromptVersion.version_number.desc(), PromptVersion.id.desc()
+                ).limit(1)
+            prompt_version_id = await db_session.scalar(prompt_query)
         if prompt_version_id is None:
             raise JobStoreError(
-                "PROMPT_VERSION_NOT_FOUND", "the session has no prompt versions"
+                "PROMPT_VERSION_NOT_FOUND",
+                (
+                    "the prompt version is unavailable for this session"
+                    if arguments.workspace_command == "rerun-version"
+                    else "the session has no prompt versions"
+                ),
             )
         media_root = _default_root().parent / "mvp_sessions"
         prompt_versions = PromptVersionService(
@@ -637,6 +648,15 @@ def main() -> int:
     rerun_latest.add_argument("session_id")
     rerun_latest.add_argument("--wait", action="store_true")
     rerun_latest.add_argument("--timeout-seconds", type=int, default=3600)
+
+    rerun_version = workspace_commands.add_parser(
+        "rerun-version",
+        help="queue a specific immutable prompt version without exposing its text",
+    )
+    rerun_version.add_argument("session_id")
+    rerun_version.add_argument("prompt_version_id")
+    rerun_version.add_argument("--wait", action="store_true")
+    rerun_version.add_argument("--timeout-seconds", type=int, default=3600)
 
     return asyncio.run(_run(parser.parse_args()))
 

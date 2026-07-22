@@ -353,6 +353,79 @@ class PromptVersionPostgresTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result["delivery_decision"], "publish")
         self.assertNotIn("private prompt", json.dumps(result))
 
+    async def test_admin_reruns_explicit_prompt_version_within_session(self):
+        editing_session, _source, _path = await self.ready_session("Admin version rerun")
+        first = await self.service.create_version(
+            editing_session["id"],
+            prompt="older private prompt",
+            settings=self.settings,
+        )
+        await self.service.create_version(
+            editing_session["id"],
+            prompt="latest private prompt",
+            settings={**self.settings, "max_clips": 2},
+        )
+
+        async def processor(_job_id: str, _store: JobStore):
+            return {
+                "clip_count": 1,
+                "outcome": {
+                    "technical_status": "pass",
+                    "semantic_qa": {
+                        "status": "pass",
+                        "provider_calls": 1,
+                        "frame_count": 4,
+                    },
+                    "delivery": {"decision": "publish"},
+                    "limitations": [],
+                },
+            }
+
+        manager = JobManager(self.store, processor, poll_interval=0.05)
+        await manager.start()
+        try:
+            with patch(
+                "open_storyline.mvp.admin._default_root",
+                return_value=self.root / "mvp_jobs",
+            ):
+                result = await _workspace_command(
+                    SimpleNamespace(
+                        workspace_command="rerun-version",
+                        session_id=editing_session["id"],
+                        prompt_version_id=first["prompt_version"]["id"],
+                        wait=True,
+                        timeout_seconds=30,
+                    ),
+                    self.database,
+                )
+        finally:
+            await manager.stop()
+
+        self.assertNotEqual(result["job_id"], first["run"]["id"])
+        self.assertEqual(result["prompt_version_id"], first["prompt_version"]["id"])
+        self.assertEqual(result["attempt_number"], 2)
+        self.assertEqual(result["state"], "completed")
+        self.assertNotIn("private prompt", json.dumps(result))
+
+        foreign_session, _foreign_source, _foreign_path = await self.ready_session(
+            "Other session"
+        )
+        with patch(
+            "open_storyline.mvp.admin._default_root",
+            return_value=self.root / "mvp_jobs",
+        ), self.assertRaises(JobStoreError) as caught:
+            await _workspace_command(
+                SimpleNamespace(
+                    workspace_command="rerun-version",
+                    session_id=foreign_session["id"],
+                    prompt_version_id=first["prompt_version"]["id"],
+                    wait=False,
+                    timeout_seconds=30,
+                ),
+                self.database,
+            )
+        self.assertEqual(caught.exception.code, "PROMPT_VERSION_NOT_FOUND")
+
     async def test_queue_source_and_atomicity_failures_leave_no_orphans(self):
         editing_session, source, source_path = await self.ready_session()
         limited_store = JobStore(

@@ -93,6 +93,17 @@ playback and download registration, truthful creative limitations, technical
 withholding, repair checkpoint reuse, call counts, tokens, cost, latency, and
 the absence of new defects.
 
+Queue the newest immutable prompt when it is the intended canary, or select an
+older authoritative version explicitly when a targeted QA variant is newer:
+
+```bash
+./bin/kamal-mvp workspace rerun-latest SESSION_ID --wait
+./bin/kamal-mvp workspace rerun-version SESSION_ID PROMPT_VERSION_ID --wait
+```
+
+Both commands keep prompt text private and reject prompt versions outside the
+specified reusable session.
+
 Review thresholds are emitted in `outcome_slo_summary.v1`:
 
 - repair provider latency p95 at or below 180 seconds;
