@@ -115,7 +115,7 @@ The 99% statement additionally requires the Wilson confidence gate. A passing
 sample still requires explicit operator approval and does not mutate rollout
 configuration.
 
-## Sprint 7 final-image evidence
+## Completed final-image evidence
 
 The 2026-07-22 same-session production proof uses exact application image
 `1e15456b76e84d1f83d7b4d6b318ec348f9d7b02`, PostgreSQL revision
@@ -138,6 +138,10 @@ the pinned FFMPEGA service.
 The production claim is therefore scoped to the tested uploaded source, the
 authoritative prompt, the one targeted effect prompt, and the exact final image.
 It is not a cross-source, cross-niche, or 99%-reliability statement.
+
+This evidence closes the implementation plan. Manual QA with newly uploaded
+sessions remains normal operator validation and does not reopen the completed
+implementation sequence.
 
 ## Rollback
 

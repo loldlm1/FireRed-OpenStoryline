@@ -8,6 +8,10 @@ It is not an active sprint plan. Current engineering work should start from
 
 Each implementation increment was validated before its short commit.
 
+The completed agentic defect-repair working plan was retired after increments
+59-66 were consolidated into this history and the
+[`Agentic defect-repair rollout`](agentic-defect-repair-rollout.md) runbook.
+
 | Increment | Scope | Required validation | Commit |
 | --- | --- | --- | --- |
 | 0 | Architecture, remote-only policy, key guide | Config examples parse; docs links checked | `docs: define MVP architecture` |
@@ -78,6 +82,5 @@ Each implementation increment was validated before its short commit.
 | 65 | Agentic defect repair production stabilization and canary | Responses-compatible strict transport, exact-image deployment, healthy PostgreSQL and endpoints, two playable private-session outputs, truthful limited delivery, authenticated preview/download, and a one-call strict repair canary that resolved three crop-coverage defects with zero new defects; the 99% claim remains blocked by sample size | `fix: route strict schemas through responses` |
 | 66 | Agentic defect repair Sprint 7: final-image semantic and finishing proof | Fixed mismatched-timebase asset visibility, passed 455 local and 455 connected tests, deployed exact image `1e15456`, completed two consecutive same-session semantic/deterministic outputs plus a typed FFMPEGA sharpen canary, and retained explicit gates for the broad Wilson claim, authenticated production browser access, and quantified effect lift | `feat: prove quality-first agentic video editing` |
 
-The original pull request targeted `main` in
-`loldlm1/FireRed-OpenStoryline`. Merge and release state belongs in the hosting
-platform, not in this historical implementation checklist.
+Pull-request, merge, and release state belongs in the hosting platform, not in
+this historical implementation record.
