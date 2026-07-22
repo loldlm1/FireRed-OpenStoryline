@@ -1,9 +1,10 @@
 # Plan: Centralized Agentic Defect Registry And Bounded Repair Loop
 
 **Generated**: 2026-07-21
-**Status**: Sprints 1-6, authorized production rollout, and sanitized canary
-validation complete; Sprint 7 approved, locally implemented, and in staged
-production execution; pull request pending
+**Status**: Sprints 1-6 and Sprint 7 production execution complete; core
+same-session agentic proof passes on the final image, while the trustworthy-MVP
+release claim remains operator-gated by the explicit residuals below; pull
+request pending
 **Estimated Complexity**: High
 
 ## Overview
@@ -1636,23 +1637,73 @@ sanitized outcome, repair, semantic-QA, effect, and audit evidence.
 ### Sprint 7 Gate
 
 - [x] The Sprint 7 title is presented and explicitly approved before execution.
-- [ ] All Sprint 7 tasks complete.
-- [ ] Production semantic QA and typed FFMPEGA execution pass authorized
+- [ ] All Sprint 7 release gates complete. Core execution is complete; the
+  authenticated production browser and quantified effect-lift gates remain open.
+- [x] Production semantic QA and typed FFMPEGA execution pass authorized
   canaries for the exact deployed route, model, service, schema, and image.
-- [ ] Healthy-path analysis-unavailable limitations are zero.
-- [ ] The latest prompt produces two consecutive fully passing same-session
+- [x] Healthy-path analysis-unavailable limitations are zero.
+- [x] The latest prompt produces two consecutive fully passing same-session
   outputs after the final fix.
-- [ ] No more than two additional prompt versions are used, and only when a named
+- [x] No more than two additional prompt versions are used, and only when a named
   residual risk requires them.
-- [ ] The broad `claim_ready` value and Wilson interval remain reported; no 99%
+- [x] The broad `claim_ready` value and Wilson interval remain reported; no 99%
   cross-population reliability statement is made unless that separate gate passes.
 - [ ] Latency/token/cost increases have measured quality lift and remain bounded.
 - [ ] Full integration, security/privacy, browser, database, release, health,
-  backup/restore, observability, and rollback validation passes.
-- [ ] Residual risks and claim language are current and evidence-backed.
-- [ ] Exactly one Sprint 7 implementation commit is created with the proposed
+  backup/restore, observability, and rollback validation passes. All listed
+  checks pass except authenticated production browser preview/download, which
+  requires an operator-held plaintext password and must not be bypassed.
+- [x] Residual risks and claim language are current and evidence-backed.
+- [x] Exactly one Sprint 7 implementation commit is created with the proposed
   sprint message; any post-gate production fix remains separate and explicit.
-- [ ] The rollback point and sanitized production evidence are recorded.
+- [x] The rollback point and sanitized production evidence are recorded.
+
+### Sprint 7 Production Evidence
+
+- **Final image and defect repair**: deployed
+  `1e15456b76e84d1f83d7b4d6b318ec348f9d7b02`. A real 60-fps render versus
+  30-fps stock-video comparison previously returned no FFmpeg SSIM summary and
+  was misclassified as `ASSET_VISIBILITY_ANALYSIS_UNAVAILABLE`. The comparison
+  now normalizes both streams to a shared frame rate, timebase, and zero-based
+  timestamps. The prior production artifact measures `0.977345` after the fix,
+  and a mismatched-timebase zero-start regression is checked in.
+- **Validation**: 61 focused tests pass; the full local suite passes 455 tests
+  with 78 expected PostgreSQL skips; the disposable connected-PostgreSQL suite
+  passes all 455 tests. The guarded 9Router strict-schema/text/vision/image,
+  direct Mistral STT, and pinned FFMPEGA readiness gates pass.
+- **Consecutive authoritative proof**: two post-fix immutable reruns use the
+  same uploaded source, prompt version, model route, schemas, configuration, and
+  final image with no intervening mutation. Both publish one distinct playable
+  22.5-second 1080x1920 H.264/AAC output at 60 fps; strict promotion, frame
+  quality, semantic QA, subtitle structure, and full decode pass. Both external
+  assets are visible in each run with deterministic SSIM values above `0.93`,
+  and neither run introduces a defect or healthy-path analysis-unavailable code.
+- **Direct inspection**: both outputs satisfy the requested source-first edit,
+  visible external-support assets, legible captions, coherent ending, and
+  artifact-free playback. `VISUAL_REFRAME_FALLBACK` remains truthful for dense
+  landscape screen content where content-preserving fit is safer than cropping;
+  the second run reduces the fallback count from six to two but does not remove
+  the source/aspect-ratio compromise.
+- **Typed finishing proof**: the one existing targeted prompt version is rerun
+  on the final image. Strict planning selects typed `sharpen(amount=0.4)`, the
+  pinned FFMPEGA service produces and registers `short-01-effects.mp4`, semantic
+  and deterministic QA pass, full decode passes, and FFMPEGA omission and new
+  defect counts remain zero. Direct inspection proves execution without proving
+  a strong native-versus-effect quality lift; that remains an explicit gate.
+- **Operations**: `/up`, `/health`, PostgreSQL readiness and head
+  `20260721_0003`, exact-image verification, queue completion, post-canary logs,
+  FFMPEGA readiness, and fresh backup/restore checks pass. No migration is added.
+- **Claim boundary**: the current two-hour aggregate remains
+  `claim_ready=false` with 7 classified attempts, a playable-output rate of
+  `0.857143`, and a 95% Wilson interval of `[0.486872, 0.974320]`. That window
+  intentionally includes pre-fix failures and limitations. It cannot support a
+  99% population claim; the passing statement is limited to the tested source,
+  authoritative prompt, targeted effect prompt, and exact final image.
+- **Open operator gates**: production preview/download is structurally
+  registered and independently decoded, but authenticated browser verification
+  requires the operator's plaintext login password. Provider token/cost fields
+  remain redacted or unavailable, and the subtle sharpen canary does not provide
+  a strong retained-native A/B quality measurement.
 
 ## Testing Strategy
 
@@ -1836,15 +1887,17 @@ sanitized outcome, repair, semantic-QA, effect, and audit evidence.
 - [x] Strict QA verdict and delivery decision remain separate and auditable.
 - [x] `audit defects` provides bounded agent-friendly queries without a migration.
 - [x] Historical v1 outcomes remain readable and immutable.
-- [x] Every sprint has passed its validation gate.
+- [ ] Every sprint has passed its validation gate; Sprint 7 retains the
+  authenticated-browser and quantified-effect-lift gates documented above.
 - [x] Every sprint has exactly one sprint-specific commit; post-gate release fixes
   remain separate and explicit.
-- [x] Final integration, security, browser, operational, and rollback checks pass.
+- [ ] Final integration, security, browser, operational, and rollback checks
+  pass; production browser authentication remains operator-gated.
 - [x] Residual risks and statistical claim limits are current.
-- [ ] Sprint 7 production semantic QA passes strict and semantic validation.
-- [ ] Sprint 7 typed FFMPEGA execution and native fallback pass production
+- [x] Sprint 7 production semantic QA passes strict and semantic validation.
+- [x] Sprint 7 typed FFMPEGA execution and native fallback pass production
   canaries without losing a playable output.
-- [ ] Sprint 7 latest-prompt same-session output passes twice consecutively after
+- [x] Sprint 7 latest-prompt same-session output passes twice consecutively after
   the final fix; targeted prompt variants are used only when required.
-- [ ] The trustworthy-MVP claim remains scoped to the tested source/prompts until
+- [x] The trustworthy-MVP claim remains scoped to the tested source/prompts until
   the separate 99% playable-output confidence gate passes.

@@ -115,6 +115,30 @@ The 99% statement additionally requires the Wilson confidence gate. A passing
 sample still requires explicit operator approval and does not mutate rollout
 configuration.
 
+## Sprint 7 final-image evidence
+
+The 2026-07-22 same-session production proof uses exact application image
+`1e15456b76e84d1f83d7b4d6b318ec348f9d7b02`, PostgreSQL revision
+`20260721_0003`, the configured `cx/gpt-5.6-sol` route, all seven strict
+boundaries, semantic QA, enforced bounded repair, technical-pass delivery, and
+the pinned FFMPEGA service.
+
+| Gate | Result | Evidence boundary |
+| --- | --- | --- |
+| Start-of-video asset visibility | PASS | Shared FFmpeg timebase/frame-rate normalization fixes the healthy-path unavailable result; focused regression and the prior real artifact pass. |
+| Full Python validation | PASS | 455 local tests with 78 expected database skips and 455 disposable connected-PostgreSQL tests. |
+| Release dependencies | PASS | 9Router strict/text/vision/image, direct Mistral STT, FFMPEGA readiness, `/up`, `/health`, database head, exact image, backup, and restore checks. |
+| Authoritative repeatability | PASS | Two consecutive immutable same-source/same-prompt outputs pass deterministic, semantic, asset-visibility, playback, subtitle, promotion, and direct-inspection gates. |
+| Typed FFMPEGA execution | PASS | The existing targeted prompt selects typed `sharpen(amount=0.4)` and registers a playable effects output with zero omission or introduced defects. |
+| Healthy-path unavailable analysis | PASS | Zero semantic- or asset-analysis-unavailable codes in the final consecutive pair and final-image effect canary. |
+| Broad 99% reliability | OPEN | `claim_ready=false`; 7 classified attempts yield `0.857143` playable rate and Wilson `[0.486872, 0.974320]`. |
+| Quantified effect quality lift | OPEN | Execution and non-regression are proven, but the subtle sharpen result lacks a retained native A/B artifact showing strong lift. |
+| Authenticated production browser | OPEN | Artifact registration and direct decode pass; the operator-held plaintext password is unavailable to automation and authentication must not be bypassed. |
+
+The production claim is therefore scoped to the tested uploaded source, the
+authoritative prompt, the one targeted effect prompt, and the exact final image.
+It is not a cross-source, cross-niche, or 99%-reliability statement.
+
 ## Rollback
 
 1. Set `OPENSTORYLINE_LLM_DEFECT_REPAIR_MODE=off`.
