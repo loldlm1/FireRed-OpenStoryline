@@ -47,6 +47,7 @@ validate_agentic_rollout_flags() {
   local ffmpega="${OPENSTORYLINE_FFMPEGA_ENABLED:-false}"
   local delivery="${OPENSTORYLINE_DELIVERY_POLICY:-qa_enforced}"
   local retry_ux="${OPENSTORYLINE_RETRY_UX_ENABLED:-false}"
+  local baseline_fallbacks="${OPENSTORYLINE_BASELINE_FALLBACKS_ENABLED:-false}"
   local promotion_mode="${OPENSTORYLINE_RENDER_PROMOTION_MODE:-report}"
   local creative_qa="${OPENSTORYLINE_CREATIVE_QA_ENABLED:-true}"
   local creative_qa_strict="${OPENSTORYLINE_CREATIVE_QA_STRICT:-true}"
@@ -61,6 +62,7 @@ validate_agentic_rollout_flags() {
   require_boolean_flag OPENSTORYLINE_SEMANTIC_QA_ENABLED
   require_boolean_flag OPENSTORYLINE_FFMPEGA_ENABLED
   require_boolean_flag OPENSTORYLINE_RETRY_UX_ENABLED
+  require_boolean_flag OPENSTORYLINE_BASELINE_FALLBACKS_ENABLED
   require_boolean_flag OPENSTORYLINE_CREATIVE_QA_ENABLED
   require_boolean_flag OPENSTORYLINE_CREATIVE_QA_STRICT
   case "$repair_mode" in
@@ -148,6 +150,14 @@ validate_agentic_rollout_flags() {
   if [[ "$repair_mode" == "enforce" ]]; then
     [[ "$agentic_mode" == "render" ]] \
       || fail "enforced repair requires OPENSTORYLINE_AGENTIC_EDITING_MODE=render"
+  fi
+  if [[ "$agentic_mode" == "render" ]]; then
+    [[ "$repair_mode" == "enforce" ]] \
+      || fail "production render requires OPENSTORYLINE_LLM_DEFECT_REPAIR_MODE=enforce"
+    [[ "${baseline_fallbacks,,}" == "true" ]] \
+      || fail "production render requires OPENSTORYLINE_BASELINE_FALLBACKS_ENABLED=true"
+    [[ "${retry_ux,,}" == "true" ]] \
+      || fail "production render requires OPENSTORYLINE_RETRY_UX_ENABLED=true"
   fi
   if [[ "${semantic_qa,,}" == "true" ]]; then
     [[ "$stage" -ge 4 ]] || fail "semantic QA requires semantic_qa.v1"

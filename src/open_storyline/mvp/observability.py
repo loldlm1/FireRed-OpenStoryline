@@ -16,6 +16,7 @@ from open_storyline.mvp.security import sanitize_text
 LOGGER = logging.getLogger("openstoryline.mvp")
 REQUEST_ID = ContextVar("openstoryline_mvp_request_id", default="")
 SAFE_ID = re.compile(r"^[A-Za-z0-9._:-]{1,128}$")
+SAFE_ATTRIBUTION = re.compile(r"^[A-Za-z0-9._:/+-]{1,160}$")
 SAFE_CODE = re.compile(r"^[A-Z0-9_]{1,120}$")
 SAFE_VERSION = re.compile(r"^[A-Za-z0-9._-]{1,80}$")
 QUALITY_FEEDBACK_VERSION = "quality_feedback.v1"
@@ -56,6 +57,11 @@ def _integer(value: Any, *, minimum: int = 0, maximum: int = 86_400_000) -> int:
 def _token(value: Any, *, limit: int = 80) -> str:
     candidate = str(value or "")
     return candidate[:limit] if SAFE_ID.fullmatch(candidate) else ""
+
+
+def _attribution_token(value: Any) -> str:
+    candidate = str(value or "")[:160]
+    return candidate if SAFE_ATTRIBUTION.fullmatch(candidate) else ""
 
 
 def _codes(values: Any, *, limit: int = 32) -> list[str]:
@@ -243,6 +249,7 @@ def compact_repair_observability(report: dict[str, Any]) -> dict[str, Any]:
     affected_values = source.get("affected_clip_ids")
     evidence_values = source.get("evidence_types")
     evidence_ids = source.get("evidence_ids")
+    defect_instance_ids = source.get("defect_instance_ids")
     objective_codes = [
         code for code in _codes(source.get("objective_codes")) if code in DEFECT_REGISTRY
     ]
@@ -254,7 +261,9 @@ def compact_repair_observability(report: dict[str, Any]) -> dict[str, Any]:
     return {
         "version": REPAIR_OBSERVABILITY_VERSION,
         "report_version": (
-            "repair_report.v1" if source.get("version") == "repair_report.v1" else ""
+            str(source.get("version"))
+            if source.get("version") in {"repair_report.v1", "repair_report.v2"}
+            else ""
         ),
         "request_version": (
             "repair_batch_request.v1"
@@ -263,7 +272,31 @@ def compact_repair_observability(report: dict[str, Any]) -> dict[str, Any]:
         ),
         "stage": stage if stage in {"visual_understanding", "plan_repair"} else "",
         "mode": mode if mode in {"off", "report", "enforce"} else "",
-        "semantic_attempt": _integer(source.get("semantic_attempt"), maximum=1),
+        "repair_round": (
+            str(source.get("repair_round"))
+            if str(source.get("repair_round")) in {"visual", "primary", "contingency"}
+            else ""
+        ),
+        "semantic_attempt": _integer(source.get("semantic_attempt"), maximum=2),
+        "authoritative_plan_fingerprint": (
+            str(source.get("authoritative_plan_fingerprint") or "").lower()
+            if re.fullmatch(
+                r"[a-f0-9]{64}",
+                str(source.get("authoritative_plan_fingerprint") or "").lower(),
+            )
+            else ""
+        ),
+        "defect_instance_ids": sorted({
+            value
+            for value in (
+                defect_instance_ids
+                if isinstance(defect_instance_ids, (list, tuple, set))
+                else ()
+            )
+            if isinstance(value, str) and re.fullmatch(r"[a-f0-9]{64}", value)
+        })[:32],
+        "model": _attribution_token(source.get("model")),
+        "reasoning_effort": _token(source.get("reasoning_effort")),
         "response_schema": _token(source.get("response_schema")),
         "repair_prompt_version": _token(source.get("repair_prompt_version")),
         **{

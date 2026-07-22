@@ -175,7 +175,8 @@ def _crop_analysis(
             break
     fill_samples = [
         item for item in samples
-        if item["strategy"] == "crop" and item["expected_active_area_ratio"] >= 0.9
+        if item["strategy"] in {"crop", "fit"}
+        and item["expected_active_area_ratio"] >= 0.9
     ]
     ratios = [item["active_area_ratio"] for item in fill_samples]
     heights = [item["active_height_ratio"] for item in fill_samples]
@@ -283,6 +284,10 @@ def _overlay_active(segment: dict[str, Any], timestamp_ms: int) -> bool:
 def _reference_candidates(execution: dict[str, Any]) -> list[tuple[int, dict[str, Any]]]:
     candidates: list[tuple[int, dict[str, Any]]] = []
     for segment in execution.get("segments") or []:
+        if str(segment.get("strategy") or "") == "fit":
+            # Blurred-fit intentionally changes the background, so full-frame
+            # source-reference metrics are not comparable for these segments.
+            continue
         if str(segment.get("transition_kind") or "cut") == "xfade":
             continue
         window = segment.get("timeline_window") or {}
@@ -314,7 +319,7 @@ def _composition_filter(segment: dict[str, Any], *, width: int, height: int) -> 
         if min(values[:2]) <= 0 or min(values[2:]) < 0:
             raise FrameQualityError("FRAME_QUALITY_REFERENCE_INVALID", "crop evidence is invalid")
         return f"crop={values[0]}:{values[1]}:{values[2]}:{values[3]},scale={width}:{height}"
-    if strategy in {"fit", "letterbox", "source"}:
+    if strategy in {"letterbox", "source"}:
         return (
             f"scale={width}:{height}:force_original_aspect_ratio=decrease,"
             f"pad={width}:{height}:(ow-iw)/2:(oh-ih)/2:color=black"

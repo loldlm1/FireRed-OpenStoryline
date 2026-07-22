@@ -18,6 +18,8 @@ from open_storyline.mvp.prompts import (
     REPAIR_SYSTEM_PROMPT_VERSION,
 )
 from open_storyline.mvp.repair import (
+    PlanRepairRound,
+    PlanRepairState,
     RepairBudget,
     RepairContractError,
     RepairEvidence,
@@ -25,9 +27,12 @@ from open_storyline.mvp.repair import (
     RepairMode,
     RepairStage,
     TranscriptExcerpt,
+    authoritative_plan_fingerprint,
+    bounded_repair_findings,
     build_repair_batch,
     build_repair_report,
     evaluate_repair_quality_floor,
+    make_repair_finding,
     predict_plan_findings,
     repair_disposition,
     resolve_repair_mode,
@@ -129,6 +134,55 @@ class RepairEligibilityTests(unittest.TestCase):
                 tested.add(code)
         self.assertTrue(tested)
 
+    def test_creative_intent_mismatch_reaches_the_llm_with_bounded_contract_evidence(self):
+        finding = make_repair_finding(
+            "EDIT_PLAN_INTENT_MISMATCH",
+            clip_index=1,
+            objective=True,
+            values={
+                "observed": "intent_mismatch",
+                "constraint_code": "opening_title_invalid",
+                "intent_id": "prompt-opening-title",
+            },
+            source="creative_intent",
+        )
+        request, dispositions = build_repair_batch(
+            stage=RepairStage.PLAN_REPAIR,
+            mode=RepairMode.ENFORCE,
+            findings=(finding,),
+            budget=RepairBudget(),
+            candidate_clips={1: {"segments": []}},
+            available_capabilities=("crop", "text_emphasis", "subtitles"),
+            catalog_context={},
+            immutable_constraints={
+                "creative_intent": {
+                    "version": "creative_intent.v2",
+                    "operation_intents": [{
+                        "id": "prompt-opening-title",
+                        "kind": "opening_title",
+                        "count_min": 1,
+                        "count_max": 1,
+                        "start_max_ms": 3500,
+                    }],
+                },
+            },
+            editing_prompt="Add an opening title.",
+            authoritative_plan_sha256="a" * 64,
+        )
+
+        provider = request.to_provider_dict()
+        self.assertTrue(dispositions[0].call_allowed)
+        self.assertEqual(
+            provider["evidence"][0]["values"]["constraint_code"],
+            "opening_title_invalid",
+        )
+        self.assertEqual(
+            provider["immutable_constraints"]["creative_intent"][
+                "operation_intents"
+            ][0]["start_max_ms"],
+            3500,
+        )
+
     def test_nonrepairable_unknown_technical_provider_and_ffmpega_codes_are_rejected(self):
         for code in (
             "UNKNOWN_PRIVATE_DEFECT",
@@ -163,7 +217,7 @@ class RepairEligibilityTests(unittest.TestCase):
         self.assertFalse(dispositions[RepairMode.REPORT].call_allowed)
         self.assertTrue(dispositions[RepairMode.ENFORCE].call_allowed)
 
-    def test_stage_budgets_are_independent_and_single_use(self):
+    def test_visual_budget_is_single_use_and_plan_budget_allows_two_rounds(self):
         visual = finding_for("VISUAL_RESPONSE_INVALID")
         plan = finding_for("EDIT_PLAN_INVALID")
         self.assertTrue(repair_disposition(
@@ -184,12 +238,119 @@ class RepairEligibilityTests(unittest.TestCase):
             mode=RepairMode.ENFORCE,
             budget=RepairBudget(visual_attempts_used=1),
         ).eligible)
-        self.assertFalse(repair_disposition(
+        self.assertTrue(repair_disposition(
             plan,
             stage=RepairStage.PLAN_REPAIR,
             mode=RepairMode.ENFORCE,
             budget=RepairBudget(plan_attempts_used=1),
         ).eligible)
+        self.assertFalse(repair_disposition(
+            plan,
+            stage=RepairStage.PLAN_REPAIR,
+            mode=RepairMode.ENFORCE,
+            budget=RepairBudget(plan_attempts_used=2),
+        ).eligible)
+
+    def test_plan_repair_state_requires_matching_outbound_attempt_before_fallback(self):
+        finding = make_repair_finding(
+            "COMPOSITION_CROP_TARGET_TOO_WIDE",
+            clip_index=1,
+            objective=True,
+            values={"segment_id": "segment-1", "observed": "overflow"},
+        )
+        fingerprint = authoritative_plan_fingerprint(shadow_plan())
+        state = PlanRepairState()
+        state.record_round(
+            round=PlanRepairRound.PRIMARY,
+            findings=(finding,),
+            authoritative_plan_fingerprint=fingerprint,
+            provider_attempts=({"number": 1, "reason": "timeout"},),
+            provider_outcome="NINEROUTER_REQUEST_FAILED",
+            schema_valid=False,
+            semantic_valid=False,
+        )
+
+        evidence = state.require_fallback_evidence(
+            (finding,),
+            authoritative_plan_fingerprint=fingerprint,
+        )
+        self.assertEqual(evidence[0].round, PlanRepairRound.PRIMARY)
+        different_segment = make_repair_finding(
+            "COMPOSITION_CROP_TARGET_TOO_WIDE",
+            clip_index=1,
+            objective=True,
+            values={"segment_id": "segment-2", "observed": "overflow"},
+        )
+        with self.assertRaises(RepairContractError) as caught:
+            state.require_fallback_evidence(
+                (different_segment,),
+                authoritative_plan_fingerprint=fingerprint,
+            )
+        self.assertEqual(caught.exception.code, "REPAIR_ATTEMPT_REQUIRED")
+
+    def test_same_code_on_two_segments_remains_two_defect_instances(self):
+        findings = tuple(
+            make_repair_finding(
+                "COMPOSITION_CROP_TARGET_TOO_WIDE",
+                clip_index=1,
+                objective=True,
+                values={"segment_id": segment_id, "observed": "overflow"},
+            )
+            for segment_id in ("segment-1", "segment-2")
+        )
+        selected, overflow = bounded_repair_findings(findings)
+        self.assertEqual(len(selected), 2)
+        self.assertEqual(overflow, ())
+        request, _ = build_repair_batch(
+            stage=RepairStage.PLAN_REPAIR,
+            mode=RepairMode.ENFORCE,
+            findings=selected,
+            budget=RepairBudget(),
+            candidate_clips={1: {"segments": []}},
+            available_capabilities=("crop", "fit", "subtitles"),
+            catalog_context={},
+            immutable_constraints={"preserve_source_windows": True},
+            editing_prompt="Repair both synthetic segment defects.",
+            authoritative_plan_sha256="a" * 64,
+        )
+        self.assertEqual(len(request.to_report_dict()["defect_instance_ids"]), 2)
+        self.assertEqual(
+            len(set(request.to_report_dict()["defect_instance_ids"])),
+            2,
+        )
+
+    def test_report_only_does_not_satisfy_fallback_gate_and_third_round_is_rejected(self):
+        primary = finding_for("EDIT_PLAN_INVALID")
+        contingency = finding_for("EDIT_PLAN_EVIDENCE_UNKNOWN")
+        fingerprint = authoritative_plan_fingerprint(shadow_plan())
+        state = PlanRepairState()
+        state.record_round(
+            round=PlanRepairRound.PRIMARY,
+            findings=(primary,),
+            authoritative_plan_fingerprint=fingerprint,
+            provider_attempts=(),
+            provider_outcome="report_only",
+            schema_valid=False,
+            semantic_valid=False,
+        )
+        with self.assertRaises(RepairContractError) as caught:
+            state.require_fallback_evidence(
+                (primary,),
+                authoritative_plan_fingerprint=fingerprint,
+            )
+        self.assertEqual(caught.exception.code, "REPAIR_ATTEMPT_REQUIRED")
+        state.record_round(
+            round=PlanRepairRound.CONTINGENCY,
+            findings=(contingency,),
+            authoritative_plan_fingerprint=fingerprint,
+            provider_attempts=({"number": 1},),
+            provider_outcome="ok",
+            schema_valid=True,
+            semantic_valid=True,
+        )
+        with self.assertRaises(RepairContractError) as caught:
+            state.next_round()
+        self.assertEqual(caught.exception.code, "REPAIR_PLAN_CALL_LIMIT_EXCEEDED")
 
     def test_missing_evidence_and_advisory_only_findings_make_no_call(self):
         missing = RepairFinding(
@@ -370,6 +531,162 @@ class RepairContractPrivacyTests(unittest.TestCase):
         self.assertNotIn(private_marker, json.dumps(report))
         self.assertEqual(validate_repair_report(report), report)
 
+    def test_repair_report_v2_preserves_round_attempt_and_fallback_identity(self):
+        primary = make_repair_finding(
+            "COMPOSITION_CROP_TARGET_TOO_WIDE",
+            clip_index=1,
+            objective=True,
+            values={"segment_id": "segment-primary", "observed": "overflow"},
+        )
+        contingency = make_repair_finding(
+            "PREDICTIVE_ACTIVE_PICTURE_RISK",
+            clip_index=1,
+            objective=True,
+            values={"segment_id": "segment-contingency", "observed": "late"},
+        )
+        primary_fingerprint = "a" * 64
+        contingency_fingerprint = "b" * 64
+        state = PlanRepairState()
+        state.record_round(
+            round=PlanRepairRound.PRIMARY,
+            findings=(primary,),
+            authoritative_plan_fingerprint=primary_fingerprint,
+            provider_attempts=({"number": 1},),
+            provider_outcome="provider_unavailable",
+            schema_valid=False,
+            semantic_valid=False,
+        )
+        state.record_round(
+            round=PlanRepairRound.CONTINGENCY,
+            findings=(contingency,),
+            authoritative_plan_fingerprint=contingency_fingerprint,
+            provider_attempts=({"number": 1},),
+            provider_outcome="ok",
+            schema_valid=True,
+            semantic_valid=False,
+        )
+        attempt_by_round = {item.round: item for item in state.attempts}
+
+        def stage_record(round_name, attempt, status, candidate_disposition):
+            return {
+                "stage": "plan_repair",
+                "status": status,
+                "repair_round": round_name.value,
+                "authoritative_plan_fingerprint": (
+                    attempt.defect.authoritative_plan_fingerprint
+                ),
+                "provider_outcome": attempt.provider_outcome,
+                "schema_valid": attempt.schema_valid,
+                "semantic_valid": attempt.semantic_valid,
+                "candidate_disposition": candidate_disposition,
+                "checkpoint_fingerprint": "c" * 64,
+                "request": {
+                    "request_version": "repair_batch_request.v1",
+                    "response_schema": "edit_plan_repair.v1",
+                    "repair_round": round_name.value,
+                    "semantic_attempt": (
+                        1 if round_name is PlanRepairRound.PRIMARY else 2
+                    ),
+                    "authoritative_plan_fingerprint": (
+                        attempt.defect.authoritative_plan_fingerprint
+                    ),
+                    "defect_instance_ids": [attempt.defect.id],
+                    "affected_clip_ids": [1],
+                    "objective_codes": [attempt.defect.code],
+                    "advisory_codes": [],
+                    "evidence_types": ["composition_geometry"],
+                    "evidence_ids": ["evidence-1"],
+                    "evidence_count": 1,
+                    "would_call": True,
+                    "call_allowed": True,
+                },
+                "dispositions": [{
+                    "code": attempt.defect.code,
+                    "eligible": True,
+                    "would_call": True,
+                    "call_allowed": True,
+                    "reason": "eligible",
+                }],
+                "resolution": {
+                    "original_codes": [attempt.defect.code],
+                    "resolved_codes": [],
+                    "remaining_codes": [attempt.defect.code],
+                    "introduced_codes": [],
+                },
+                "quality_floor": {
+                    "accepted": False,
+                    "violation_codes": [],
+                },
+                "attempts": [{
+                    "category": "plan_repair",
+                    "number": 1,
+                    "status_code": 503 if status == "failed" else 200,
+                    "reason": attempt.provider_outcome,
+                    "duration_ms": 100,
+                }],
+                "checkpoint_reused": False,
+            }
+
+        report = build_repair_report(
+            mode=RepairMode.ENFORCE,
+            stage_records=(
+                stage_record(
+                    PlanRepairRound.PRIMARY,
+                    attempt_by_round[PlanRepairRound.PRIMARY],
+                    "failed",
+                    "unavailable",
+                ),
+                stage_record(
+                    PlanRepairRound.CONTINGENCY,
+                    attempt_by_round[PlanRepairRound.CONTINGENCY],
+                    "rejected",
+                    "rejected",
+                ),
+            ),
+            fallback_entries=({
+                "code": "VISUAL_REFRAME_FALLBACK",
+                "clip_index": 1,
+                "segment_id": "segment-contingency",
+                "requested": "semantic_crop",
+                "executed": "content_preserving_fit",
+            },),
+            attempt_evidence=state.attempts,
+            rollout_attribution={
+                "model": "cx/gpt-5.6-sol",
+                "reasoning_effort": "medium",
+                "structured_output_mode": "json_schema",
+                "structured_output_boundaries": ["edit_plan_repair.v1"],
+                "repair_mode": "enforce",
+            },
+        )
+
+        self.assertEqual(report["version"], "repair_report.v2")
+        self.assertEqual(
+            [item["repair_round"] for item in report["stages"]],
+            ["primary", "contingency"],
+        )
+        self.assertEqual(len(report["attempt_ledger"]), 2)
+        self.assertEqual(report["attribution"]["model"], "cx/gpt-5.6-sol")
+        self.assertTrue(report["fallbacks"][0]["fallback_authorized"])
+        self.assertEqual(report["fallbacks"][0]["attempt_round"], "contingency")
+        self.assertEqual(report["summary"]["fallback_after_attempt_count"], 1)
+        self.assertEqual(report["summary"]["jobs_at_two_call_cap"], 1)
+        self.assertEqual(validate_repair_report(report), report)
+
+    def test_historical_repair_report_v1_remains_readable(self):
+        legacy = build_repair_report(mode=RepairMode.REPORT)
+        legacy["version"] = "repair_report.v1"
+        legacy.pop("attempt_ledger")
+        legacy.pop("attribution")
+        legacy["summary"].pop("fallback_after_attempt_count")
+        legacy["summary"].pop("repair_invariant_violation_count")
+        legacy["summary"].pop("jobs_at_two_call_cap")
+
+        normalized = validate_repair_report(legacy)
+
+        self.assertEqual(normalized["version"], "repair_report.v1")
+        self.assertNotIn("attempt_ledger", normalized)
+
     def test_malformed_repair_reports_fail_closed(self):
         report = build_repair_report(mode=RepairMode.REPORT)
         malformed = deepcopy(report)
@@ -482,6 +799,51 @@ class RepairQualityFloorTests(unittest.TestCase):
             ("EDIT_PLAN_EVIDENCE_UNKNOWN",),
         )
 
+    def test_geometry_repair_cannot_mutate_fields_outside_segment_layout_allowlist(self):
+        original = shadow_plan()
+        payload = original.to_dict()
+        segment = payload["clips"][0]["segments"][0]
+        segment["layout"].update({
+            "mode": "fit",
+            "fallback": "fit",
+            "allow_full_frame_fallback": True,
+            "max_zoom": 1.0,
+        })
+        accepted = evaluate_repair_quality_floor(
+            original,
+            EditPlan.model_validate(payload),
+            original_codes=("COMPOSITION_CROP_TARGET_TOO_WIDE",),
+            repaired_codes=(),
+            available_capabilities=original.requested_capabilities,
+            affected_clip_indexes=(1,),
+            affected_operation_ids=(segment["id"],),
+            allowed_mutations_by_operation={
+                segment["id"]: (
+                    "layout.mode",
+                    "layout.fallback",
+                    "layout.allow_full_frame_fallback",
+                    "layout.max_zoom",
+                ),
+            },
+        )
+        self.assertTrue(accepted.accepted)
+
+        payload["clips"][0]["segments"][0]["reason"] = "unapproved rewrite"
+        rejected = evaluate_repair_quality_floor(
+            original,
+            EditPlan.model_validate(payload),
+            original_codes=("COMPOSITION_CROP_TARGET_TOO_WIDE",),
+            repaired_codes=(),
+            available_capabilities=original.requested_capabilities,
+            affected_clip_indexes=(1,),
+            affected_operation_ids=(segment["id"],),
+            allowed_mutations_by_operation={segment["id"]: ("layout.mode",)},
+        )
+        self.assertIn(
+            "REPAIR_MUTATION_OUTSIDE_ALLOWLIST",
+            rejected.violation_codes,
+        )
+
 
 class PredictiveRepairPolicyTests(unittest.TestCase):
     def test_every_predictive_code_declares_complete_policy_metadata(self):
@@ -512,7 +874,7 @@ class PredictiveRepairPolicyTests(unittest.TestCase):
                 "segments": [{
                     "id": "segment-1",
                     "timeline_window": {"start_ms": 0, "end_ms": 12_000},
-                    "layout": {"mode": "fit"},
+                    "layout": {"mode": "letterbox"},
                     "overlays": [
                         {
                             "id": "overlay-1",
@@ -558,6 +920,26 @@ class PredictiveRepairPolicyTests(unittest.TestCase):
             budget=RepairBudget(),
         )
         self.assertFalse(advisory.call_allowed)
+
+        blurred_fit = {
+            "clips": [{
+                "clip_index": 1,
+                "segments": [{
+                    "id": "fit-segment",
+                    "timeline_window": {"start_ms": 0, "end_ms": 4_000},
+                    "layout": {"mode": "fit"},
+                    "overlays": [],
+                }],
+            }],
+        }
+        fit_codes = {
+            item.code
+            for item in predict_plan_findings(
+                blurred_fit,
+                source_aspect_ratios={1: 16 / 9},
+            )
+        }
+        self.assertNotIn("PREDICTIVE_ACTIVE_PICTURE_RISK", fit_codes)
 
 
 if __name__ == "__main__":

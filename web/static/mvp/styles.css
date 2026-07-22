@@ -1601,6 +1601,13 @@ fieldset.field {
   gap: 6px;
 }
 
+.rerun-unavailable {
+  max-width: 34rem;
+  color: var(--ui-text-soft);
+  font-size: .75rem;
+  line-height: 1.45;
+}
+
 .compare-check {
   display: inline-flex;
   min-height: 38px;

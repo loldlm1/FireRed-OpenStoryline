@@ -53,7 +53,7 @@ def crop_scale_filter(crop: Any, *, output_width: int, output_height: int) -> st
     return f"crop={values[0]}:{values[1]}:{values[2]}:{values[3]},scale={width}:{height}"
 
 
-def fit_filter(*, output_width: int, output_height: int, color: str = "black") -> str:
+def letterbox_filter(*, output_width: int, output_height: int, color: str = "black") -> str:
     width, height = validate_output_dimensions(output_width, output_height)
     if color not in {"black", "white"}:
         raise FilterGraphError("FILTER_COLOR_INVALID", "padding color is unsupported")
@@ -61,6 +61,16 @@ def fit_filter(*, output_width: int, output_height: int, color: str = "black") -
         f"scale={width}:{height}:force_original_aspect_ratio=decrease,"
         f"pad={width}:{height}:(ow-iw)/2:(oh-ih)/2:color={color}"
     )
+
+
+def _blurred_fit_values(output_width: int, output_height: int) -> tuple[int, int, float]:
+    width, height = validate_output_dimensions(output_width, output_height)
+    background_width = max(64, width // 4)
+    background_height = max(64, height // 4)
+    background_width -= background_width % 2
+    background_height -= background_height % 2
+    sigma = max(4.0, min(background_width, background_height) / 24)
+    return background_width, background_height, sigma
 
 
 def _escape_drawtext(value: str) -> str:
@@ -205,12 +215,12 @@ def build_reframe_filtergraph(
                 output_width=output_width,
                 output_height=output_height,
             )
-        elif segment.strategy in {"fit", "letterbox"}:
-            composition = fit_filter(
+        elif segment.strategy == "letterbox":
+            composition = letterbox_filter(
                 output_width=output_width,
                 output_height=output_height,
             )
-        else:
+        elif segment.strategy != "fit":
             raise FilterGraphError(
                 "FILTER_STRATEGY_UNSUPPORTED",
                 f"unsupported reframe strategy: {segment.strategy}",
@@ -218,10 +228,41 @@ def build_reframe_filtergraph(
         start = source.start_ms / 1000
         end = source.end_ms / 1000
         treatment = f",{color_filter}" if color_filter else ""
-        graph.append(
+        video_prefix = (
             f"{video_input}trim=start={start:.3f}:end={end:.3f},"
-            f"settb=AVTB,setpts=PTS-STARTPTS,{composition}{treatment},setsar=1[vbase{index}]"
+            "settb=AVTB,setpts=PTS-STARTPTS"
         )
+        if segment.strategy == "fit":
+            background_width, background_height, sigma = _blurred_fit_values(
+                output_width,
+                output_height,
+            )
+            graph.append(
+                f"{video_prefix},split=2[vfitbg{index}][vfitfg{index}]"
+            )
+            graph.append(
+                f"[vfitbg{index}]scale={background_width}:{background_height}:"
+                "force_original_aspect_ratio=increase,"
+                f"crop={background_width}:{background_height},"
+                f"gblur=sigma={sigma:.3f}:steps=2,"
+                "eq=brightness=-0.0600:contrast=0.8800:saturation=0.5000,"
+                "colorlevels=romin=0.085:gomin=0.095:bomin=0.125:"
+                "romax=0.420:gomax=0.450:bomax=0.540,"
+                f"scale={output_width}:{output_height},setsar=1[vfitbgready{index}]"
+            )
+            graph.append(
+                f"[vfitfg{index}]scale={output_width}:{output_height}:"
+                "force_original_aspect_ratio=decrease,setsar=1[vfitfgready"
+                f"{index}]"
+            )
+            graph.append(
+                f"[vfitbgready{index}][vfitfgready{index}]"
+                f"overlay=(W-w)/2:(H-h)/2:shortest=1{treatment},setsar=1[vbase{index}]"
+            )
+        else:
+            graph.append(
+                f"{video_prefix},{composition}{treatment},setsar=1[vbase{index}]"
+            )
         graph.append(
             f"{audio_input}atrim=start={start:.3f}:end={end:.3f},"
             f"asetpts=PTS-STARTPTS,aresample=async=1:first_pts=0[a{index}]"

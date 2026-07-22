@@ -4,7 +4,12 @@ from dataclasses import asdict, dataclass
 from datetime import datetime, timezone
 from typing import Any, Iterable
 
+from open_storyline.mvp.compositor import (
+    CompositionError,
+    assess_segment_crop_geometry,
+)
 from open_storyline.mvp.edit_plan import AssetPolicy, EditPlan, required_capabilities
+from open_storyline.mvp.visual_understanding import VisualUnderstanding
 from open_storyline.mvp.visual_coverage import ClipVisualCoverageReport
 
 
@@ -17,9 +22,13 @@ class PreflightFinding:
     code: str
     source: str
     message: str
+    details: dict[str, Any] | None = None
 
-    def to_dict(self) -> dict[str, str]:
-        return asdict(self)
+    def to_dict(self) -> dict[str, Any]:
+        value = asdict(self)
+        if self.details is None:
+            value.pop("details")
+        return value
 
 
 @dataclass(frozen=True)
@@ -69,6 +78,11 @@ def build_preflight(
     max_segments_per_clip: int = 48,
     max_overlays_per_clip: int = 16,
     max_assets_per_clip: int = 8,
+    visual_understanding: VisualUnderstanding | None = None,
+    source_width: int | None = None,
+    source_height: int | None = None,
+    output_width: int | None = None,
+    output_height: int | None = None,
 ) -> PreflightReport:
     available = tuple(sorted({str(value) for value in available_capabilities}))
     available_set = set(available)
@@ -141,6 +155,38 @@ def build_preflight(
                     f"clips.{clip.clip_index}.segments.{segment.id}.layout.fallback",
                     "Automatic fit or letterbox fallback requires explicit permission.",
                 ))
+            if (
+                visual_understanding is not None
+                and source_width is not None
+                and source_height is not None
+                and output_width is not None
+                and output_height is not None
+            ):
+                try:
+                    assessment = assess_segment_crop_geometry(
+                        segment,
+                        visual=visual_understanding,
+                        source_width=source_width,
+                        source_height=source_height,
+                        output_width=output_width,
+                        output_height=output_height,
+                    )
+                except CompositionError as exc:
+                    findings.append(PreflightFinding(
+                        "block",
+                        exc.code,
+                        f"clips.{clip.clip_index}.segments.{segment.id}.layout",
+                        str(exc),
+                    ))
+                else:
+                    if assessment is not None and assessment.overflowing:
+                        findings.append(PreflightFinding(
+                            "block",
+                            "COMPOSITION_CROP_TARGET_TOO_WIDE",
+                            f"clips.{clip.clip_index}.segments.{segment.id}.layout",
+                            "The protected visual target cannot fit the configured portrait crop.",
+                            details=assessment.to_evidence_dict(),
+                        ))
             target = segment.layout.focal_target
             if target is not None:
                 if target.region_id and target.region_id not in regions:

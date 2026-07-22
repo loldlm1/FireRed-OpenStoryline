@@ -126,11 +126,16 @@ class PriorAttemptQualityFeedbackTests(unittest.TestCase):
     def test_repair_observability_allowlists_only_redacted_metadata(self):
         private_marker = "private prompt transcript and /private/source.mp4"
         compact = compact_repair_observability({
-            "version": "repair_report.v1",
+            "version": "repair_report.v2",
             "request_version": "repair_batch_request.v1",
             "stage": "plan_repair",
             "mode": "report",
             "semantic_attempt": 1,
+            "repair_round": "primary",
+            "authoritative_plan_fingerprint": "9" * 64,
+            "defect_instance_ids": ["8" * 64],
+            "model": "cx/gpt-5.6-sol",
+            "reasoning_effort": "medium",
             "response_schema": "edit_plan_repair.v1",
             "repair_prompt_version": "mvp-defect-repair.v1",
             "repair_prompt_sha256": "a" * 64,
@@ -158,6 +163,11 @@ class PriorAttemptQualityFeedbackTests(unittest.TestCase):
         self.assertEqual(compact["objective_codes"], ["EDIT_PLAN_INVALID"])
         self.assertEqual(compact["response_schema_sha256"], "f" * 64)
         self.assertEqual(compact["evidence_ids"], ["evidence-1"])
+        self.assertEqual(compact["report_version"], "repair_report.v2")
+        self.assertEqual(compact["repair_round"], "primary")
+        self.assertEqual(compact["semantic_attempt"], 1)
+        self.assertEqual(compact["defect_instance_ids"], ["8" * 64])
+        self.assertEqual(compact["model"], "cx/gpt-5.6-sol")
         self.assertTrue(compact["would_call"])
         self.assertFalse(compact["call_allowed"])
         self.assertNotIn(private_marker, json.dumps(compact))

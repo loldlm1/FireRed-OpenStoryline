@@ -12,6 +12,11 @@ The completed agentic defect-repair working plan was retired after increments
 59-66 were consolidated into this history and the
 [`Agentic defect-repair rollout`](agentic-defect-repair-rollout.md) runbook.
 
+The completed LLM-first recovery plan was retired after increments 67-74 were
+consolidated into this history and the current
+[`Architecture`](architecture.md), [`Defect repair`](defect-repair.md), and
+[`Agentic defect-repair rollout`](agentic-defect-repair-rollout.md) guidance.
+
 | Increment | Scope | Required validation | Commit |
 | --- | --- | --- | --- |
 | 0 | Architecture, remote-only policy, key guide | Config examples parse; docs links checked | `docs: define MVP architecture` |
@@ -81,6 +86,14 @@ The completed agentic defect-repair working plan was retired after increments
 | 64 | Agentic defect repair Sprint 6: eval and rollout gates | Registry-wide synthetic evals, attributable SLO summaries, monotonic rollout validation, provider probes, rollback owners, and release documentation | `chore: gate agentic defect repair rollout` |
 | 65 | Agentic defect repair production stabilization and canary | Responses-compatible strict transport, exact-image deployment, healthy PostgreSQL and endpoints, two playable private-session outputs, truthful limited delivery, authenticated preview/download, and a one-call strict repair canary that resolved three crop-coverage defects with zero new defects; the 99% claim remains blocked by sample size | `fix: route strict schemas through responses` |
 | 66 | Agentic defect repair Sprint 7: final-image semantic and finishing proof | Fixed mismatched-timebase asset visibility, passed 455 local and 455 connected tests, deployed exact image `1e15456`, completed two consecutive same-session semantic/deterministic outputs plus a typed FFMPEGA sharpen canary, and retained explicit gates for the broad Wilson claim, authenticated production browser access, and quantified effect lift | `feat: prove quality-first agentic video editing` |
+| 67 | LLM-first recovery Sprint 1: shared pre-render composition detection | Shared crop-feasibility geometry, authoritative early findings, synthetic overflow regression, and compositor parity | `fix(mvp): detect repairable composition defects before rendering` |
+| 68 | LLM-first recovery Sprint 2: bounded primary and contingency plan repair | Two-batch state machine, candidate rejection, per-defect attempt gates, safe segment-local fallback, and final dry-run enforcement | `feat(mvp): enforce bounded two-batch agentic recovery` |
+| 69 | LLM-first recovery Sprint 3: durable failed-outcome evidence | Versioned repair attribution, checkpoint preservation, truthful failed outcomes, and audit-safe recovery metrics | `fix(mvp): preserve repair evidence across failed outcomes` |
+| 70 | LLM-first recovery Sprint 4: retained-session rerun | Plain immutable-version rerun independent of quality feedback, authenticated API/UX recovery, and source-lineage checks | `feat(mvp): expose retained-session rerun recovery` |
+| 71 | LLM-first recovery Sprint 5: release gates and runbooks | Registry-wide regression evals, enforced rollout ordering, provider/deploy gates, rollback evidence, and production configuration validation | `chore(mvp): gate llm-first recovery rollout` |
+| 72 | Production portrait-fit stabilization | Content-preserving blurred portrait fill, active-picture evidence, real-FFmpeg regressions, exact-image rollout, and retained rollback | `fix(mvp): fill portrait fit canvas safely` |
+| 73 | Dark-source portrait-fit visibility | Navy/slate tonal floor for dark source media, full-canvas frame QA, focused/full tests, and exact-image production validation | `fix(mvp): keep blurred fit visible on dark sources` |
+| 74 | Two-prompt production creative recovery QA | Fixed a geometry branch that weakened required reframes, then passed two fresh bilingual immutable prompt versions with visible titles, three executable reframes, restrained fades, synchronized subtitles, portrait frame inspection, truthful LLM-first attribution, exact-image health gates, and redacted evidence only | `docs(mvp): record two-prompt production qa` |
 
 Pull-request, merge, and release state belongs in the hosting platform, not in
 this historical implementation record.

@@ -298,7 +298,7 @@ def _defect_records_from_evidence(
         fallback="unknown",
     )
     timestamp = _iso(completed_at or created_at)
-    records: dict[tuple[str, str, str], dict[str, Any]] = {}
+    records: dict[tuple[str, str, str, str], dict[str, Any]] = {}
 
     def add(
         *,
@@ -308,6 +308,7 @@ def _defect_records_from_evidence(
         strategy: Any = None,
         repair_attempted: bool = False,
         repair_state: Any = None,
+        repair_round: Any = None,
         checkpoint_reused: bool = False,
         fallback_requested: Any = None,
         fallback_executed: Any = None,
@@ -315,7 +316,8 @@ def _defect_records_from_evidence(
         presentation = defect_public_metadata(code)
         raw_code = presentation["raw_code"]
         stage_name = _audit_token(stage, limit=64, fallback="unknown")
-        key = (raw_code, stage_name, disposition)
+        round_name = _audit_token(repair_round, limit=20)
+        key = (raw_code, stage_name, round_name, disposition)
         records[key] = sanitize_for_persistence({
             "job_id": job_id,
             "attempt_id": job_id,
@@ -337,6 +339,7 @@ def _defect_records_from_evidence(
                 limit=40,
                 fallback="unknown",
             ),
+            "repair_round": round_name,
             "checkpoint_reused": checkpoint_reused,
             "fallback_applied": disposition == "fallback_applied",
             "fallback_requested": _audit_token(fallback_requested),
@@ -372,6 +375,7 @@ def _defect_records_from_evidence(
                     strategy=defect.get("strategy"),
                     repair_attempted=defect.get("repair_attempted") is True,
                     repair_state=stage.get("status"),
+                    repair_round=stage.get("repair_round"),
                     checkpoint_reused=stage.get("checkpoint_reused") is True,
                     fallback_requested=fallback.get("requested"),
                     fallback_executed=fallback.get("executed"),

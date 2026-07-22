@@ -1,0 +1,98 @@
+{
+  "version": "crop_geometry_fixture.v1",
+  "segment_id": "speaker-union",
+  "source": {
+    "width": 1920,
+    "height": 1080
+  },
+  "output": {
+    "width": 1080,
+    "height": 1920
+  },
+  "frames": [
+    {
+      "id": "frame-left",
+      "timestamp_ms": 1000
+    },
+    {
+      "id": "frame-right",
+      "timestamp_ms": 3000
+    }
+  ],
+  "regions": [
+    {
+      "id": "speaker-left",
+      "frame_id": "frame-left",
+      "bbox": {
+        "x": 0.2,
+        "y": 0.1,
+        "width": 0.18,
+        "height": 0.8
+      }
+    },
+    {
+      "id": "speaker-right",
+      "frame_id": "frame-right",
+      "bbox": {
+        "x": 0.388,
+        "y": 0.1,
+        "width": 0.18,
+        "height": 0.8
+      }
+    }
+  ],
+  "expected": {
+    "code": "COMPOSITION_CROP_TARGET_TOO_WIDE",
+    "threshold": 1.12,
+    "width_overflow_ratio_min": 1.16,
+    "width_overflow_ratio_max": 1.17
+  },
+  "recovery_contract": {
+    "private_data": false,
+    "clip_index": 1,
+    "source_window": {
+      "start_ms": 0,
+      "end_ms": 8000
+    },
+    "timeline_window": {
+      "start_ms": 0,
+      "end_ms": 8000
+    },
+    "output_name": "synthetic-short-01.mp4",
+    "asset_ids": ["synthetic-diagram-1"],
+    "subtitles_required": true,
+    "max_plan_calls": 2
+  },
+  "recovery_scenarios": {
+    "primary_success": {
+      "plan_calls": ["primary"],
+      "terminal": false,
+      "fallback": false
+    },
+    "primary_provider_failure": {
+      "plan_calls": ["primary"],
+      "terminal": false,
+      "fallback": true
+    },
+    "candidate_only_rejection": {
+      "plan_calls": ["primary"],
+      "terminal": false,
+      "candidate_disposition": "rejected"
+    },
+    "new_authoritative_contingency_success": {
+      "plan_calls": ["primary", "contingency"],
+      "terminal": false,
+      "fallback": false
+    },
+    "contingency_provider_failure": {
+      "plan_calls": ["primary", "contingency"],
+      "terminal": false,
+      "fallback": true
+    },
+    "no_safe_baseline": {
+      "plan_calls": ["primary", "contingency"],
+      "terminal": true,
+      "error_code": "REPAIR_EXECUTION_DRY_RUN_FAILED"
+    }
+  }
+}

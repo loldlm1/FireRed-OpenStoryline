@@ -1,4 +1,4 @@
-EDIT_PLAN_PROMPT_VERSION = "mvp-agentic-edit-plan.v8"
+EDIT_PLAN_PROMPT_VERSION = "mvp-agentic-edit-plan.v11"
 VISUAL_UNDERSTANDING_PROMPT_VERSION = "mvp-visual-understanding.v2"
 REPAIR_SYSTEM_PROMPT_VERSION = "mvp-defect-repair.v1"
 
@@ -15,8 +15,10 @@ EDIT_PLAN_SYSTEM_PROMPT = (
     "only when the source cannot satisfy a specific visual purpose. Every request "
     "must identify the visible gap, use an explicitly enabled provider, and be used "
     "by a bounded visual overlay. Every supplied creative intent needs an explicit "
-    "execute or allowlisted omit decision; required intent cannot be omitted. Otherwise "
-    "use the source video. Crop and focus operations must use observations from the "
+    "execute or allowlisted omit decision; required intent cannot be omitted. Map title "
+    "intent to an executable text overlay and map bounded reframe or transition intent "
+    "to the exact segment IDs that satisfy its count and timing contract. Otherwise use "
+    "the source video. Crop and focus operations must use observations from the "
     "same source window, preferably a track spanning the segment. Never silently turn "
     "an automatic crop into fit or letterbox; those full-frame fallbacks require the "
     "explicit allow_full_frame_fallback flag. AssetRequest fallback must be exactly "

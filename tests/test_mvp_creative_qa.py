@@ -175,6 +175,34 @@ class CreativeQATests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(report["operations"]["conditional"], ["focus_zoom"])
         self.assertEqual(report["operations"]["missing"], [])
 
+    def test_conformance_blocks_a_truthfully_reported_unmet_creative_intent(self):
+        report = build_creative_conformance_report(
+            edit_plan=edit_plan(),
+            render_execution=execution(),
+            intent_conformance={
+                "version": "creative_intent.v2",
+                "status": "degraded",
+                "error_code": "EDIT_PLAN_INTENT_MISMATCH",
+                "evidence": {
+                    "constraint_code": "opening_title_invalid",
+                    "intent_id": "prompt-opening-title",
+                },
+            },
+            strict=True,
+        )
+
+        self.assertEqual(report["status"], "blocker")
+        self.assertEqual(report["intent_conformance"], {
+            "status": "degraded",
+            "error_code": "EDIT_PLAN_INTENT_MISMATCH",
+            "constraint_code": "opening_title_invalid",
+            "intent_id": "prompt-opening-title",
+        })
+        self.assertIn(
+            "creative_intent_unmet",
+            {item["code"] for item in report["findings"]},
+        )
+
     def test_duplicate_asset_visibility_blocks_conformance(self):
         rendered = execution(with_asset=True)
         duplicate = deepcopy(rendered["clips"][0]["segments"][0]["overlays"][0])
@@ -319,6 +347,10 @@ class CreativeQATests(unittest.IsolatedAsyncioTestCase):
                     inputs=[source],
                     edit_plan=edit_plan(),
                     render_execution=execution(),
+                    intent_conformance={
+                        "version": "creative_intent.v2",
+                        "status": "conformant",
+                    },
                     expected_width=180,
                     expected_height=320,
                     strict=True,
@@ -333,6 +365,10 @@ class CreativeQATests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(conformance["version"], CREATIVE_CONFORMANCE_VERSION)
             self.assertEqual(conformance["asset_visibility"]["status"], "pass")
             self.assertEqual(conformance["semantic_review"]["status"], "disabled")
+            self.assertEqual(
+                conformance["intent_conformance"]["status"],
+                "conformant",
+            )
 
     def test_environment_controls_are_strict_and_bounded(self):
         config = SimpleNamespace(
@@ -360,18 +396,24 @@ class CreativeQATests(unittest.IsolatedAsyncioTestCase):
         fixture_paths = sorted(FIXTURES.glob("*.json"))
         self.assertGreaterEqual(len(fixture_paths), 8)
         identifiers = set()
+        covered_metrics = set()
+        cross_niche_count = 0
         for path in fixture_paths:
             payload = json.loads(path.read_text(encoding="utf-8"))
+            serialized = json.dumps(payload).lower()
+            self.assertNotIn("sesion prueba 1", serialized)
+            self.assertNotIn("api_key", serialized)
+            self.assertNotIn("/home/", serialized)
+            if payload.get("version") != "mvp_agentic_fixture.v1":
+                continue
+            cross_niche_count += 1
             identifiers.add(payload["id"])
             self.assertEqual(payload["version"], "mvp_agentic_fixture.v1")
             self.assertTrue(payload["expected_roles"])
             self.assertTrue(payload["expected_capabilities"])
             self.assertIn(payload["expected_asset_calls"], {0, 1})
-            serialized = json.dumps(payload).lower()
-            self.assertNotIn("sesion prueba 1", serialized)
-            self.assertNotIn("api_key", serialized)
-            self.assertNotIn("/home/", serialized)
-        self.assertEqual(len(identifiers), len(fixture_paths))
+            covered_metrics.update(payload["metrics"])
+        self.assertEqual(len(identifiers), cross_niche_count)
         self.assertTrue({
             "two-speaker-interview",
             "product-presentation",
@@ -382,11 +424,6 @@ class CreativeQATests(unittest.IsolatedAsyncioTestCase):
             "sparse-visual-monologue",
             "source-only-no-asset",
         } <= identifiers)
-        covered_metrics = {
-            metric
-            for path in fixture_paths
-            for metric in json.loads(path.read_text(encoding="utf-8"))["metrics"]
-        }
         self.assertTrue({
             "schema_validity", "source_bounds", "target_visibility",
             "center_fallbacks", "asset_calls", "plan_execution", "qa_status",

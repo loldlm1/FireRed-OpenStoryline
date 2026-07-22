@@ -4,11 +4,12 @@ from dataclasses import dataclass
 from hashlib import sha256
 from typing import Any, Literal, Sequence
 import re
+import unicodedata
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 
-CREATIVE_INTENT_VERSION = "creative_intent.v1"
+CREATIVE_INTENT_VERSION = "creative_intent.v2"
 ALLOWED_OMISSION_REASONS = frozenset({
     "source_satisfies_intent",
     "no_evidence_backed_gap",
@@ -20,7 +21,13 @@ IntentRequirement = Literal["required", "optional"]
 IntentScope = Literal["plan", "per_clip"]
 AssetIntentKind = Literal["generated_image", "stock_image", "stock_video"]
 AssetIntentProvider = Literal["9router", "pexels"]
-OperationIntentKind = Literal["portrait_reframe", "footer_captions"]
+OperationIntentKind = Literal[
+    "portrait_reframe",
+    "footer_captions",
+    "opening_title",
+    "reframe_sequence",
+    "restrained_transitions",
+]
 
 
 class IntentModel(BaseModel):
@@ -78,6 +85,11 @@ class CreativeOperationIntent(IntentModel):
     clip_index: int | None = Field(default=None, ge=1, le=50)
     kind: OperationIntentKind
     purpose: str = Field(min_length=1, max_length=240)
+    count_min: int = Field(default=1, ge=1, le=16)
+    count_max: int = Field(default=32, ge=1, le=32)
+    start_max_ms: int = Field(default=0, ge=0, le=15_000)
+    duration_min_ms: int = Field(default=0, ge=0, le=15_000)
+    duration_max_ms: int = Field(default=0, ge=0, le=15_000)
 
     @model_validator(mode="after")
     def validate_scope(self) -> "CreativeOperationIntent":
@@ -85,6 +97,12 @@ class CreativeOperationIntent(IntentModel):
             raise ValueError("per-clip intent requires clip_index")
         if self.scope == "plan" and self.clip_index is not None:
             raise ValueError("plan intent cannot declare clip_index")
+        if self.count_max < self.count_min:
+            raise ValueError("operation count maximum must not precede its minimum")
+        if bool(self.duration_min_ms) != bool(self.duration_max_ms):
+            raise ValueError("operation duration bounds must be both set or both zero")
+        if self.duration_max_ms and self.duration_max_ms < self.duration_min_ms:
+            raise ValueError("operation duration maximum must not precede its minimum")
         return self
 
 
@@ -166,6 +184,7 @@ class CreativeIntentConformance:
     required: dict[str, int]
     requested: dict[str, int]
     used: dict[str, int]
+    operations: dict[str, int]
     decision_count: int
 
     def to_dict(self) -> dict[str, Any]:
@@ -176,6 +195,7 @@ class CreativeIntentConformance:
                 "required": dict(self.required),
                 "requested": dict(self.requested),
                 "used": dict(self.used),
+                "operations": dict(self.operations),
             },
             "decision_count": self.decision_count,
         }
@@ -185,6 +205,27 @@ _ONE = r"(?:exactly\s+)?(?:one|1|a\s+single|una?\s+sola?|exactamente\s+una?)"
 _REQUIRED = r"(?:must\s+(?:use|include|add)|use|include|add|requiere|usa|incluye|agrega)"
 _GENERATED_IMAGE = r"(?:generated|ai[- ]generated|gpt[- ]generated|generada?|editorial)\s+(?:editorial\s+)?(?:image|still|visual|imagen)"
 _PEXELS_VIDEO = r"(?:vertical\s+)?(?:pexels\s+(?:stock\s+)?video|(?:stock\s+)?video\s+(?:from|de)\s+pexels|video\s+pexels)"
+_OPENING_TITLE_PATTERNS = (
+    r"\b(?:opening|intro(?:ductory)?)\s+(?:title|title\s+card)\b",
+    r"\b(?:title|title\s+card)\b.{0,40}\b(?:opening|beginning|start)\b",
+    r"\b(?:titulo|cartela|placa|tarjeta)\s+(?:de\s+)?(?:apertura|inicial|introductori[ao])\b",
+    r"\b(?:titulo|cartela|placa|tarjeta)\b.{0,40}\b(?:al\s+inicio|al\s+principio|de\s+entrada)\b",
+    r"\b(?:abre|empieza|comienza)\b.{0,60}\b(?:titulo|cartela|placa|tarjeta)\b",
+)
+_REFRAME_OPERATION = r"(?:reencuadr\w*|refram\w*|zooms?|acercamientos?|push[- ]?ins?)"
+_REFRAME_RANGE_PATTERNS = (
+    rf"\b(?:between|entre)\s+(?:2|two|dos)\s+(?:and|y)\s+(?:4|four|cuatro)\b.{{0,60}}\b{_REFRAME_OPERATION}\b",
+    rf"\b(?:2|two|dos)\s*(?:-|to|a)\s*(?:4|four|cuatro)\b.{{0,60}}\b{_REFRAME_OPERATION}\b",
+    rf"\b{_REFRAME_OPERATION}\b.{{0,60}}\b(?:between|entre)?\s*(?:2|two|dos)\s*(?:-|to|a|and|y)\s*(?:4|four|cuatro)\b",
+)
+_REFRAME_EXACT_PATTERNS = (
+    rf"\b(?:exactly|exactamente)?\s*(?P<count>2|3|4|two|three|four|dos|tres|cuatro)\b.{{0,60}}\b{_REFRAME_OPERATION}\b",
+    rf"\b{_REFRAME_OPERATION}\b.{{0,60}}\b(?:exactly|exactamente)?\s*(?P<count>2|3|4|two|three|four|dos|tres|cuatro)\b",
+)
+_RESTRAINED_TRANSITION_PATTERNS = (
+    r"\b(?:subtle|restrained|gentle|smooth|soft|sutil(?:es)?|discret(?:as|os)?|suav(?:es)?)\b.{0,30}\b(?:transitions?|transiciones?)\b",
+    r"\b(?:transitions?|transiciones?)\b.{0,30}\b(?:subtle|restrained|gentle|smooth|soft|sutil(?:es)?|discret(?:as|os)?|suav(?:es)?)\b",
+)
 
 _CONFORMANCE_ERROR_PATTERNS = (
     (r"^intent decisions must be unique across the edit plan$", "intent_decisions_not_unique"),
@@ -201,6 +242,9 @@ _CONFORMANCE_ERROR_PATTERNS = (
     (r"^required operation intent (?P<intent_id>[A-Za-z0-9][A-Za-z0-9._-]{0,79}) lacks valid segment mappings$", "required_operation_mapping_invalid"),
     (r"^required footer captions are absent from the plan$", "footer_captions_absent"),
     (r"^required portrait reframe is absent from the plan$", "portrait_reframe_absent"),
+    (r"^required opening title is absent or outside its timing contract$", "opening_title_invalid"),
+    (r"^required reframe sequence count is outside its contract$", "reframe_sequence_count_invalid"),
+    (r"^required restrained transitions are absent or outside their contract$", "restrained_transitions_invalid"),
     (r"^plan narrative claims a generated image without an executable request$", "generated_asset_narrative_mismatch"),
     (r"^plan narrative claims stock media without an executable request$", "stock_asset_narrative_mismatch"),
 )
@@ -239,6 +283,60 @@ def _explicit_one(prompt: str, asset_pattern: str) -> bool:
     return False
 
 
+def _fold_prompt(value: str) -> str:
+    folded = unicodedata.normalize("NFKD", value)
+    folded = "".join(char for char in folded if not unicodedata.combining(char))
+    return re.sub(
+        r"\s+",
+        " ",
+        folded.replace("\u2013", "-").replace("\u2014", "-").lower(),
+    ).strip()
+
+
+def _positive_pattern(prompt: str, patterns: Sequence[str]) -> bool:
+    for pattern in patterns:
+        for match in re.finditer(pattern, prompt, flags=re.IGNORECASE):
+            prefix = prompt[max(0, match.start() - 80):match.start()]
+            prefix = re.split(r"[.!?;\n]", prefix)[-1]
+            if not re.search(
+                r"\b(?:do\s+not|don't|without|avoid|no|sin|evita|evitar)\b",
+                prefix,
+                flags=re.IGNORECASE,
+            ):
+                return True
+    return False
+
+
+def _reframe_count_bounds(prompt: str) -> tuple[int, int] | None:
+    if _positive_pattern(prompt, _REFRAME_RANGE_PATTERNS):
+        return 2, 4
+    counts = {
+        "2": 2,
+        "two": 2,
+        "dos": 2,
+        "3": 3,
+        "three": 3,
+        "tres": 3,
+        "4": 4,
+        "four": 4,
+        "cuatro": 4,
+    }
+    for pattern in _REFRAME_EXACT_PATTERNS:
+        for match in re.finditer(pattern, prompt, flags=re.IGNORECASE):
+            prefix = prompt[max(0, match.start() - 80):match.start()]
+            prefix = re.split(r"[.!?;\n]", prefix)[-1]
+            if re.search(
+                r"\b(?:do\s+not|don't|without|avoid|no|sin|evita|evitar)\b",
+                prefix,
+                flags=re.IGNORECASE,
+            ):
+                continue
+            count = counts.get(match.group("count").lower())
+            if count is not None:
+                return count, count
+    return None
+
+
 def _duration_bounds(prompt: str, asset_pattern: str, default: tuple[int, int]) -> tuple[int, int]:
     match = re.search(asset_pattern, prompt, flags=re.IGNORECASE)
     if not match:
@@ -272,6 +370,7 @@ def build_creative_intent(
 ) -> CreativeIntent:
     stored_prompt = str(editing_prompt or "").strip()
     prompt = re.sub(r"\s+", " ", stored_prompt)
+    folded_prompt = _fold_prompt(prompt)
     prompt_hash = sha256(stored_prompt.encode("utf-8")).hexdigest()
     assets: list[CreativeAssetIntent] = []
     operations: list[CreativeOperationIntent] = []
@@ -339,7 +438,7 @@ def build_creative_intent(
             duration_max_ms=maximum,
         ))
 
-    if re.search(r"\b(?:footer[- ]safe|footer|pie)\b.{0,60}\b(?:captions?|subtitles?|subtitulos?)\b", prompt, re.IGNORECASE):
+    if re.search(r"\b(?:footer[- ]safe|footer|pie)\b.{0,60}\b(?:captions?|subtitles?|subtitulos?)\b", folded_prompt, re.IGNORECASE):
         operations.append(CreativeOperationIntent(
             id="prompt-footer-captions",
             source="user_prompt",
@@ -348,7 +447,7 @@ def build_creative_intent(
             kind="footer_captions",
             purpose="keep captions readable inside the footer safe zone",
         ))
-    if re.search(r"\b(?:portrait|vertical|9:16)\b.{0,80}\b(?:crop|refram|encuadr|recort)\w*\b", prompt, re.IGNORECASE):
+    if re.search(r"\b(?:portrait|vertical|9:16)\b.{0,80}\b(?:crop|refram|encuadr|recort)\w*\b", folded_prompt, re.IGNORECASE):
         operations.append(CreativeOperationIntent(
             id="prompt-portrait-reframe",
             source="user_prompt",
@@ -356,6 +455,46 @@ def build_creative_intent(
             scope="plan",
             kind="portrait_reframe",
             purpose="fill the portrait canvas while preserving the primary subject",
+        ))
+
+    if _positive_pattern(folded_prompt, _OPENING_TITLE_PATTERNS):
+        operations.append(CreativeOperationIntent(
+            id="prompt-opening-title",
+            source="user_prompt",
+            requirement="required",
+            scope="plan",
+            kind="opening_title",
+            purpose="render a concise title during the opening hook",
+            count_min=1,
+            count_max=1,
+            start_max_ms=3500,
+            duration_min_ms=800,
+            duration_max_ms=5000,
+        ))
+    reframe_bounds = _reframe_count_bounds(folded_prompt)
+    if reframe_bounds is not None:
+        operations.append(CreativeOperationIntent(
+            id="prompt-reframe-sequence",
+            source="user_prompt",
+            requirement="required",
+            scope="plan",
+            kind="reframe_sequence",
+            purpose="apply the requested bounded sequence of visible reframes or focus zooms",
+            count_min=reframe_bounds[0],
+            count_max=reframe_bounds[1],
+        ))
+    if _positive_pattern(folded_prompt, _RESTRAINED_TRANSITION_PATTERNS):
+        operations.append(CreativeOperationIntent(
+            id="prompt-restrained-transitions",
+            source="user_prompt",
+            requirement="required",
+            scope="plan",
+            kind="restrained_transitions",
+            purpose="use short restrained transitions between editorial segments",
+            count_min=1,
+            count_max=4,
+            duration_min_ms=100,
+            duration_max_ms=650,
         ))
 
     return CreativeIntent(
@@ -478,19 +617,94 @@ def validate_creative_intent_conformance(
     required_operations = {
         item.id: item for item in intent.operation_intents if item.requirement == "required"
     }
+    operation_counts: dict[str, int] = {}
     for intent_id, item in required_operations.items():
         decision = decision_by_intent.get(intent_id)
         if decision is None or decision.decision != "execute":
             raise ValueError(f"required operation intent {intent_id} lacks an execute decision")
-        if not decision.operation_ids or not set(decision.operation_ids) <= set(segments):
+        scoped_clip = item.clip_index if item.scope == "per_clip" else None
+        scoped_segments = {
+            segment_id: segment
+            for segment_id, (clip_index, segment) in segments.items()
+            if scoped_clip is None or clip_index == scoped_clip
+        }
+        scoped_overlays = {
+            overlay_id: overlay
+            for overlay_id, (clip_index, overlay) in overlays.items()
+            if scoped_clip is None or clip_index == scoped_clip
+        }
+        mapped_ids = set(decision.operation_ids)
+        mapping_domain = (
+            set(scoped_overlays)
+            if item.kind == "opening_title"
+            else set(scoped_segments)
+        )
+        if not mapped_ids or not mapped_ids <= mapping_domain:
+            raise ValueError(
+                f"required operation intent {intent_id} lacks valid segment mappings"
+            )
+        if item.kind == "footer_captions":
+            if (
+                "subtitles" not in plan.requested_capabilities
+            ):
+                raise ValueError("required footer captions are absent from the plan")
+        elif item.kind == "portrait_reframe":
+            if not mapped_ids or any(
+                segment_id not in scoped_segments
+                or scoped_segments[segment_id].layout.mode != "crop"
+                for segment_id in mapped_ids
+            ):
+                raise ValueError("required portrait reframe is absent from the plan")
+        elif item.kind == "opening_title":
+            valid_titles = {
+                overlay_id
+                for overlay_id, overlay in scoped_overlays.items()
+                if overlay.kind == "text"
+                and overlay.timeline_window.start_ms <= item.start_max_ms
+                and item.duration_min_ms
+                <= overlay.timeline_window.duration_ms
+                <= item.duration_max_ms
+            }
+            if (
+                len(mapped_ids) < item.count_min
+                or len(mapped_ids) > item.count_max
+                or not mapped_ids <= valid_titles
+            ):
+                raise ValueError("required opening title is absent or outside its timing contract")
+        elif item.kind == "reframe_sequence":
+            valid_reframes = {
+                segment_id
+                for segment_id, segment in scoped_segments.items()
+                if segment.layout.mode == "crop"
+            }
+            if (
+                len(mapped_ids) < item.count_min
+                or len(mapped_ids) > item.count_max
+                or not mapped_ids <= valid_reframes
+            ):
+                raise ValueError("required reframe sequence count is outside its contract")
+        elif item.kind == "restrained_transitions":
+            initial_ids = {
+                clip.segments[0].id for clip in clips if clip.segments
+            }
+            valid_transitions = {
+                segment_id
+                for segment_id, segment in scoped_segments.items()
+                if segment_id not in initial_ids
+                and segment.transition_in.kind in {"fade", "xfade"}
+                and item.duration_min_ms
+                <= segment.transition_in.duration_ms
+                <= item.duration_max_ms
+            }
+            if (
+                len(mapped_ids) < item.count_min
+                or len(mapped_ids) > item.count_max
+                or not mapped_ids <= valid_transitions
+            ):
+                raise ValueError("required restrained transitions are absent or outside their contract")
+        else:
             raise ValueError(f"required operation intent {intent_id} lacks valid segment mappings")
-        if item.kind == "footer_captions" and "subtitles" not in plan.requested_capabilities:
-            raise ValueError("required footer captions are absent from the plan")
-        if item.kind == "portrait_reframe" and not any(
-            segments[segment_id][1].layout.mode == "crop"
-            for segment_id in decision.operation_ids
-        ):
-            raise ValueError("required portrait reframe is absent from the plan")
+        operation_counts[item.kind] = operation_counts.get(item.kind, 0) + len(mapped_ids)
 
     for clip in clips:
         narrative = " ".join(segment.reason for segment in clip.segments).lower()
@@ -510,5 +724,6 @@ def validate_creative_intent_conformance(
         required=required_counts,
         requested=requested_counts,
         used=used_counts,
+        operations=operation_counts,
         decision_count=len(decisions),
     )

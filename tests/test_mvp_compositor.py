@@ -1,10 +1,18 @@
 import json
+from pathlib import Path
 from types import SimpleNamespace
 import unittest
 
-from open_storyline.mvp.compositor import CompositionError, resolve_clip_composition
+from open_storyline.mvp.compositor import (
+    CROP_TARGET_MAX_OVERFLOW_RATIO,
+    CompositionError,
+    assess_segment_crop_geometry,
+    dry_run_edit_plan_composition,
+    resolve_clip_composition,
+)
 from open_storyline.mvp.edit_plan import (
     ClipEditPlan,
+    EditPlan,
     EditSegment,
     FocalTarget,
     LayoutSpec,
@@ -46,6 +54,87 @@ def clip_plan(segments):
 
 
 class CompositorTests(unittest.TestCase):
+    def test_plan_dry_run_fails_before_any_renderer_execution(self):
+        plan = EditPlan(
+            planner_version="test.v1",
+            source_duration_ms=4000,
+            requested_capabilities=("crop", "hard_cut", "subtitles"),
+            clips=(clip_plan([EditSegment(
+                id="unsafe-crop",
+                source_window=TimeWindow(start_ms=0, end_ms=4000),
+                timeline_window=TimeWindow(start_ms=0, end_ms=4000),
+                layout=LayoutSpec(
+                    mode="crop",
+                    focal_target=FocalTarget(semantic_role="speaker"),
+                    fallback="crop",
+                ),
+                reason="keep both speakers visible",
+            )]),),
+        )
+        observations = (
+            region("left", "frame-1", x=0.05, width=0.35),
+            region("right", "frame-1", x=0.60, width=0.35),
+        )
+        with self.assertRaises(CompositionError) as caught:
+            dry_run_edit_plan_composition(
+                plan,
+                visual=visual(
+                    [{"id": "frame-1", "timestamp_ms": 1000}],
+                    observations,
+                ),
+                source_media=MediaInfo(4000, 1920, 1080, True),
+                output_width=1080,
+                output_height=1920,
+            )
+        self.assertEqual(caught.exception.code, "COMPOSITION_CROP_TARGET_TOO_WIDE")
+
+    def test_shared_assessment_detects_incident_shaped_crop_overflow(self):
+        fixture = json.loads(
+            (
+                Path(__file__).parent
+                / "fixtures"
+                / "mvp_agentic"
+                / "crop-geometry-overflow.json"
+            ).read_text(encoding="utf-8")
+        )
+        segment = EditSegment(
+            id=fixture["segment_id"],
+            source_window=TimeWindow(start_ms=0, end_ms=4_000),
+            timeline_window=TimeWindow(start_ms=0, end_ms=4_000),
+            layout=LayoutSpec(
+                mode="crop",
+                focal_target=FocalTarget(semantic_role="speaker"),
+                fallback="crop",
+            ),
+            reason="keep both synthetic speakers visible",
+        )
+        observations = [
+            region(
+                item["id"],
+                item["frame_id"],
+                x=item["bbox"]["x"],
+                width=item["bbox"]["width"],
+            )
+            for item in fixture["regions"]
+        ]
+        assessment = assess_segment_crop_geometry(
+            segment,
+            visual=visual(fixture["frames"], observations),
+            source_width=fixture["source"]["width"],
+            source_height=fixture["source"]["height"],
+            output_width=fixture["output"]["width"],
+            output_height=fixture["output"]["height"],
+        )
+
+        self.assertIsNotNone(assessment)
+        self.assertTrue(assessment.overflowing)
+        self.assertGreater(assessment.width_overflow_ratio, 1.16)
+        self.assertLess(assessment.width_overflow_ratio, 1.17)
+        self.assertEqual(
+            assessment.to_evidence_dict()["threshold"],
+            CROP_TARGET_MAX_OVERFLOW_RATIO,
+        )
+
     def test_execution_dict_serializes_nested_overlay_windows(self):
         composition = resolve_clip_composition(
             clip_plan([EditSegment(
@@ -74,6 +163,7 @@ class CompositorTests(unittest.TestCase):
         overlay = payload["segments"][0]["overlays"][0]
         self.assertEqual(overlay["timeline_window"], {"start_ms": 1000, "end_ms": 3000})
         self.assertEqual(overlay["source_window"], {"start_ms": 500, "end_ms": 2500})
+        self.assertEqual(payload["segments"][0]["expected_active_area_ratio"], 1.0)
 
     def test_tracks_a_semantic_target_and_falls_back_for_wide_content(self):
         source = MediaInfo(4000, 640, 360, True)
@@ -446,7 +536,24 @@ class CompositorTests(unittest.TestCase):
         )
         self.assertEqual((video, audio), ("vout", "a0"))
         self.assertIn("trim=start=0.000:end=4.000", graph)
+        self.assertIn("gblur=sigma=", graph)
+        self.assertIn("colorlevels=romin=0.085:gomin=0.095:bomin=0.125", graph)
+        self.assertIn("overlay=(W-w)/2:(H-h)/2:shortest=1", graph)
         self.assertNotIn("../", graph)
+
+        letterbox = SimpleNamespace(**{
+            **segment.__dict__,
+            "strategy": "letterbox",
+        })
+        letterbox_graph, _, _ = build_reframe_filtergraph(
+            [letterbox],
+            output_width=180,
+            output_height=320,
+            subtitle_filename=None,
+            has_audio=True,
+        )
+        self.assertIn("pad=180:320", letterbox_graph)
+        self.assertNotIn("gblur=sigma=", letterbox_graph)
 
         second = SimpleNamespace(
             source_window=TimeWindow(start_ms=4000, end_ms=8000),

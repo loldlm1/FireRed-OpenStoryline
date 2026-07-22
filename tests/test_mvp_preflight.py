@@ -1,3 +1,6 @@
+import json
+from pathlib import Path
+from types import SimpleNamespace
 import unittest
 
 from open_storyline.mvp.edit_plan import (
@@ -12,10 +15,93 @@ from open_storyline.mvp.edit_plan import (
     build_shadow_edit_plan,
 )
 from open_storyline.mvp.preflight import build_preflight
+from open_storyline.mvp.repair import repair_findings_from_preflight
 from open_storyline.mvp.shorts import ShortCandidate
+from open_storyline.mvp.visual_understanding import NormalizedBox, RegionObservation
 
 
 class EditPreflightTests(unittest.TestCase):
+    def test_detects_repairable_crop_geometry_before_rendering(self):
+        fixture = json.loads(
+            (
+                Path(__file__).parent
+                / "fixtures"
+                / "mvp_agentic"
+                / "crop-geometry-overflow.json"
+            ).read_text(encoding="utf-8")
+        )
+        regions = tuple(
+            RegionObservation(
+                id=item["id"],
+                frame_id=item["frame_id"],
+                role="speaker",
+                bbox=NormalizedBox(
+                    x=item["bbox"]["x"],
+                    y=item["bbox"]["y"],
+                    width=item["bbox"]["width"],
+                    height=item["bbox"]["height"],
+                ),
+                confidence=0.9,
+                salience=0.9,
+                description="synthetic speaker",
+            )
+            for item in fixture["regions"]
+        )
+        clip = ClipEditPlan(
+            clip_index=1,
+            source_window=TimeWindow(start_ms=0, end_ms=4_000),
+            output_name="short.mp4",
+            segments=(EditSegment(
+                id=fixture["segment_id"],
+                source_window=TimeWindow(start_ms=0, end_ms=4_000),
+                timeline_window=TimeWindow(start_ms=0, end_ms=4_000),
+                layout=LayoutSpec(
+                    mode="crop",
+                    focal_target=FocalTarget(semantic_role="speaker"),
+                    fallback="crop",
+                ),
+                reason="keep both synthetic speakers visible",
+            ),),
+        )
+        plan = EditPlan(
+            planner_version="test.v1",
+            source_duration_ms=4_000,
+            requested_capabilities=("crop", "hard_cut", "subtitles"),
+            clips=(clip,),
+        )
+        report = build_preflight(
+            plan,
+            available_capabilities=plan.requested_capabilities,
+            asset_policy="off",
+            visual_understanding=SimpleNamespace(
+                frame_manifest={"frames": fixture["frames"]},
+                regions=regions,
+                tracks=(),
+            ),
+            source_width=fixture["source"]["width"],
+            source_height=fixture["source"]["height"],
+            output_width=fixture["output"]["width"],
+            output_height=fixture["output"]["height"],
+        )
+
+        finding = next(
+            item
+            for item in report.findings
+            if item.code == "COMPOSITION_CROP_TARGET_TOO_WIDE"
+        )
+        self.assertEqual(finding.source, "clips.1.segments.speaker-union.layout")
+        self.assertGreater(finding.details["width_ratio"], 1.16)
+        self.assertEqual(finding.details["repair_scope"], "segment_layout_reframe")
+        repair_finding = next(
+            item
+            for item in repair_findings_from_preflight(report)
+            if item.code == "COMPOSITION_CROP_TARGET_TOO_WIDE"
+        )
+        evidence = repair_finding.evidence[0].to_dict()["values"]
+        self.assertEqual(evidence["segment_id"], "speaker-union")
+        self.assertEqual(evidence["repair_scope"], "segment_layout_reframe")
+        self.assertEqual(evidence["fallback_allowed"], False)
+
     def test_shadow_plan_warns_without_blocking(self):
         plan = build_shadow_edit_plan(
             [ShortCandidate(0, 20_000, "Title", "Hook", "Reason", 0.9)],

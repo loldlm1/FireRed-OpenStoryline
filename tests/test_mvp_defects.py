@@ -103,6 +103,23 @@ class DefectRegistryTests(unittest.TestCase):
         self.assertEqual(caption.repair_strategy, RepairStrategy.DETERMINISTIC_FALLBACK)
         self.assertEqual(caption.repair_phase, RepairPhase.POST_RENDER)
         self.assertEqual(caption.promotion_class, PromotionClass.CREATIVE_LIMITATION)
+        composition = defect_definition("COMPOSITION_CROP_TARGET_TOO_WIDE")
+        self.assertEqual(composition.repair_strategy, RepairStrategy.LLM_PLAN_REPAIR)
+        self.assertEqual(composition.repair_phase, RepairPhase.PRE_RENDER)
+        self.assertEqual(composition.safe_fallback_code, "VISUAL_REFRAME_FALLBACK")
+
+    def test_repairable_composition_fallbacks_never_default_to_terminal(self):
+        for code in {
+            "COMPOSITION_CROP_TARGET_TOO_WIDE",
+            "COMPOSITION_LAYOUT_UNSUPPORTED",
+        }:
+            definition = defect_definition(code)
+            with self.subTest(code=code):
+                self.assertNotEqual(definition.repair_strategy, RepairStrategy.TERMINAL)
+                self.assertEqual(
+                    definition.safe_fallback_code,
+                    "VISUAL_REFRAME_FALLBACK",
+                )
 
     def test_retryability_uses_registry_with_legacy_unknown_suffix_compatibility(self):
         self.assertTrue(retryable_for_code("NINEROUTER_REQUEST_FAILED"))

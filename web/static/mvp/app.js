@@ -133,7 +133,10 @@ function historyCallbacks() {
     onToggleDetail: toggleRunDetail,
     onCompare: toggleComparisonSelection,
     onFavorite: toggleFavorite,
-    onRetryDefects: retryDefects,
+    onRerun: (version, run) => rerunVersion(version, run),
+    onRetryDefects: (version, run) => rerunVersion(version, run, {
+      useQualityFeedback: true,
+    }),
     onCreateImprovedVersion: createImprovedVersion,
   };
 }
@@ -162,12 +165,28 @@ function mergeDetailedRun(job) {
   const detail = state.detailsByVersion.get(version.id) || { ...version };
   const attempts = [...(detail.attempts || [])];
   const index = attempts.findIndex((run) => run.id === job.id);
-  if (index >= 0) attempts[index] = job;
-  else attempts.unshift(job);
+  const existing = index >= 0 ? attempts[index] : null;
+  const retryCapability = existing?.outcome?.retry;
+  const merged = retryCapability && job?.outcome
+    ? {
+        ...job,
+        outcome: {
+          ...job.outcome,
+          retry: {
+            ...(job.outcome.retry || {}),
+            supported: retryCapability.supported,
+            unavailable_reason: retryCapability.unavailable_reason || '',
+            recommended_action: retryCapability.recommended_action,
+          },
+        },
+      }
+    : job;
+  if (index >= 0) attempts[index] = merged;
+  else attempts.unshift(merged);
   state.detailsByVersion.set(version.id, { ...detail, attempts });
   version.attempts = (version.attempts || []).map((run) => (
     run.id === job.id
-      ? { ...run, ...job, artifacts: undefined, input: undefined, request: undefined }
+      ? { ...run, ...merged, artifacts: undefined, input: undefined, request: undefined }
       : run
   ));
 }
@@ -409,24 +428,32 @@ async function toggleFavorite(run) {
   }
 }
 
-async function retryDefects(version, run) {
+async function rerunVersion(version, run, { useQualityFeedback = false } = {}) {
   if (
     !state.currentSession?.capabilities?.retry_ux_enabled
     || state.retryPendingIds.has(run.id)
+    || !run.outcome?.retry?.supported
+    || (useQualityFeedback && !run.outcome?.retry?.quality_feedback_supported)
   ) return;
   const sessionId = state.currentSession.id;
   const epoch = state.sessionEpoch;
   state.retryPendingIds.add(run.id);
   renderHistory();
   try {
-    const detail = await loadVersionDetail(version.id);
-    const prior = (detail?.attempts || []).find((item) => item.id === run.id) || run;
-    const qualityFeedback = Boolean(prior.outcome?.retry?.quality_feedback_supported);
+    let detail = state.detailsByVersion.get(version.id) || null;
+    if (useQualityFeedback) {
+      detail = await loadVersionDetail(version.id);
+      const prior = (detail?.attempts || []).find((item) => item.id === run.id) || run;
+      if (!prior.outcome?.retry?.quality_feedback_supported) {
+        showToast('La evidencia objetiva de este intento ya no está disponible para reparar.');
+        return;
+      }
+    }
     const nextRun = await apiJson(
       `/api/mvp/prompt-versions/${version.id}/runs`,
       {
         method: 'POST',
-        body: qualityFeedback
+        body: useQualityFeedback
           ? { prior_attempt_id: run.id, use_quality_feedback: true }
           : { use_quality_feedback: false },
       },
@@ -446,10 +473,17 @@ async function retryDefects(version, run) {
       });
     }
     await selectRun(nextRun.id, { startedAt: nextRun.created_at });
-    showToast(`Intento ${nextRun.attempt_number} creado con la evidencia del defecto anterior.`);
+    showToast(useQualityFeedback
+      ? `Intento ${nextRun.attempt_number} creado con la evidencia objetiva anterior.`
+      : `Intento ${nextRun.attempt_number} creado con la misma instrucción y fuente.`);
   } catch (error) {
     if (epoch === state.sessionEpoch && state.currentSession?.id === sessionId) {
-      showToast(errorMessage(error, 'No pudimos preparar el reintento de defectos.'));
+      showToast(errorMessage(
+        error,
+        useQualityFeedback
+          ? 'No pudimos preparar la reparación con evidencia.'
+          : 'No pudimos volver a ejecutar esta versión.',
+      ));
     }
   } finally {
     state.retryPendingIds.delete(run.id);

@@ -28,8 +28,12 @@ from open_storyline.mvp.structured_outputs import (
 
 
 REPAIR_BATCH_REQUEST_VERSION = "repair_batch_request.v1"
-REPAIR_REPORT_VERSION = "repair_report.v1"
+REPAIR_REPORT_V1 = "repair_report.v1"
+REPAIR_REPORT_VERSION = "repair_report.v2"
+REPAIR_REPORT_VERSIONS = frozenset({REPAIR_REPORT_V1, REPAIR_REPORT_VERSION})
 REPAIR_RESOLUTION_VERSION = "repair_resolution.v1"
+MAX_PLAN_REPAIR_ROUNDS = 2
+MAX_REPAIR_STAGES = 3
 MAX_REPAIR_CLIPS = 8
 MAX_REPAIR_CODES = 32
 MAX_REPAIR_EVIDENCE_RECORDS = 64
@@ -41,6 +45,7 @@ MAX_REPAIR_REPORT_BYTES = 256_000
 MAX_REPAIR_CONTEXT_DEPTH = 12
 
 _SAFE_TOKEN = re.compile(r"^[A-Za-z0-9._:-]{1,120}$")
+_SAFE_ATTRIBUTION_TOKEN = re.compile(r"^[A-Za-z0-9._:/+-]{1,160}$")
 _SAFE_FIELD = re.compile(r"^[a-z][a-z0-9_]{0,79}$")
 _BLOCKED_CONTEXT_KEY_PARTS = frozenset({
     "command",
@@ -59,12 +64,24 @@ _EVIDENCE_FIELDS = frozenset({
     "clip_index",
     "code",
     "confidence",
+    "constraint_code",
     "count",
     "duration_ms",
     "end_ms",
     "evidence_id",
     "expected",
+    "fallback",
+    "fallback_allowed",
     "height_ratio",
+    "height_overflow_ratio",
+    "intent_id",
+    "source_height",
+    "source_width",
+    "target_height",
+    "target_region_ids",
+    "target_width",
+    "crop_height",
+    "crop_width",
     "margin_ratio",
     "maximum",
     "maximum_gap_ms",
@@ -75,6 +92,7 @@ _EVIDENCE_FIELDS = frozenset({
     "operation_id",
     "position",
     "region_id",
+    "repair_scope",
     "requested",
     "segment_id",
     "source",
@@ -82,6 +100,7 @@ _EVIDENCE_FIELDS = frozenset({
     "threshold",
     "track_id",
     "width_ratio",
+    "width_overflow_ratio",
 })
 
 
@@ -94,6 +113,11 @@ class RepairMode(StrEnum):
 class RepairStage(StrEnum):
     VISUAL_UNDERSTANDING = "visual_understanding"
     PLAN_REPAIR = "plan_repair"
+
+
+class PlanRepairRound(StrEnum):
+    PRIMARY = "primary"
+    CONTINGENCY = "contingency"
 
 
 class RepairContractError(ValueError):
@@ -110,7 +134,179 @@ class RepairBudget:
     def available(self, stage: RepairStage) -> bool:
         if stage is RepairStage.VISUAL_UNDERSTANDING:
             return self.visual_attempts_used < 1
-        return self.plan_attempts_used < 1
+        return self.plan_attempts_used < MAX_PLAN_REPAIR_ROUNDS
+
+
+@dataclass(frozen=True)
+class RepairDefectInstance:
+    id: str
+    code: str
+    clip_index: int | None
+    operation_id: str
+    authoritative_plan_fingerprint: str
+
+    @property
+    def semantic_key(self) -> tuple[str, int | None, str]:
+        return (self.code, self.clip_index, self.operation_id)
+
+    def to_dict(self) -> dict[str, Any]:
+        return asdict(self)
+
+
+@dataclass(frozen=True)
+class RepairAttemptEvidence:
+    defect: RepairDefectInstance
+    round: PlanRepairRound
+    outbound_attempted: bool
+    provider_outcome: str
+    schema_valid: bool
+    semantic_valid: bool
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "defect": self.defect.to_dict(),
+            "round": self.round.value,
+            "outbound_attempted": self.outbound_attempted,
+            "provider_outcome": self.provider_outcome,
+            "schema_valid": self.schema_valid,
+            "semantic_valid": self.semantic_valid,
+        }
+
+
+class PlanRepairState:
+    """Bounded in-memory gate for plan repair calls and deterministic fallback."""
+
+    def __init__(self) -> None:
+        self._rounds: list[PlanRepairRound] = []
+        self._attempts: dict[str, RepairAttemptEvidence] = {}
+        self._invariant_violation_ids: set[str] = set()
+
+    @property
+    def rounds(self) -> tuple[PlanRepairRound, ...]:
+        return tuple(self._rounds)
+
+    @property
+    def attempts(self) -> tuple[RepairAttemptEvidence, ...]:
+        return tuple(self._attempts[key] for key in sorted(self._attempts))
+
+    @property
+    def invariant_violation_count(self) -> int:
+        return len(self._invariant_violation_ids)
+
+    @property
+    def reached_call_cap(self) -> bool:
+        return len(self._rounds) >= MAX_PLAN_REPAIR_ROUNDS
+
+    def next_round(self) -> PlanRepairRound:
+        if not self._rounds:
+            return PlanRepairRound.PRIMARY
+        if self._rounds == [PlanRepairRound.PRIMARY]:
+            return PlanRepairRound.CONTINGENCY
+        raise RepairContractError(
+            "REPAIR_PLAN_CALL_LIMIT_EXCEEDED",
+            "no third plan-repair batch is permitted",
+        )
+
+    def record_round(
+        self,
+        *,
+        round: PlanRepairRound,
+        findings: Iterable[RepairFinding],
+        authoritative_plan_fingerprint: str,
+        provider_attempts: Iterable[Mapping[str, Any]],
+        provider_outcome: str,
+        schema_valid: bool,
+        semantic_valid: bool,
+    ) -> tuple[RepairAttemptEvidence, ...]:
+        expected = self.next_round()
+        if round is not expected:
+            raise RepairContractError(
+                "REPAIR_ROUND_INVALID",
+                f"expected {expected.value} plan-repair round",
+            )
+        attempts = tuple(provider_attempts)
+        outbound_attempted = bool(attempts)
+        records = tuple(
+            RepairAttemptEvidence(
+                defect=repair_defect_instance(
+                    finding,
+                    authoritative_plan_fingerprint=authoritative_plan_fingerprint,
+                ),
+                round=round,
+                outbound_attempted=outbound_attempted,
+                provider_outcome=_safe_token(provider_outcome) or "unknown",
+                schema_valid=bool(schema_valid),
+                semantic_valid=bool(semantic_valid),
+            )
+            for finding in findings
+            if finding.objective
+        )
+        if not records:
+            raise RepairContractError(
+                "REPAIR_ROUND_INVALID",
+                "a plan-repair round requires objective findings",
+            )
+        self._rounds.append(round)
+        self._attempts.update({item.defect.id: item for item in records})
+        return records
+
+    def has_semantic_attempt(self, finding: RepairFinding) -> bool:
+        instance = repair_defect_instance(
+            finding,
+            authoritative_plan_fingerprint="0" * 64,
+        )
+        return any(
+            attempt.outbound_attempted
+            and attempt.defect.semantic_key == instance.semantic_key
+            for attempt in self._attempts.values()
+        )
+
+    def fallback_evidence(
+        self,
+        finding: RepairFinding,
+        *,
+        authoritative_plan_fingerprint: str,
+    ) -> RepairAttemptEvidence | None:
+        instance = repair_defect_instance(
+            finding,
+            authoritative_plan_fingerprint=authoritative_plan_fingerprint,
+        )
+        evidence = self._attempts.get(instance.id)
+        if evidence is None or not evidence.outbound_attempted:
+            return None
+        return evidence
+
+    def require_fallback_evidence(
+        self,
+        findings: Iterable[RepairFinding],
+        *,
+        authoritative_plan_fingerprint: str,
+    ) -> tuple[RepairAttemptEvidence, ...]:
+        evidence: list[RepairAttemptEvidence] = []
+        missing: list[str] = []
+        for finding in findings:
+            if not finding.objective:
+                continue
+            matched = self.fallback_evidence(
+                finding,
+                authoritative_plan_fingerprint=authoritative_plan_fingerprint,
+            )
+            if matched is None:
+                missing.append(
+                    repair_defect_instance(
+                        finding,
+                        authoritative_plan_fingerprint=authoritative_plan_fingerprint,
+                    ).id
+                )
+            else:
+                evidence.append(matched)
+        if missing:
+            self._invariant_violation_ids.update(missing)
+            raise RepairContractError(
+                "REPAIR_ATTEMPT_REQUIRED",
+                "deterministic fallback requires matching outbound LLM attempt evidence",
+            )
+        return tuple(evidence)
 
 
 @dataclass(frozen=True)
@@ -157,6 +353,64 @@ class RepairFinding:
         return frozenset(item.evidence_type for item in self.evidence)
 
 
+_GEOMETRY_MUTATION_PATHS = (
+    "layout.allow_full_frame_fallback",
+    "layout.fallback",
+    "layout.focal_target",
+    "layout.max_zoom",
+    "layout.mode",
+    "layout.safe_margin_ratio",
+)
+
+
+def authoritative_plan_fingerprint(plan: EditPlan | Mapping[str, Any]) -> str:
+    payload = plan.to_dict() if isinstance(plan, EditPlan) else dict(plan)
+    return _digest(_canonical_json(payload))
+
+
+def repair_defect_instance(
+    finding: RepairFinding,
+    *,
+    authoritative_plan_fingerprint: str,
+) -> RepairDefectInstance:
+    fingerprint = _safe_hash(authoritative_plan_fingerprint)
+    if not fingerprint:
+        raise RepairContractError(
+            "REPAIR_PLAN_FINGERPRINT_INVALID",
+            "authoritative plan fingerprint is invalid",
+        )
+    operation_id = _finding_operation_id(finding)
+    identity = {
+        "code": defect_definition(finding.code).code,
+        "clip_index": finding.clip_index,
+        "operation_id": operation_id,
+        "authoritative_plan_fingerprint": fingerprint,
+    }
+    return RepairDefectInstance(
+        id=_digest(_canonical_json(identity)),
+        **identity,
+    )
+
+
+def _finding_operation_id(finding: RepairFinding) -> str:
+    for record in finding.evidence:
+        for key in ("operation_id", "segment_id"):
+            candidate = _safe_token(record.values.get(key))
+            if candidate:
+                return candidate
+    return "plan"
+
+
+def allowed_mutation_paths(finding: RepairFinding) -> tuple[str, ...]:
+    if finding.code in {
+        "COMPOSITION_CROP_TARGET_TOO_WIDE",
+        "COMPOSITION_LAYOUT_UNSUPPORTED",
+        "FULL_FRAME_FALLBACK_UNAPPROVED",
+    } or finding.code.startswith("CROP_VISUAL"):
+        return _GEOMETRY_MUTATION_PATHS
+    return ()
+
+
 @dataclass(frozen=True)
 class RepairDisposition:
     code: str
@@ -199,6 +453,8 @@ class TranscriptExcerpt:
 class RepairBatchRequest:
     stage: RepairStage
     mode: RepairMode
+    repair_round: PlanRepairRound | None
+    authoritative_plan_fingerprint: str
     defects: tuple[dict[str, Any], ...]
     supplemental_advisories: tuple[dict[str, Any], ...]
     candidate_clips: tuple[dict[str, Any], ...]
@@ -231,7 +487,13 @@ class RepairBatchRequest:
         payload = {
             "version": REPAIR_BATCH_REQUEST_VERSION,
             "stage": self.stage.value,
-            "semantic_attempt": 1,
+            "repair_round": (
+                self.repair_round.value if self.repair_round is not None else "visual"
+            ),
+            "semantic_attempt": (
+                2 if self.repair_round is PlanRepairRound.CONTINGENCY else 1
+            ),
+            "authoritative_plan_fingerprint": self.authoritative_plan_fingerprint,
             "response_schema": self.response_schema,
             "repair_prompt_version": REPAIR_SYSTEM_PROMPT_VERSION,
             "repair_prompt_sha256": self.system_prompt_sha256,
@@ -275,7 +537,9 @@ class RepairBatchRequest:
             "request_version": REPAIR_BATCH_REQUEST_VERSION,
             "stage": self.stage.value,
             "mode": self.mode.value,
-            "semantic_attempt": 1,
+            "repair_round": provider_payload["repair_round"],
+            "semantic_attempt": provider_payload["semantic_attempt"],
+            "authoritative_plan_fingerprint": self.authoritative_plan_fingerprint,
             "response_schema": self.response_schema,
             "response_schema_sha256": structured_output(
                 self.response_schema
@@ -292,6 +556,7 @@ class RepairBatchRequest:
             "candidate_sha256": fingerprint_payload["candidate_sha256"],
             "affected_clip_ids": provider_payload["affected_clip_ids"],
             "objective_codes": [item["code"] for item in self.defects],
+            "defect_instance_ids": [item["defect_instance_id"] for item in self.defects],
             "advisory_codes": [item["code"] for item in self.supplemental_advisories],
             "evidence_types": sorted({item["evidence_type"] for item in self.evidence}),
             "evidence_ids": evidence_ids[:MAX_REPAIR_EVIDENCE_RECORDS],
@@ -475,9 +740,14 @@ def make_repair_finding(
 def bounded_repair_findings(
     findings: Iterable[RepairFinding],
 ) -> tuple[tuple[RepairFinding, ...], tuple[RepairFinding, ...]]:
-    unique: dict[tuple[str, int | None, bool], RepairFinding] = {}
+    unique: dict[tuple[str, int | None, str, bool], RepairFinding] = {}
     for finding in findings:
-        key = (defect_definition(finding.code).code, finding.clip_index, finding.objective)
+        key = (
+            defect_definition(finding.code).code,
+            finding.clip_index,
+            _finding_operation_id(finding),
+            finding.objective,
+        )
         unique.setdefault(key, finding)
     ordered = tuple(sorted(
         unique.values(),
@@ -492,6 +762,7 @@ def bounded_repair_findings(
             else 1 if item.objective else 2,
             item.code,
             item.clip_index or 0,
+            _finding_operation_id(item),
         ),
     ))
     return ordered[:MAX_REPAIR_CODES], ordered[MAX_REPAIR_CODES:]
@@ -503,13 +774,24 @@ def repair_findings_from_preflight(report: Any) -> tuple[RepairFinding, ...]:
         source = str(getattr(item, "source", "") or "")
         match = re.search(r"(?:^|\.)clips\.(\d+)(?:\.|$)", source)
         clip_index = int(match.group(1)) if match else None
-        segment_match = re.search(r"(?:^|\.)segments\.([A-Za-z0-9._:-]+)", source)
+        segment_match = re.search(
+            r"(?:^|\.)segments\.([A-Za-z0-9._:-]+?)"
+            r"(?:\.(?:layout|visual_coverage|transition_in|overlays|evidence_ids)(?:\.|$)|$)",
+            source,
+        )
         values: dict[str, Any] = {
             "observed": str(getattr(item, "severity", "") or "finding"),
             "source": source[:120],
         }
         if segment_match:
             values["segment_id"] = segment_match.group(1)
+        details = getattr(item, "details", None)
+        if isinstance(details, Mapping):
+            for key, value in details.items():
+                if str(key) in _EVIDENCE_FIELDS and (
+                    value is None or isinstance(value, (bool, int, float, str))
+                ):
+                    values[str(key)] = value
         findings.append(make_repair_finding(
             str(getattr(item, "code", "") or ""),
             clip_index=clip_index,
@@ -546,22 +828,38 @@ def build_repair_report(
     stage_records: Iterable[Mapping[str, Any]] = (),
     predictive_findings: Iterable[PredictiveFinding | Mapping[str, Any]] = (),
     fallback_entries: Iterable[Any] = (),
+    attempt_evidence: Iterable[RepairAttemptEvidence | Mapping[str, Any]] = (),
     reused_stages: Iterable[str] = (),
     recomputed_stages: Iterable[str] = (),
+    rollout_attribution: Mapping[str, Any] | None = None,
+    invariant_violation_count: int = 0,
 ) -> dict[str, Any]:
-    stages = [_repair_stage_record(item) for item in tuple(stage_records)[:2]]
+    stages = [
+        _repair_stage_record(item, report_version=REPAIR_REPORT_VERSION)
+        for item in tuple(stage_records)[:MAX_REPAIR_STAGES]
+    ]
     predictions = [
         _predictive_report_record(item)
         for item in tuple(predictive_findings)[:MAX_REPAIR_CODES]
     ]
     fallbacks = [_fallback_report_record(item) for item in tuple(fallback_entries)[:64]]
+    attempt_ledger = [
+        _repair_attempt_evidence_record(item)
+        for item in tuple(attempt_evidence)[:MAX_REPAIR_CODES * MAX_PLAN_REPAIR_ROUNDS]
+    ]
+    attribution = dict(rollout_attribution or {})
+    attribution.setdefault("repair_mode", mode.value)
     report = _assemble_repair_report(
+        version=REPAIR_REPORT_VERSION,
         mode=mode,
         stages=stages,
         predictions=predictions,
         fallbacks=fallbacks,
+        attempt_ledger=attempt_ledger,
         reused_stages=reused_stages,
         recomputed_stages=recomputed_stages,
+        rollout_attribution=attribution,
+        invariant_violation_count=invariant_violation_count,
     )
     if _json_size(report) > MAX_REPAIR_REPORT_BYTES:
         raise RepairContractError("REPAIR_REPORT_TOO_LARGE", "repair report exceeds its byte budget")
@@ -570,13 +868,42 @@ def build_repair_report(
 
 def _assemble_repair_report(
     *,
+    version: str,
     mode: RepairMode,
     stages: list[dict[str, Any]],
     predictions: list[dict[str, Any]],
     fallbacks: list[dict[str, Any]],
+    attempt_ledger: list[dict[str, Any]],
     reused_stages: Iterable[str],
     recomputed_stages: Iterable[str],
+    rollout_attribution: Mapping[str, Any] | None,
+    invariant_violation_count: int,
 ) -> dict[str, Any]:
+    if version == REPAIR_REPORT_VERSION:
+        fallbacks = _authorize_fallbacks(fallbacks, attempt_ledger)
+    else:
+        fallbacks = [
+            {
+                key: item[key]
+                for key in ("code", "clip_index", "segment_id", "requested", "executed")
+            }
+            for item in fallbacks
+        ]
+    if version == REPAIR_REPORT_VERSION:
+        for stage in stages:
+            repair_round = str(stage.get("repair_round") or "")
+            authorized = [
+                item
+                for item in fallbacks
+                if item.get("attempt_round") == repair_round
+                and item.get("fallback_authorized") is True
+            ]
+            stage["fallback_authorized"] = bool(authorized)
+            stage["fallback_authorized_defect_instance_ids"] = sorted({
+                str(item.get("defect_instance_id") or "")
+                for item in authorized
+                if _safe_hash(item.get("defect_instance_id"))
+            })[:MAX_REPAIR_CODES]
     resolved = {
         code
         for stage in stages
@@ -602,8 +929,8 @@ def _assemble_repair_report(
         _canonical_registered_code(item["requested"]) or item["code"]
         for item in fallbacks
     }
-    return {
-        "version": REPAIR_REPORT_VERSION,
+    report = {
+        "version": version,
         "registry_version": DEFECT_REGISTRY_VERSION,
         "registry_sha256": DEFECT_REGISTRY_SHA256,
         "mode": mode.value,
@@ -622,11 +949,31 @@ def _assemble_repair_report(
             "not_repairable_codes": sorted(not_repairable),
         },
     }
+    if version == REPAIR_REPORT_VERSION:
+        report.update({
+            "attempt_ledger": attempt_ledger,
+            "attribution": _repair_attribution_record(rollout_attribution),
+        })
+        report["summary"].update({
+            "fallback_after_attempt_count": sum(
+                item.get("fallback_authorized") is True for item in fallbacks
+            ),
+            "repair_invariant_violation_count": max(
+                0,
+                min(int(invariant_violation_count or 0), MAX_REPAIR_CODES),
+            ),
+            "jobs_at_two_call_cap": int(any(
+                item.get("round") == PlanRepairRound.CONTINGENCY.value
+                for item in attempt_ledger
+            )),
+        })
+    return report
 
 
 def validate_repair_report(value: Any) -> dict[str, Any]:
-    if not isinstance(value, Mapping) or value.get("version") != REPAIR_REPORT_VERSION:
+    if not isinstance(value, Mapping) or value.get("version") not in REPAIR_REPORT_VERSIONS:
         raise RepairContractError("REPAIR_REPORT_INVALID", "repair report version is invalid")
+    version = str(value["version"])
     if (
         value.get("registry_version") != DEFECT_REGISTRY_VERSION
         or value.get("registry_sha256") != DEFECT_REGISTRY_SHA256
@@ -639,7 +986,8 @@ def validate_repair_report(value: Any) -> dict[str, Any]:
     stages_value = value.get("stages")
     predictions_value = value.get("predictive_findings")
     fallbacks_value = value.get("fallbacks")
-    if not isinstance(stages_value, list) or len(stages_value) > 2:
+    stage_limit = MAX_REPAIR_STAGES if version == REPAIR_REPORT_VERSION else 2
+    if not isinstance(stages_value, list) or len(stages_value) > stage_limit:
         raise RepairContractError("REPAIR_REPORT_INVALID", "repair report stages are invalid")
     if not isinstance(predictions_value, list) or len(predictions_value) > MAX_REPAIR_CODES:
         raise RepairContractError("REPAIR_REPORT_INVALID", "repair predictions are invalid")
@@ -652,14 +1000,37 @@ def validate_repair_report(value: Any) -> dict[str, Any]:
         checkpoints.get("recomputed_stages"), list
     ):
         raise RepairContractError("REPAIR_REPORT_INVALID", "repair checkpoint stages are invalid")
+    attempt_values = value.get("attempt_ledger")
+    if version == REPAIR_REPORT_VERSION and not isinstance(attempt_values, list):
+        raise RepairContractError("REPAIR_REPORT_INVALID", "repair attempt ledger is invalid")
+    if not isinstance(attempt_values, list):
+        attempt_values = []
+    attribution = value.get("attribution")
+    if version == REPAIR_REPORT_VERSION and not isinstance(attribution, Mapping):
+        raise RepairContractError("REPAIR_REPORT_INVALID", "repair attribution is invalid")
+    summary = value.get("summary") if isinstance(value.get("summary"), Mapping) else {}
     try:
         normalized = _assemble_repair_report(
+            version=version,
             mode=mode,
-            stages=[_repair_stage_record(item) for item in stages_value],
+            stages=[
+                _repair_stage_record(item, report_version=version)
+                for item in stages_value
+            ],
             predictions=[_predictive_report_record(item) for item in predictions_value],
             fallbacks=[_fallback_report_record(item) for item in fallbacks_value],
+            attempt_ledger=[
+                _repair_attempt_evidence_record(item)
+                for item in tuple(attempt_values)[:MAX_REPAIR_CODES * MAX_PLAN_REPAIR_ROUNDS]
+                if isinstance(item, Mapping)
+            ],
             reused_stages=checkpoints["reused_stages"],
             recomputed_stages=checkpoints["recomputed_stages"],
+            rollout_attribution=attribution if isinstance(attribution, Mapping) else None,
+            invariant_violation_count=summary.get(
+                "repair_invariant_violation_count",
+                0,
+            ),
         )
     except RepairContractError:
         raise
@@ -673,7 +1044,11 @@ def validate_repair_report(value: Any) -> dict[str, Any]:
     return normalized
 
 
-def _repair_stage_record(value: Mapping[str, Any]) -> dict[str, Any]:
+def _repair_stage_record(
+    value: Mapping[str, Any],
+    *,
+    report_version: str,
+) -> dict[str, Any]:
     if not isinstance(value, Mapping):
         raise RepairContractError("REPAIR_REPORT_INVALID", "repair stage must be an object")
     stage = str(value.get("stage") or "")
@@ -739,7 +1114,7 @@ def _repair_stage_record(value: Mapping[str, Any]) -> dict[str, Any]:
         for item in tuple(attempt_values)[:16]
         if isinstance(item, Mapping)
     ]
-    return {
+    record = {
         "stage": stage,
         "status": status,
         "request": _repair_request_record(request),
@@ -761,6 +1136,60 @@ def _repair_stage_record(value: Mapping[str, Any]) -> dict[str, Any]:
         "attempts": attempts,
         "checkpoint_reused": value.get("checkpoint_reused") is True,
     }
+    if report_version == REPAIR_REPORT_VERSION:
+        if "defect_instance_ids" in request and not isinstance(
+            request.get("defect_instance_ids"),
+            (list, tuple, set),
+        ):
+            raise RepairContractError(
+                "REPAIR_REPORT_INVALID",
+                "repair defect instance ids are invalid",
+            )
+        if "fallback_authorized_defect_instance_ids" in value and not isinstance(
+            value.get("fallback_authorized_defect_instance_ids"),
+            (list, tuple, set),
+        ):
+            raise RepairContractError(
+                "REPAIR_REPORT_INVALID",
+                "repair fallback authorization ids are invalid",
+            )
+        default_round = "visual" if stage == "visual_understanding" else "primary"
+        repair_round = str(value.get("repair_round") or default_round)
+        if repair_round not in {"visual", "primary", "contingency"}:
+            raise RepairContractError("REPAIR_REPORT_INVALID", "repair round is invalid")
+        candidate_disposition = str(
+            value.get("candidate_disposition") or "not_applicable"
+        )
+        if candidate_disposition not in {
+            "accepted",
+            "rejected",
+            "unavailable",
+            "not_applicable",
+            "report_only",
+        }:
+            raise RepairContractError(
+                "REPAIR_REPORT_INVALID",
+                "repair candidate disposition is invalid",
+            )
+        record.update({
+            "repair_round": repair_round,
+            "authoritative_plan_fingerprint": _safe_hash(
+                value.get("authoritative_plan_fingerprint")
+                or record["request"].get("authoritative_plan_fingerprint")
+            ),
+            "provider_outcome": _safe_token(value.get("provider_outcome")) or "unknown",
+            "schema_valid": value.get("schema_valid") is True,
+            "semantic_valid": value.get("semantic_valid") is True,
+            "candidate_disposition": candidate_disposition,
+            "fallback_authorized": value.get("fallback_authorized") is True,
+            "fallback_authorized_defect_instance_ids": sorted({
+                candidate
+                for item in value.get("fallback_authorized_defect_instance_ids") or ()
+                if (candidate := _safe_hash(item))
+            })[:MAX_REPAIR_CODES],
+            "checkpoint_fingerprint": _safe_hash(value.get("checkpoint_fingerprint")),
+        })
+    return record
 
 
 def _repair_request_record(value: Mapping[str, Any]) -> dict[str, Any]:
@@ -775,12 +1204,29 @@ def _repair_request_record(value: Mapping[str, Any]) -> dict[str, Any]:
     ):
         candidate = str(value.get(key) or "").lower()
         hashes[key] = candidate if re.fullmatch(r"[a-f0-9]{64}", candidate) else ""
+    repair_round = str(value.get("repair_round") or "")
     return {
         "report_version": _safe_token(value.get("report_version")),
         "request_version": _safe_token(value.get("request_version")),
         "response_schema": _safe_token(value.get("response_schema")),
         "repair_prompt_version": _safe_token(value.get("repair_prompt_version")),
         **hashes,
+        "repair_round": (
+            repair_round if repair_round in {"visual", "primary", "contingency"} else ""
+        ),
+        "semantic_attempt": (
+            _bounded_int(value.get("semantic_attempt") or 0, 0, 2) or 0
+        ),
+        "authoritative_plan_fingerprint": _safe_hash(
+            value.get("authoritative_plan_fingerprint")
+        ),
+        "defect_instance_ids": sorted({
+            candidate
+            for item in value.get("defect_instance_ids") or ()
+            if (candidate := _safe_hash(item))
+        })[:MAX_REPAIR_CODES],
+        "model": _safe_attribution_token(value.get("model")),
+        "reasoning_effort": _safe_token(value.get("reasoning_effort")),
         "affected_clip_ids": sorted({
             parsed
             for item in value.get("affected_clip_ids") or ()
@@ -826,6 +1272,123 @@ def _repair_attempt_record(value: Mapping[str, Any]) -> dict[str, Any]:
     }
 
 
+def _repair_attempt_evidence_record(
+    value: RepairAttemptEvidence | Mapping[str, Any],
+) -> dict[str, Any]:
+    source = value.to_dict() if isinstance(value, RepairAttemptEvidence) else value
+    if not isinstance(source, Mapping):
+        raise RepairContractError("REPAIR_REPORT_INVALID", "repair attempt evidence is invalid")
+    defect = source.get("defect")
+    if isinstance(defect, Mapping):
+        defect_id_value = defect.get("id")
+        code_value = defect.get("code")
+        clip_index_value = defect.get("clip_index")
+        operation_id_value = defect.get("operation_id")
+        plan_fingerprint_value = defect.get("authoritative_plan_fingerprint")
+    else:
+        defect_id_value = source.get("defect_instance_id")
+        code_value = source.get("code")
+        clip_index_value = source.get("clip_index")
+        operation_id_value = source.get("operation_id")
+        plan_fingerprint_value = source.get("authoritative_plan_fingerprint")
+    try:
+        repair_round = PlanRepairRound(str(source.get("round") or ""))
+    except ValueError as exc:
+        raise RepairContractError("REPAIR_REPORT_INVALID", "repair attempt round is invalid") from exc
+    defect_id = _safe_hash(defect_id_value)
+    plan_fingerprint = _safe_hash(plan_fingerprint_value)
+    if not defect_id or not plan_fingerprint:
+        raise RepairContractError("REPAIR_REPORT_INVALID", "repair attempt identity is invalid")
+    clip_index = _bounded_int(clip_index_value, 1, MAX_REPAIR_CLIPS)
+    return {
+        "defect_instance_id": defect_id,
+        "code": defect_definition(str(code_value or "")).code,
+        "clip_index": clip_index,
+        "operation_id": _safe_token(operation_id_value) or "plan",
+        "authoritative_plan_fingerprint": plan_fingerprint,
+        "round": repair_round.value,
+        "outbound_attempted": source.get("outbound_attempted") is True,
+        "provider_outcome": _safe_token(source.get("provider_outcome")) or "unknown",
+        "schema_valid": source.get("schema_valid") is True,
+        "semantic_valid": source.get("semantic_valid") is True,
+    }
+
+
+def _repair_attribution_record(value: Mapping[str, Any] | None) -> dict[str, Any]:
+    source = value if isinstance(value, Mapping) else {}
+    boundaries = source.get("structured_output_boundaries")
+    return {
+        "model": _safe_attribution_token(source.get("model")) or "unknown",
+        "reasoning_effort": _safe_token(source.get("reasoning_effort")) or "unknown",
+        "structured_output_mode": (
+            _safe_token(source.get("structured_output_mode")) or "unknown"
+        ),
+        "structured_output_boundaries": sorted({
+            token
+            for item in (
+                boundaries if isinstance(boundaries, (list, tuple, set)) else ()
+            )
+            if (token := _safe_token(item))
+        })[:16],
+        "repair_mode": _safe_token(source.get("repair_mode")) or "off",
+        "delivery_policy": _safe_token(source.get("delivery_policy")) or "unknown",
+        "catalog_version": _safe_token(source.get("catalog_version")) or "unknown",
+        "renderer_profile": _safe_token(source.get("renderer_profile")) or "unknown",
+    }
+
+
+def _authorize_fallbacks(
+    fallbacks: list[dict[str, Any]],
+    attempt_ledger: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    authorized: list[dict[str, Any]] = []
+    for fallback in fallbacks:
+        requested_code = _canonical_registered_code(fallback.get("requested"))
+        candidates = [
+            item
+            for item in attempt_ledger
+            if item.get("outbound_attempted") is True
+            and item.get("clip_index") in {None, fallback.get("clip_index")}
+            and (
+                item.get("operation_id") == fallback.get("segment_id")
+                or (
+                    requested_code
+                    and item.get("operation_id") == "plan"
+                )
+            )
+        ]
+        matching_code = [
+            item for item in candidates if item.get("code") == requested_code
+        ]
+        if requested_code:
+            candidates = matching_code
+        else:
+            matching_fallback = [
+                item
+                for item in candidates
+                if defect_definition(str(item.get("code") or "")).safe_fallback_code
+                == fallback.get("code")
+            ]
+            if matching_fallback:
+                candidates = matching_fallback
+        evidence = sorted(
+            candidates,
+            key=lambda item: (
+                item.get("round") != PlanRepairRound.PRIMARY.value,
+                str(item.get("defect_instance_id") or ""),
+            ),
+        )[0] if candidates else None
+        authorized.append({
+            **fallback,
+            "fallback_authorized": evidence is not None,
+            "defect_instance_id": (
+                str(evidence.get("defect_instance_id") or "") if evidence else ""
+            ),
+            "attempt_round": str(evidence.get("round") or "") if evidence else "",
+        })
+    return authorized
+
+
 def _predictive_report_record(value: PredictiveFinding | Mapping[str, Any]) -> dict[str, Any]:
     if not isinstance(value, (PredictiveFinding, Mapping)):
         raise RepairContractError("REPAIR_REPORT_INVALID", "predictive finding is invalid")
@@ -857,6 +1420,13 @@ def _fallback_report_record(value: Any) -> dict[str, Any]:
         "segment_id": _safe_token(source.get("segment_id")),
         "requested": _canonical_registered_code(requested) or _safe_token(requested),
         "executed": _safe_token(source.get("executed")),
+        "fallback_authorized": source.get("fallback_authorized") is True,
+        "defect_instance_id": _safe_hash(source.get("defect_instance_id")),
+        "attempt_round": (
+            str(source.get("attempt_round"))
+            if str(source.get("attempt_round")) in {"primary", "contingency"}
+            else ""
+        ),
     }
 
 
@@ -912,11 +1482,26 @@ def build_repair_batch(
     editing_prompt: str,
     transcript_excerpts: Iterable[TranscriptExcerpt] = (),
     rendering_started: bool = False,
+    repair_round: PlanRepairRound | None = None,
+    authoritative_plan_sha256: str = "",
 ) -> tuple[RepairBatchRequest, tuple[RepairDisposition, ...]]:
     all_findings = tuple(findings)
     capabilities = tuple(str(item) for item in available_capabilities)
     if len(all_findings) > MAX_REPAIR_CODES:
         raise RepairContractError("REPAIR_CODE_LIMIT_EXCEEDED", "too many repair findings")
+    if stage is RepairStage.PLAN_REPAIR:
+        effective_round = repair_round or PlanRepairRound.PRIMARY
+        plan_fingerprint = _safe_hash(authoritative_plan_sha256)
+        if not plan_fingerprint:
+            plan_fingerprint = _digest(_canonical_json(dict(candidate_clips)))
+    else:
+        if repair_round is not None:
+            raise RepairContractError(
+                "REPAIR_ROUND_INVALID",
+                "visual repair does not use plan-repair rounds",
+            )
+        effective_round = None
+        plan_fingerprint = _digest(_canonical_json(dict(candidate_clips)))
     dispositions = tuple(
         repair_disposition(
             finding,
@@ -987,8 +1572,16 @@ def build_repair_batch(
     request = RepairBatchRequest(
         stage=stage,
         mode=mode,
-        defects=tuple(_defect_payload(finding) for finding in objective),
-        supplemental_advisories=tuple(_defect_payload(finding) for finding in advisory),
+        repair_round=effective_round,
+        authoritative_plan_fingerprint=plan_fingerprint,
+        defects=tuple(
+            _defect_payload(finding, plan_fingerprint=plan_fingerprint)
+            for finding in objective
+        ),
+        supplemental_advisories=tuple(
+            _defect_payload(finding, plan_fingerprint=plan_fingerprint)
+            for finding in advisory
+        ),
         candidate_clips=tuple(clips),
         evidence=tuple(evidence),
         available_capabilities=tuple(sorted({_required_safe_token(item) for item in capabilities})),
@@ -1031,6 +1624,7 @@ def evaluate_repair_quality_floor(
     affected_clip_indexes: Iterable[int],
     affected_operation_ids: Iterable[str] = (),
     allow_catalog_change_clip_indexes: Iterable[int] = (),
+    allowed_mutations_by_operation: Mapping[str, Iterable[str]] | None = None,
 ) -> RepairQualityFloor:
     violations: set[str] = set()
     resolution = compute_repair_resolution(original_codes, repaired_codes)
@@ -1041,6 +1635,10 @@ def evaluate_repair_quality_floor(
     affected = {int(item) for item in affected_clip_indexes}
     allowed_catalog_changes = {int(item) for item in allow_catalog_change_clip_indexes}
     affected_operations = {str(item) for item in affected_operation_ids}
+    mutation_allowlist = {
+        str(operation_id): {str(path) for path in paths}
+        for operation_id, paths in (allowed_mutations_by_operation or {}).items()
+    }
     for clip_index, original_clip in original_by_clip.items():
         repaired_clip = repaired_by_clip.get(clip_index)
         if repaired_clip is None:
@@ -1066,12 +1664,33 @@ def evaluate_repair_quality_floor(
             for operation_id in protected
         ):
             violations.add("REPAIR_UNAFFECTED_OPERATION_REMOVED")
+        for operation_id, allowed_paths in mutation_allowlist.items():
+            if operation_id not in original_operations:
+                continue
+            repaired_operation = repaired_operations.get(operation_id)
+            if repaired_operation is None:
+                violations.add("REPAIR_MUTATION_OUTSIDE_ALLOWLIST")
+                continue
+            changed = _changed_paths(
+                original_operations[operation_id],
+                repaired_operation,
+            )
+            if any(
+                not any(
+                    path == allowed or path.startswith(f"{allowed}.")
+                    for allowed in allowed_paths
+                )
+                for path in changed
+            ):
+                violations.add("REPAIR_MUTATION_OUTSIDE_ALLOWLIST")
     if "subtitles" in original.requested_capabilities and "subtitles" not in repaired.requested_capabilities:
         violations.add("REPAIR_SUBTITLE_REQUIREMENT_LOST")
     if set(repaired.requested_capabilities) - {str(item) for item in available_capabilities}:
         violations.add("REPAIR_CAPABILITY_UNSUPPORTED")
     if resolution.introduced_codes:
         violations.add("REPAIR_NEW_DEFECT_INTRODUCED")
+    if resolution.remaining_codes:
+        violations.add("REPAIR_DEFECT_UNRESOLVED")
     return RepairQualityFloor(
         accepted=not violations,
         violation_codes=tuple(sorted(violations)),
@@ -1166,7 +1785,7 @@ def predict_plan_findings(
                         {"position": overlay.get("position")},
                     ))
             ratio = _finite_number(ratios.get(clip_index))
-            if layout.get("mode") in {"fit", "letterbox"} and ratio and ratio > 0:
+            if layout.get("mode") == "letterbox" and ratio and ratio > 0:
                 predicted_height = min(1.0, (9 / 16) / ratio)
                 if predicted_height < 0.35:
                     findings.append(_predictive(
@@ -1233,14 +1852,25 @@ def _predictive(
     )
 
 
-def _defect_payload(finding: RepairFinding) -> dict[str, Any]:
+def _defect_payload(
+    finding: RepairFinding,
+    *,
+    plan_fingerprint: str,
+) -> dict[str, Any]:
     definition = defect_definition(finding.code)
+    instance = repair_defect_instance(
+        finding,
+        authoritative_plan_fingerprint=plan_fingerprint,
+    )
     return {
         "code": definition.code,
         "clip_index": finding.clip_index,
+        "operation_id": instance.operation_id,
+        "defect_instance_id": instance.id,
         "description": definition.description_en,
         "repair_strategy": definition.repair_strategy.value,
         "fallback_code": definition.safe_fallback_code,
+        "allowed_mutation_paths": list(allowed_mutation_paths(finding)),
     }
 
 
@@ -1323,12 +1953,36 @@ def _operation_ids(clip: Any) -> set[str]:
 def _operations_by_id(clip: Any) -> dict[str, dict[str, Any]]:
     operations: dict[str, dict[str, Any]] = {}
     for segment in clip.segments:
-        operations[segment.id] = segment.model_dump(mode="json")
+        segment_payload = segment.model_dump(mode="json")
+        segment_payload["overlays"] = [overlay.id for overlay in segment.overlays]
+        operations[segment.id] = segment_payload
         for overlay in segment.overlays:
             operations[overlay.id] = overlay.model_dump(mode="json")
     for asset in clip.asset_requests:
         operations[asset.id] = asset.model_dump(mode="json")
     return operations
+
+
+def _changed_paths(
+    original: Any,
+    repaired: Any,
+    *,
+    prefix: str = "",
+) -> set[str]:
+    if isinstance(original, Mapping) and isinstance(repaired, Mapping):
+        paths: set[str] = set()
+        for key in set(original) | set(repaired):
+            name = f"{prefix}.{key}" if prefix else str(key)
+            if key not in original or key not in repaired:
+                paths.add(name)
+                continue
+            paths.update(_changed_paths(original[key], repaired[key], prefix=name))
+        return paths
+    if isinstance(original, (list, tuple)) and isinstance(repaired, (list, tuple)):
+        if original == repaired:
+            return set()
+        return {prefix}
+    return set() if original == repaired else {prefix}
 
 
 def _catalog_selection_preserved(original: Any, repaired: Any) -> bool:
@@ -1361,6 +2015,11 @@ def _safe_scalar(value: Any) -> Any:
 def _safe_token(value: Any) -> str:
     token = str(value or "").strip()[:120]
     return token if _SAFE_TOKEN.fullmatch(token) else ""
+
+
+def _safe_attribution_token(value: Any) -> str:
+    token = str(value or "").strip()[:160]
+    return token if _SAFE_ATTRIBUTION_TOKEN.fullmatch(token) else ""
 
 
 def _required_safe_token(value: Any) -> str:
@@ -1417,14 +2076,19 @@ def _digest(value: str) -> str:
 __all__ = [
     "MAX_REPAIR_CLIPS",
     "MAX_REPAIR_CODES",
+    "MAX_PLAN_REPAIR_ROUNDS",
     "REPAIR_BATCH_REQUEST_VERSION",
     "REPAIR_REPORT_VERSION",
     "REPAIR_RESOLUTION_VERSION",
     "PredictiveFinding",
+    "PlanRepairRound",
+    "PlanRepairState",
     "RepairBatchRequest",
+    "RepairAttemptEvidence",
     "RepairBudget",
     "RepairContractError",
     "RepairDisposition",
+    "RepairDefectInstance",
     "RepairEvidence",
     "RepairFinding",
     "RepairMode",
@@ -1432,6 +2096,8 @@ __all__ = [
     "RepairResolution",
     "RepairStage",
     "TranscriptExcerpt",
+    "allowed_mutation_paths",
+    "authoritative_plan_fingerprint",
     "build_repair_batch",
     "build_repair_report",
     "bounded_repair_findings",
@@ -1442,6 +2108,7 @@ __all__ = [
     "repair_findings_from_preflight",
     "repair_findings_from_visual_coverage",
     "repair_disposition",
+    "repair_defect_instance",
     "resolve_repair_mode",
     "validate_repair_report",
 ]

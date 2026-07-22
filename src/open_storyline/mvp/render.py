@@ -22,6 +22,7 @@ from open_storyline.mvp.catalog import (
 from open_storyline.mvp.compositor import (
     RENDER_EXECUTION_VERSION,
     ClipComposition,
+    CompositionError,
     resolve_clip_composition,
 )
 from open_storyline.mvp.edit_plan import EditPlan
@@ -484,6 +485,12 @@ class AgenticShortRenderer:
         )
         return font_family, color
 
+    def _resolve_composition(self, clip_plan: Any, **kwargs: Any) -> ClipComposition:
+        try:
+            return resolve_clip_composition(clip_plan, **kwargs)
+        except CompositionError as exc:
+            raise RenderError(exc.code, str(exc)) from exc
+
     def preflight_plan(
         self,
         *,
@@ -524,7 +531,7 @@ class AgenticShortRenderer:
                     height=self.settings.height,
                     font_family=caption_font_family,
                 )
-                composition = resolve_clip_composition(
+                composition = self._resolve_composition(
                     clip_plan,
                     visual=visual_understanding,
                     source_media=media,
@@ -676,7 +683,7 @@ class AgenticShortRenderer:
                 height=settings.height,
                 font_family=caption_font_family,
             )
-            composition: ClipComposition = resolve_clip_composition(
+            composition = self._resolve_composition(
                 clip_plan,
                 visual=visual_understanding,
                 source_media=media,

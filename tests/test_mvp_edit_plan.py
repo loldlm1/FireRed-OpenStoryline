@@ -206,6 +206,57 @@ class EditPlanContractTests(unittest.TestCase):
             ["asset-overlay-01"],
         )
 
+    def test_derives_missing_required_operation_decisions(self):
+        prompt = (
+            "Start with an opening title, apply exactly 3 reframes or zooms, "
+            "and use restrained transitions."
+        )
+        intent = build_creative_intent(
+            prompt,
+            {"asset_policy": "off", "stock_policy": "off"},
+            selected_clip_count=1,
+        )
+        segments = []
+        for index, (start, end) in enumerate(
+            ((0, 7000), (7000, 14_000), (14_000, 20_000)),
+            start=1,
+        ):
+            segments.append({
+                "id": f"segment-{index}",
+                "source_window": {"start_ms": start, "end_ms": end},
+                "timeline_window": {"start_ms": start, "end_ms": end},
+                "layout": {"mode": "crop"},
+                "transition_in": {
+                    "kind": "cut" if index == 1 else "fade",
+                    "duration_ms": 0 if index == 1 else 220,
+                },
+                "overlays": ([{
+                    "id": "opening-title",
+                    "kind": "text",
+                    "timeline_window": {"start_ms": 0, "end_ms": 2200},
+                    "text": "Opening",
+                }] if index == 1 else []),
+            })
+
+        normalized = _normalize_edit_plan_response(
+            {"clips": [{"segments": segments, "intent_decisions": []}]},
+            creative_intent=intent,
+        )
+        decisions = {
+            item["intent_id"]: item["operation_ids"]
+            for item in normalized["clips"][0]["intent_decisions"]
+        }
+
+        self.assertEqual(decisions["prompt-opening-title"], ["opening-title"])
+        self.assertEqual(
+            decisions["prompt-reframe-sequence"],
+            ["segment-1", "segment-2", "segment-3"],
+        )
+        self.assertEqual(
+            decisions["prompt-restrained-transitions"],
+            ["segment-2", "segment-3"],
+        )
+
         executable = build_shadow_edit_plan(
             [ShortCandidate(0, 20_000, "Title", "Hook", "Reason", 0.9)],
             source_duration_ms=20_000,
@@ -650,6 +701,247 @@ class AgenticEditPlannerTests(unittest.IsolatedAsyncioTestCase):
             plan.clips[0].intent_decisions[0].operation_ids,
             ("segment-1",),
         )
+
+    async def test_deferred_repair_template_preserves_required_operations(self):
+        prompt = (
+            "Start with an opening title that says 'A Clear Opening', apply "
+            "exactly 3 gentle reframes or zooms, and use restrained transitions."
+        )
+        planner, client, kwargs = planner_fixture("speaker", prompt)
+        kwargs.update({
+            "creative_intent": build_creative_intent(
+                prompt,
+                {"asset_policy": "off", "stock_policy": "off"},
+                selected_clip_count=1,
+            ),
+            "defer_registry_repair": True,
+        })
+
+        plan = await planner.plan(**kwargs)
+        clip = plan.clips[0]
+        decisions = {
+            item.intent_id: item.operation_ids for item in clip.intent_decisions
+        }
+
+        self.assertEqual(len(client.calls), 1)
+        self.assertEqual(len(planner.deferred_defects), 1)
+        self.assertEqual(len(clip.segments), 3)
+        self.assertEqual(
+            [segment.transition_in.kind for segment in clip.segments],
+            ["cut", "fade", "fade"],
+        )
+        self.assertEqual(clip.segments[0].overlays[0].text, "A Clear Opening")
+        self.assertEqual(
+            decisions["prompt-reframe-sequence"],
+            tuple(segment.id for segment in clip.segments),
+        )
+        self.assertEqual(
+            decisions["prompt-restrained-transitions"],
+            tuple(segment.id for segment in clip.segments[1:]),
+        )
+
+    async def test_deferred_repair_template_uses_catalog_backed_transitions(self):
+        prompt = (
+            "Start with an opening title, apply exactly 3 gentle reframes or zooms, "
+            "and use restrained transitions."
+        )
+        planner, _client, kwargs = planner_fixture("speaker", prompt)
+        kwargs.update({
+            "creative_intent": build_creative_intent(
+                prompt,
+                {"asset_policy": "off", "stock_policy": "off"},
+                selected_clip_count=1,
+            ),
+            "defer_registry_repair": True,
+            "catalog_snapshot": {
+                "catalog_version": "2026.07.1",
+                "manifest_sha256": "b" * 64,
+                "entries": [
+                    {
+                        "id": "style.clean-product",
+                        "kind": "style_profile",
+                        "config": {"catalog_ids": [
+                            "caption.clean",
+                            "color.clean-contrast",
+                            "transition.crossfade",
+                        ]},
+                    },
+                    {
+                        "id": "style.restrained-cinematic",
+                        "kind": "style_profile",
+                        "config": {"catalog_ids": [
+                            "caption.editorial",
+                            "color.cinematic-soft",
+                            "transition.fade-black",
+                        ]},
+                    },
+                    {
+                        "id": "caption.clean",
+                        "kind": "caption_treatment",
+                        "config": {},
+                    },
+                    {
+                        "id": "color.clean-contrast",
+                        "kind": "color_treatment",
+                        "config": {},
+                    },
+                    {
+                        "id": "caption.editorial",
+                        "kind": "caption_treatment",
+                        "config": {},
+                    },
+                    {
+                        "id": "color.cinematic-soft",
+                        "kind": "color_treatment",
+                        "config": {},
+                    },
+                    {
+                        "id": "transition.hard-cut",
+                        "kind": "transition",
+                        "config": {"operation": "hard_cut", "duration_ms": 0},
+                    },
+                    {
+                        "id": "transition.crossfade",
+                        "kind": "transition",
+                        "config": {"operation": "fade", "duration_ms": 220},
+                    },
+                    {
+                        "id": "transition.fade-black",
+                        "kind": "transition",
+                        "config": {"operation": "fade", "duration_ms": 220},
+                    },
+                ],
+            },
+        })
+
+        plan = await planner.plan(**kwargs)
+        clip = plan.clips[0]
+
+        self.assertEqual(
+            [segment.transition_in.kind for segment in clip.segments],
+            ["cut", "fade", "fade"],
+        )
+        self.assertEqual(
+            [segment.transition_in.catalog_id for segment in clip.segments],
+            ["transition.hard-cut", "transition.fade-black", "transition.fade-black"],
+        )
+        self.assertEqual(
+            clip.catalog_selection.style_profile_id,
+            "style.restrained-cinematic",
+        )
+
+    async def test_maps_title_reframes_and_transitions_to_executable_operations(self):
+        prompt = (
+            "Agrega un t\u00edtulo de apertura, aplica entre 2 y 4 reencuadres "
+            "o zooms y usa transiciones suaves y discretas."
+        )
+        planner, client, kwargs = planner_fixture("speaker", prompt)
+        response = client.response
+        response["requested_capabilities"] = [
+            "crop",
+            "focus_zoom",
+            "hard_cut",
+            "fade",
+            "text_emphasis",
+            "subtitles",
+        ]
+        response["clips"][0]["segments"] = [
+            {
+                "id": "segment-1",
+                "source_window": {"start_ms": 0, "end_ms": 7000},
+                "timeline_window": {"start_ms": 0, "end_ms": 7000},
+                "layout": {
+                    "mode": "crop",
+                    "focal_target": {"region_id": "region-1"},
+                    "fallback": "fit",
+                    "max_zoom": 1.1,
+                },
+                "transition_in": {"kind": "cut", "duration_ms": 0},
+                "overlays": [{
+                    "id": "opening-title",
+                    "kind": "text",
+                    "timeline_window": {"start_ms": 0, "end_ms": 2200},
+                    "text": "Opening hook",
+                    "position": "top",
+                }],
+                "reason": "Open with a concise title and speaker focus.",
+                "evidence_ids": ["region-1"],
+            },
+            {
+                "id": "segment-2",
+                "source_window": {"start_ms": 7000, "end_ms": 14_000},
+                "timeline_window": {"start_ms": 7000, "end_ms": 14_000},
+                "layout": {
+                    "mode": "crop",
+                    "focal_target": {"region_id": "region-1"},
+                    "fallback": "fit",
+                    "max_zoom": 1.2,
+                },
+                "transition_in": {"kind": "fade", "duration_ms": 220},
+                "overlays": [],
+                "reason": "Shift the framing at the next editorial beat.",
+                "evidence_ids": ["region-1"],
+            },
+            {
+                "id": "segment-3",
+                "source_window": {"start_ms": 14_000, "end_ms": 20_000},
+                "timeline_window": {"start_ms": 14_000, "end_ms": 20_000},
+                "layout": {
+                    "mode": "crop",
+                    "focal_target": {"region_id": "region-1"},
+                    "fallback": "fit",
+                    "max_zoom": 1.15,
+                },
+                "transition_in": {"kind": "fade", "duration_ms": 220},
+                "overlays": [],
+                "reason": "Use a final restrained focus change.",
+                "evidence_ids": ["region-1"],
+            },
+        ]
+        response["clips"][0]["intent_decisions"] = [
+            {
+                "intent_id": "prompt-opening-title",
+                "decision": "execute",
+                "operation_ids": [{"id": "opening-title"}],
+            },
+            {
+                "intent_id": "prompt-reframe-sequence",
+                "decision": "execute",
+                "operation_ids": [{"id": "segment-1"}],
+            },
+            {
+                "intent_id": "prompt-restrained-transitions",
+                "decision": "execute",
+                "operation_ids": [{"id": "segment-2"}],
+            },
+        ]
+        kwargs["creative_intent"] = build_creative_intent(
+            prompt,
+            {"asset_policy": "off", "stock_policy": "off"},
+            selected_clip_count=1,
+        )
+
+        plan = await planner.plan(**kwargs)
+        decisions = {
+            item.intent_id: item.operation_ids
+            for item in plan.clips[0].intent_decisions
+        }
+
+        self.assertEqual(decisions["prompt-opening-title"], ("opening-title",))
+        self.assertEqual(
+            decisions["prompt-reframe-sequence"],
+            ("segment-1", "segment-2", "segment-3"),
+        )
+        self.assertEqual(
+            decisions["prompt-restrained-transitions"],
+            ("segment-2", "segment-3"),
+        )
+        payload = json.loads(client.call["user_prompt"])
+        operation_intents = {
+            item["kind"]: item for item in payload["creative_intent"]["operation_intents"]
+        }
+        self.assertEqual(operation_intents["reframe_sequence"]["count_min"], 2)
+        self.assertEqual(operation_intents["opening_title"]["start_max_ms"], 3500)
 
     async def test_does_not_invent_portrait_operation_without_a_crop(self):
         prompt = "Use a portrait reframe."

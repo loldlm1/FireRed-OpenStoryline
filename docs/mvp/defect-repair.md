@@ -24,3 +24,39 @@ Registry metadata never replaces detector-owned technical classification,
 Pydantic/domain validation, FFmpeg preflight, post-render QA, or promotion
 checks. A model may propose a corrected candidate only for an eligible code;
 the backend always decides whether the defect was resolved.
+
+Repairable composition geometry is detected before provider repair and FFmpeg
+execution with the same crop-feasibility calculation used by the compositor.
+The bounded finding records only normalized identifiers and numeric geometry;
+it never stores frames or raw provider content. Composition configuration,
+source integrity, executable validation, authentication, database, and unsafe
+path failures remain deterministic fail-closed boundaries.
+
+Full-frame composition keeps two distinct contracts. `fit` places the complete
+foreground over a dimmed blurred full-canvas background and is the registered
+content-preserving baseline. Explicit `letterbox` keeps solid padding. When
+predictive geometry shows that letterbox would leave too little active picture,
+`PREDICTIVE_ACTIVE_PICTURE_RISK` receives the same LLM-first treatment as other
+repairable plan defects; its attempted deterministic fallback changes only that
+segment to blurred `fit` before the final compositor dry-run.
+
+Plan repair is bounded to one primary batch plus one contingency batch for
+new authoritative defects. Every deterministic repair fallback in enforce mode
+must reference an outbound attempt for the same code, clip, operation, and
+authoritative plan fingerprint. Candidate-only defects reject that candidate
+without consuming the contingency batch. The contingency call can add one
+provider round of latency and cost, so rollout metrics keep its call rate,
+latency, tokens, and cost separate; existing release thresholds are unchanged.
+After both rounds, the final authoritative plan must pass the shared compositor
+dry-run before any FFmpeg preflight or render starts. If a third semantic batch
+would be needed, the engine uses only an already-attempted defect's registered
+safe baseline; when no executable baseline survives deterministic validation,
+the job fails closed with a technical recovery code and retains the attempt,
+checkpoint, fallback, and outcome evidence.
+
+The LLM boundary never repairs authorization, session ownership, source
+retention, unsafe paths, corrupt or missing media, database failures, secrets,
+or invalid executable output. Plain retained-session rerun is independent of
+quality-feedback repair: it is available whenever the immutable prompt and
+source still exist, while evidence-backed repair additionally requires an
+objective retained defect.

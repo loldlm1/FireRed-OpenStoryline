@@ -247,6 +247,23 @@ explícitos conserva encuadres, cortes, capas de fuente, texto, transiciones y
 subtítulos sin llamadas de assets. No existe fallback entre Pexels, 9Router y
 el video fuente.
 
+La intención creativa `creative_intent.v2` también reconoce, sin depender de
+acentos, requisitos explícitos en español o inglés para un título de apertura,
+una cantidad exacta de 2, 3 o 4 —o una secuencia acotada de 2 a 4—
+reencuadres/zooms y transiciones breves y discretas. Cada requisito debe quedar
+unido a capas o segmentos ejecutables con conteos y tiempos válidos. El planner
+y la reparación comparten un template ejecutable que conserva esas operaciones
+después del intento LLM, sin cambiar el video fuente, la selección temporal ni
+el número de salidas. Las transiciones discretas seleccionan un fundido
+ejecutable de un estilo compatible del catálogo creativo, sin emitir un ID de
+catálogo vacío o inventado. Si un reencuadre obligatorio tiene evidencia del
+objetivo ausente, escasa o insegura para el recorte vertical después de sus
+intentos LLM acotados, el segmento usa un reencuadre central sin objetivo
+inventado en vez de convertirse silenciosamente en un fit estático; la QA
+semántica del resultado sigue siendo autoritativa. Si aun después del intento y del baseline seguro no puede
+cumplirse, la QA estricta lo conserva como limitación creativa y la entrega
+técnica nunca lo presenta como resultado mejorado.
+
 El análisis visual ahora tiene dos escalas. Las muestras globales ayudan a
 elegir el fragmento, pero cada fragmento seleccionado recibe además muestras
 propias cerca del inicio, final, cuartiles, centro y cambios de escena. Un
@@ -256,7 +273,12 @@ planificación con más frames; si todavía falla, termina antes de buscar asset
 renderizar. `clip_visual_coverage.json` conserva sólo IDs, timestamps, métricas
 y códigos de bloqueo. Un fallback a `fit`/letterbox debe estar autorizado de
 forma explícita; el motor ya no convierte silenciosamente un recorte en una
-imagen horizontal pequeña dentro del lienzo vertical.
+imagen horizontal pequeña dentro del lienzo vertical. `fit` conserva el primer
+plano completo sobre una copia atenuada y desenfocada del mismo video que llena
+el lienzo; `letterbox` conserva relleno sólido sólo cuando se pide de forma
+explícita. Si ese relleno deja muy poca imagen activa, el defecto recibe primero
+un intento LLM y su fallback determinista cambia únicamente ese segmento a
+`fit` antes del dry-run final.
 
 En dominio/HTTPS, la sesión usa una cookie opaca `HttpOnly`, `Secure` y
 `SameSite`, junto con un token CSRF separado para operaciones que modifican
@@ -385,9 +407,17 @@ OPENSTORYLINE_CREATIVE_CATALOG_PLANNING_ENABLED=false
 OPENSTORYLINE_SEMANTIC_QA_ENABLED=false
 ```
 
-Primero compara planes y evidencia sin cambiar el renderer. Luego autoriza un
-canary privado con fuente sintética, seguido por `Sesion prueba 1` y al menos dos
-nichos no relacionados; esos medios y reportes nunca entran a Git. Activa en
+Primero compara planes y evidencia sin cambiar el renderer. La reparación
+agentiva sigue una secuencia acotada: una tanda primaria con todos los defectos
+autoritativos, revalidación determinista y, como máximo, una tanda de
+contingencia sólo si aparece un defecto autoritativo nuevo. Un candidato que
+introduce defectos se descarta y no consume esa contingencia. Un proveedor que
+falla después de iniciar la llamada cuenta como intento; sólo entonces el motor
+puede aplicar un fallback local por segmento. El compositor debe pasar su
+dry-run final antes de invocar FFmpeg. Luego autoriza un
+canary privado con fuente sintética, seguido por una sesión de producción
+autorizada y al menos dos nichos no relacionados; sus identificadores, medios y
+reportes nunca entran a Git. Activa en
 orden: render agentivo source-only, imágenes generadas y, finalmente, Pexels.
 Verifica `/up`, `/health`, recuperación de cola, descargas, auditoría, retención,
 visibilidad del objetivo, sincronía, latencia y errores de proveedor después de
@@ -401,7 +431,12 @@ evidencia técnica inválida siguen bloqueando. La combinación histórica
 `baseline_guaranteed` más promoción limitada se conserva sólo como
 compatibilidad. Activa
 `OPENSTORYLINE_RETRY_UX_ENABLED=true` por separado para mostrar reintento de
-defectos y prellenado de una versión mejorada.
+defectos y prellenado de una versión mejorada. En producción, `render` exige
+`OPENSTORYLINE_LLM_DEFECT_REPAIR_MODE=enforce`, schemas estrictos verificados,
+`OPENSTORYLINE_BASELINE_FALLBACKS_ENABLED=true` y esta UX activa; el validador
+rechaza combinaciones parciales. “Volver a ejecutar” reutiliza la versión y
+fuente retenidas sin exigir evidencia de calidad. “Reparar con evidencia” sólo
+aparece cuando existe evidencia objetiva y una fuente todavía disponible.
 
 La capa de fiabilidad también se activa por etapas: primero checkpoints,
 después fallbacks deterministas y por último planificación con catálogo. Tras
@@ -452,7 +487,10 @@ sidecar no está saludable, el commit no coincide o las rutas compartidas no son
 exactas. El adaptador y el servicio validan la misma lista blanca tipada, usan
 modo manual sin LLM y prohíben descargas de modelos. Si planificación,
 ejecución, descubrimiento o validación de FFMPEGA falla, el trabajo conserva el
-primer render nativo reproducible y registra la limitación exacta.
+primer render nativo reproducible y registra la limitación exacta. El preflight
+determinista permite hasta 180 segundos para que un render vertical de alta
+resolución no sea rechazado por el límite anterior de 30 segundos antes de la
+ejecución, que conserva su propio límite separado.
 
 En un VPS sin GPU esta ruta corre en CPU. Los efectos que requieran modelos de
 ComfyUI quedan fuera del MVP remoto-only. Para rollback usa, en orden:

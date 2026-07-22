@@ -813,25 +813,48 @@ export function renderVersionHistory({
         favoriteButton.addEventListener('click', () => callbacks.onFavorite(run));
         actions.append(favoriteButton);
       }
-      if (
-        retryUxEnabled
-        && ['completed', 'failed'].includes(run.state)
-        && run.outcome?.retry?.supported
-      ) {
-        const retryButton = document.createElement('button');
-        retryButton.type = 'button';
-        retryButton.className = 'button button-secondary';
-        retryButton.textContent = retryPendingIds.has(run.id)
-          ? 'Preparando reintento…'
-          : 'Reintentar defectos';
-        retryButton.disabled = retryPendingIds.has(run.id);
-        retryButton.addEventListener('click', () => callbacks.onRetryDefects(version, run));
-        const improveButton = document.createElement('button');
-        improveButton.type = 'button';
-        improveButton.className = 'button button-quiet';
-        improveButton.textContent = 'Crear versión mejorada';
-        improveButton.addEventListener('click', () => callbacks.onCreateImprovedVersion(version, run));
-        actions.append(retryButton, improveButton);
+      if (retryUxEnabled && ['completed', 'failed'].includes(run.state)) {
+        const retry = run.outcome?.retry || {};
+        const retryPending = retryPendingIds.has(run.id);
+        if (!retry.supported && retry.unavailable_reason) {
+          const unavailable = document.createElement('span');
+          unavailable.className = 'rerun-unavailable';
+          unavailable.textContent = `Nueva ejecución no disponible: ${errorMessage(retry.unavailable_reason)}`;
+          actions.append(unavailable);
+        }
+        if (retry.supported) {
+          const rerunButton = document.createElement('button');
+          rerunButton.type = 'button';
+          rerunButton.className = 'button button-secondary';
+          rerunButton.textContent = retryPending
+            ? 'Preparando intento…'
+            : 'Volver a ejecutar';
+          rerunButton.title = 'Crea un intento nuevo con la misma instrucción y el mismo video fuente.';
+          rerunButton.disabled = retryPending;
+          rerunButton.addEventListener('click', () => callbacks.onRerun(version, run));
+          actions.append(rerunButton);
+        }
+        if (retry.supported && retry.quality_feedback_supported) {
+          const retryButton = document.createElement('button');
+          retryButton.type = 'button';
+          retryButton.className = 'button button-quiet';
+          retryButton.textContent = retryPending
+            ? 'Preparando intento…'
+            : 'Reparar con evidencia';
+          retryButton.title = 'Usa los defectos objetivos verificados del intento anterior para orientar la reparación.';
+          retryButton.disabled = retryPending;
+          retryButton.addEventListener('click', () => callbacks.onRetryDefects(version, run));
+          actions.append(retryButton);
+        }
+        if (retry.supported) {
+          const improveButton = document.createElement('button');
+          improveButton.type = 'button';
+          improveButton.className = 'button button-quiet';
+          improveButton.textContent = 'Crear versión mejorada';
+          improveButton.disabled = retryPending;
+          improveButton.addEventListener('click', () => callbacks.onCreateImprovedVersion(version, run));
+          actions.append(improveButton);
+        }
       }
       row.append(summaryCopy, actions);
       if (expandedRunIds.has(run.id)) {

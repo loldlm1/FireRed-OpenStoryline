@@ -49,10 +49,17 @@ isolated so upstream behavior can continue to be merged into this fork.
    samples every selected source window independently for crop evidence.
 8. In agentic render mode, the server validates an executable edit plan and
    same-window crop coverage, performs at most one bounded visual re-analysis
-   and replan when coverage is insufficient,
-   resolves only the generated-image and/or Pexels capabilities explicitly
-   permitted for that job, and FFmpeg renders the typed timeline operations and
-   subtitles on CPU.
+   and replan when coverage is insufficient, then runs the shared repairable
+   defect detector before any render call. A strict primary plan-repair batch
+   receives the complete authoritative finding set. The candidate is fully
+   revalidated and discarded if it introduces a new defect. Only a genuinely
+   new authoritative pre-render finding may receive the one contingency batch;
+   no third plan-repair batch is possible. A deterministic segment-local
+   `fit`/letterbox baseline is allowed only after matching outbound attempt
+   evidence, and a final compositor dry-run is a hard prerequisite for FFmpeg.
+   The server then resolves only the generated-image and/or Pexels capabilities
+   explicitly permitted for that job, and FFmpeg renders the typed timeline
+   operations and subtitles on CPU.
 9. Agentic renders remain unregistered candidates while deterministic QA writes
    `render_qa.json`, `frame_quality_qa.json`, `creative_conformance.json`,
    caption-footprint evidence, and `render_promotion.json`. Report mode records
@@ -110,6 +117,27 @@ isolated so upstream behavior can continue to be merged into this fork.
   visual holds, attention gaps, and output-aligned subtitle cadence.
 - Conformance evidence compares validated planned operations and requested
   assets with executed operations, used assets, and explained fallbacks.
+- `creative_intent.v2` folds accents for bounded English/Spanish requirement
+  detection and turns explicit opening-title, exact 2/3/4 or ranged 2-4
+  reframe/zoom, and restrained-transition requests into executable count and
+  timing contracts. Missing operations enter the same LLM-first plan-repair
+  batch as other objective pre-render defects.
+- The planner and repair request share an intent-aware executable template.
+  After an outbound LLM attempt, that bounded template may preserve the title,
+  reframe count, restrained transitions, subtitles, source windows, and output
+  count instead of collapsing to a one-segment baseline. Restrained transitions
+  select an executable fade from a compatible creative-catalog style instead
+  of emitting an empty or invented catalog ID. When a required reframe has
+  missing, sparse, or portrait-unsafe target evidence after its bounded LLM
+  attempts, the segment uses a target-free center reframe instead of silently
+  becoming a static fit; semantic output QA remains authoritative for the
+  rendered focus. Track targets retain
+  their semantic role so clip-local observations can safely replace a sparse
+  track without inventing private evidence or external assets.
+- Final post-render conformance also consumes the plan-level intent verdict. If
+  a repaired or deterministic baseline still cannot satisfy a required creative
+  operation, strict QA remains blocked and technical-pass delivery labels the
+  downloadable result as limited rather than enhanced.
 - `OPENSTORYLINE_COMPLETION_POLICY` defaults to `strict`.
   `baseline_guaranteed` takes effect only when
   `OPENSTORYLINE_LIMITED_OUTPUT_PROMOTION_ENABLED=true`; otherwise strict
@@ -123,6 +151,18 @@ isolated so upstream behavior can continue to be merged into this fork.
   canary comparison and rollback.
 - `OPENSTORYLINE_RETRY_UX_ENABLED` independently controls the browser actions;
   disabling it does not remove outcome, lineage, or audit evidence.
+- In production `OPENSTORYLINE_AGENTIC_EDITING_MODE=render` is valid only with
+  `OPENSTORYLINE_LLM_DEFECT_REPAIR_MODE=enforce`, verified strict
+  `edit_plan_repair.v1`, `OPENSTORYLINE_BASELINE_FALLBACKS_ENABLED=true`, and
+  `OPENSTORYLINE_RETRY_UX_ENABLED=true`. Shadow/report and explicit off
+  rollback profiles remain available, but the release validator rejects a
+  render profile that silently disables the LLM-first gate.
+- Plan repair has a hard two-batch budget: one `primary` and, only for new
+  authoritative findings after primary revalidation, one `contingency`. Reports
+  expose these call counts separately, along with per-defect attempt and
+  fallback attribution, candidate disposition, final dry-run status, and any
+  invariant violation. Provider failure still counts as an outbound attempt;
+  non-repairable technical and security failures never enter this loop.
 - Optional semantic frame review uses the approved 9Router vision route only
   when `OPENSTORYLINE_SEMANTIC_QA_ENABLED=true`. It samples at most
   `OPENSTORYLINE_SEMANTIC_QA_MAX_FRAMES`, stores no frame bytes or raw provider
@@ -135,11 +175,14 @@ isolated so upstream behavior can continue to be merged into this fork.
   deterministic allowlist again, prohibits raw FFmpeg/model/vision paths, and
   can access only `KAMAL_OUTPUTS_DIR`. It is deployed and health-checked with
   `./bin/kamal-mvp ffmpega deploy`; the web image remains unchanged and keeps
-  the native render when the optional finishing pass fails.
+  the native render when the optional finishing pass fails. Its deterministic
+  command preflight has a bounded 180-second allowance so high-resolution
+  portrait renders are not rejected by the former 30-second cap before the
+  separately bounded execution begins.
 - Cross-niche regression fixtures under `tests/fixtures/mvp_agentic/` contain
-  only synthetic schema expectations. The private production session
-  `Sesion prueba 1` is an operator-only regression gate and its media,
-  transcript, prompts, frames, and reports must never be committed.
+  only synthetic schema expectations. Authorized private production sessions
+  are operator-only regression gates; their identifiers, media, transcripts,
+  prompts, frames, and reports must never be committed.
 - Strict schemas, repair, technical-pass delivery, and retry details follow the
   independently reversible order in
   [agentic-defect-repair-rollout.md](agentic-defect-repair-rollout.md). The
@@ -158,9 +201,19 @@ isolated so upstream behavior can continue to be merged into this fork.
 - Crop targets without sufficient same-window coverage receive one bounded
   higher-density re-analysis and replan. Remaining blockers fail before asset
   acquisition or rendering.
-- Center crop is the safe deterministic fallback. Fit or letterbox from an
-  automatic crop requires `allow_full_frame_fallback=true`; an oversized target
-  without that permission fails instead of silently producing a small picture.
+- Center crop is the safe deterministic fallback. When an LLM attempt has been
+  recorded, the engine may authorize a segment-local content-preserving `fit`
+  or `letterbox` baseline even if the original plan did not grant full-frame
+  fallback. Source windows, timing, output count, assets, subtitles, and
+  unrelated operations remain immutable. An unattempted repairable defect or a
+  baseline that fails the final dry-run remains terminal.
+- `fit` preserves the complete foreground over a dimmed, blurred version of the
+  same source that fills the output canvas. Explicit `letterbox` preserves solid
+  padding and remains subject to predictive active-picture repair when a narrow
+  landscape band would dominate a portrait output. Frame QA treats blurred
+  `fit` as full-canvas composition while retaining active-picture enforcement;
+  source-reference metrics that require identical full-frame backgrounds are
+  skipped only for that intentional blur treatment.
 
 ## External asset controls
 
