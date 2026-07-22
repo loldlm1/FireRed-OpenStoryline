@@ -537,6 +537,7 @@ class CompositorTests(unittest.TestCase):
         self.assertEqual((video, audio), ("vout", "a0"))
         self.assertIn("trim=start=0.000:end=4.000", graph)
         self.assertIn("gblur=sigma=", graph)
+        self.assertIn("colorlevels=romin=0.085:gomin=0.095:bomin=0.125", graph)
         self.assertIn("overlay=(W-w)/2:(H-h)/2:shortest=1", graph)
         self.assertNotIn("../", graph)
 

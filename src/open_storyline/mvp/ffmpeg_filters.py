@@ -244,7 +244,10 @@ def build_reframe_filtergraph(
                 f"[vfitbg{index}]scale={background_width}:{background_height}:"
                 "force_original_aspect_ratio=increase,"
                 f"crop={background_width}:{background_height},"
-                f"gblur=sigma={sigma:.3f}:steps=2,eq=brightness=-0.1200:saturation=0.7500,"
+                f"gblur=sigma={sigma:.3f}:steps=2,"
+                "eq=brightness=-0.0600:contrast=0.8800:saturation=0.5000,"
+                "colorlevels=romin=0.085:gomin=0.095:bomin=0.125:"
+                "romax=0.420:gomax=0.450:bomax=0.540,"
                 f"scale={output_width}:{output_height},setsar=1[vfitbgready{index}]"
             )
             graph.append(

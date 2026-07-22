@@ -296,6 +296,22 @@ class FrameQualityRenderTests(unittest.TestCase):
             ], capture_output=True, text=True, check=False, timeout=120)
             self.assertEqual(generated.returncode, 0, generated.stderr)
 
+            dark_source = root / "dark-source.mp4"
+            dark_generated = subprocess.run([
+                "ffmpeg", "-y", "-v", "error", "-f", "lavfi", "-i",
+                (
+                    "color=c=#10131c:size=320x180:rate=24:duration=3,"
+                    "drawbox=x=0:y=0:w=320:h=18:color=#3d3f4a:t=fill,"
+                    "drawbox=x=100:y=55:w=120:h=55:color=#e0e0e0:t=fill,"
+                    "drawbox=x=10:y=40:w=65:h=120:color=#17223b:t=fill"
+                ),
+                "-f", "lavfi", "-i",
+                "sine=frequency=440:sample_rate=16000:duration=3",
+                "-shortest", "-c:v", "libx264", "-preset", "ultrafast", "-crf", "10",
+                "-pix_fmt", "yuv420p", "-c:a", "aac", str(dark_source),
+            ], capture_output=True, text=True, check=False, timeout=120)
+            self.assertEqual(dark_generated.returncode, 0, dark_generated.stderr)
+
             filters = {
                 "fill": "crop=102:180:109:0,scale=180:320",
                 "letterbox": (
@@ -347,6 +363,17 @@ class FrameQualityRenderTests(unittest.TestCase):
             self.assertEqual(fit_rendered.returncode, 0, fit_rendered.stderr)
             outputs["fit"] = fit_output
 
+            dark_fit_output = root / "dark-fit.mp4"
+            dark_fit_rendered = subprocess.run([
+                "ffmpeg", "-y", "-v", "error", "-i", str(dark_source),
+                "-filter_complex", fit_graph,
+                "-map", f"[{fit_video}]", "-map", f"[{fit_audio}]",
+                "-c:v", "libx264", "-preset", "veryfast", "-crf", "23",
+                "-pix_fmt", "yuv420p", "-c:a", "aac", str(dark_fit_output),
+            ], capture_output=True, text=True, check=False, timeout=120)
+            self.assertEqual(dark_fit_rendered.returncode, 0, dark_fit_rendered.stderr)
+            outputs["dark_fit"] = dark_fit_output
+
             fill = build_frame_quality_report(
                 [QAInput(1, outputs["fill"], 3000)],
                 source=source,
@@ -379,6 +406,14 @@ class FrameQualityRenderTests(unittest.TestCase):
                 expected_height=320,
                 timeout=60,
             )
+            dark_intentional_fit = build_frame_quality_report(
+                [QAInput(1, outputs["dark_fit"], 3000)],
+                source=dark_source,
+                render_execution=execution(strategy="fit", expected_ratio=1.0),
+                expected_width=180,
+                expected_height=320,
+                timeout=60,
+            )
             degraded = build_frame_quality_report(
                 [QAInput(1, outputs["degraded"], 3000)],
                 source=source,
@@ -400,6 +435,13 @@ class FrameQualityRenderTests(unittest.TestCase):
         self.assertGreater(
             intentional_fit["clips"][0]["active_picture"]["summary"]["fill_samples"],
             0,
+        )
+        self.assertEqual(dark_intentional_fit["status"], "pass")
+        self.assertEqual(
+            dark_intentional_fit["clips"][0]["active_picture"]["summary"][
+                "median_active_area_ratio"
+            ],
+            1.0,
         )
         incident_codes = {item["code"] for item in incident["findings"]}
         self.assertIn("ACTIVE_PICTURE_TOO_SMALL", incident_codes)
