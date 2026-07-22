@@ -414,14 +414,25 @@ class FakePlanRepairClient:
     def __init__(self):
         self.calls = []
         self.last_attempts = ()
+        self.invalid = False
 
     async def complete_structured(self, **kwargs):
         self.calls.append(kwargs)
+        self.last_attempts = (NineRouterAttempt(
+            1,
+            200,
+            "ok",
+            duration_ms=321,
+            input_tokens=100,
+            output_tokens=20,
+            total_tokens=120,
+        ),)
+        if self.invalid:
+            return {"requested_capabilities": [], "clips": []}
         payload = json.loads(kwargs["user_prompt"])
         candidate = payload["candidate_clips"][0]
         candidate["segments"][0]["overlays"][0]["opacity"] = 0.8
         candidate["segments"][0]["overlays"][0]["width_ratio"] = 0.5
-        self.last_attempts = (NineRouterAttempt(1, 200, "ok"),)
         return {
             "requested_capabilities": [
                 "source_cutaway",
@@ -655,12 +666,19 @@ class MVPAgenticPipelineTests(unittest.IsolatedAsyncioTestCase):
                 first_manifest = json.loads(
                     (root / "output" / "manifest.json").read_text(encoding="utf-8")
                 )
+                first_edit_plan = json.loads(
+                    (root / "output" / "edit_plan.json").read_text(encoding="utf-8")
+                )
                 second = await processor("4" * 32, store)
                 calls_after_reuse = len(remote.calls)
                 for key, payload in checkpoints.jobs.items():
                     if key[1] == "plan_repair":
                         payload["edit_plan"] = {"requested_capabilities": [], "clips": []}
+                remote.invalid = True
                 third = await processor("4" * 32, store)
+                third_manifest = json.loads(
+                    (root / "output" / "manifest.json").read_text(encoding="utf-8")
+                )
 
             self.assertEqual(calls_after_reuse, 1)
             self.assertEqual(len(remote.calls), 2)
@@ -678,16 +696,23 @@ class MVPAgenticPipelineTests(unittest.IsolatedAsyncioTestCase):
                 first_manifest["agentic"]["edit_planner"]["attempts"][-1]["category"],
                 "plan_repair",
             )
-            repaired_plan = json.loads(
-                (root / "output" / "edit_plan.json").read_text(encoding="utf-8")
-            )
             self.assertEqual(
-                repaired_plan["clips"][0]["segments"][0]["overlays"][0]["opacity"],
+                first_edit_plan["clips"][0]["segments"][0]["overlays"][0]["opacity"],
                 0.8,
             )
             self.assertIn("plan_repair", second["checkpoints"]["reused_stages"])
             self.assertIn("plan_repair", third["checkpoints"]["recomputed_stages"])
             self.assertEqual(first["clip_count"], second["clip_count"])
+            third_repair_attempts = [
+                item
+                for item in third_manifest["agentic"]["edit_planner"]["attempts"]
+                if item.get("category") == "plan_repair"
+            ]
+            self.assertEqual(len(third_repair_attempts), 1)
+            repair_metrics = third["outcome"]["repair"]["metrics"]
+            self.assertEqual(repair_metrics["transport_attempts"], 1)
+            self.assertEqual(repair_metrics["provider_latency_ms"], 321)
+            self.assertEqual(repair_metrics["input_tokens"], 100)
 
     async def test_retry_reuses_expensive_analysis_checkpoints(self):
         class CountingPlanner(FakePlanner):

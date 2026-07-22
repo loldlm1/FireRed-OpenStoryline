@@ -1775,6 +1775,7 @@ class MVPJobProcessor:
                             metadata={"mode": repair_mode.value},
                         )
                     elif repair_hit is None:
+                        repair_call_attempts: list[dict[str, Any]] = []
                         try:
                             repaired_response = await remote_client.complete_structured(
                                 schema_name=EDIT_PLAN_REPAIR_SCHEMA,
@@ -1789,7 +1790,7 @@ class MVPJobProcessor:
                                     "medium",
                                 ),
                             )
-                            edit_planner_attempts.extend(
+                            repair_call_attempts = [
                                 {
                                     **attempt.to_dict(),
                                     "category": "plan_repair",
@@ -1799,7 +1800,7 @@ class MVPJobProcessor:
                                     "last_attempts",
                                     (),
                                 )
-                            )
+                            ]
                             repaired_plan = validate_repaired_response(
                                 repaired_response
                             )
@@ -1911,6 +1912,7 @@ class MVPJobProcessor:
                                 },
                                 metadata={"mode": repair_mode.value},
                             )
+                            edit_planner_attempts.extend(repair_call_attempts)
                         except (
                             EditPlanError,
                             NineRouterError,
@@ -1919,11 +1921,10 @@ class MVPJobProcessor:
                         ) as exc:
                             failed_attempts = [
                                 {**attempt.to_dict(), "category": "plan_repair"}
-                                for attempt in (
-                                    tuple(getattr(exc, "attempts", ()))
-                                    or tuple(getattr(remote_client, "last_attempts", ()))
-                                )
+                                for attempt in tuple(getattr(exc, "attempts", ()))
                             ]
+                            if not failed_attempts:
+                                failed_attempts = repair_call_attempts
                             edit_planner_attempts.extend(failed_attempts)
                             plan_stage_status = "failed"
                             unresolved_repair_findings = tuple(
