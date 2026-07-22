@@ -163,6 +163,119 @@ class OutcomeTests(unittest.TestCase):
         self.assertEqual(report["grade"], "terminal_failure")
         self.assertEqual(report["technical_status"], "blocked")
 
+    def test_failed_outcome_preserves_repair_checkpoint_and_fallback_evidence(self):
+        repair = build_repair_report(
+            mode=RepairMode.ENFORCE,
+            stage_records=({
+                "stage": "plan_repair",
+                "status": "failed",
+                "repair_round": "primary",
+                "authoritative_plan_fingerprint": "a" * 64,
+                "provider_outcome": "provider_unavailable",
+                "schema_valid": False,
+                "semantic_valid": False,
+                "candidate_disposition": "unavailable",
+                "checkpoint_fingerprint": "b" * 64,
+                "request": {
+                    "request_version": "repair_batch_request.v1",
+                    "response_schema": "edit_plan_repair.v1",
+                    "response_schema_sha256": "d" * 64,
+                    "repair_prompt_sha256": "e" * 64,
+                    "repair_round": "primary",
+                    "semantic_attempt": 1,
+                    "authoritative_plan_fingerprint": "a" * 64,
+                    "defect_instance_ids": ["c" * 64],
+                    "affected_clip_ids": [1],
+                    "objective_codes": ["EDIT_PLAN_INVALID"],
+                    "advisory_codes": [],
+                    "evidence_types": ["edit_plan"],
+                    "evidence_ids": ["evidence-1"],
+                    "evidence_count": 1,
+                    "would_call": True,
+                    "call_allowed": True,
+                },
+                "dispositions": [{
+                    "code": "EDIT_PLAN_INVALID",
+                    "eligible": True,
+                    "would_call": True,
+                    "call_allowed": True,
+                    "reason": "eligible",
+                }],
+                "resolution": {
+                    "original_codes": ["EDIT_PLAN_INVALID"],
+                    "resolved_codes": [],
+                    "remaining_codes": ["EDIT_PLAN_INVALID"],
+                    "introduced_codes": [],
+                },
+                "quality_floor": {
+                    "accepted": False,
+                    "violation_codes": [],
+                },
+                "attempts": [{
+                    "category": "plan_repair",
+                    "number": 1,
+                    "status_code": 503,
+                    "reason": "provider_unavailable",
+                    "duration_ms": 250,
+                }],
+                "checkpoint_reused": True,
+            },),
+            fallback_entries=({
+                "code": "VISUAL_REFRAME_FALLBACK",
+                "clip_index": 1,
+                "segment_id": "segment-1",
+                "requested": "semantic_crop",
+                "executed": "content_preserving_fit",
+            },),
+            reused_stages=("plan_repair",),
+            recomputed_stages=("render_preflight",),
+            rollout_attribution={
+                "model": "cx/gpt-5.6-sol",
+                "reasoning_effort": "medium",
+                "structured_output_mode": "json_schema",
+                "structured_output_boundaries": ["edit_plan_repair.v1"],
+                "repair_mode": "enforce",
+            },
+        )
+
+        report = build_failed_outcome_report(
+            code="SOURCE_VIDEO_INVALID",
+            stage="rendering",
+            retryable=False,
+            repair_report=repair,
+            rollout_attribution=repair["attribution"],
+            checkpoint_summary=repair["checkpoints"],
+            fallback_ledger={
+                "entries": [{
+                    "code": "VISUAL_REFRAME_FALLBACK",
+                    "clip_index": 1,
+                    "segment_id": "segment-1",
+                    "requested": "semantic_crop",
+                    "executed": "content_preserving_fit",
+                }],
+            },
+        )
+
+        self.assertEqual(report["repair"]["report_version"], "repair_report.v2")
+        self.assertEqual(report["repair"]["mode"], "enforce")
+        self.assertEqual(report["attribution"]["model"], "cx/gpt-5.6-sol")
+        self.assertEqual(report["attribution"]["schema_hashes"], ["d" * 64])
+        self.assertEqual(report["attribution"]["prompt_hashes"], ["e" * 64])
+        self.assertEqual(report["repair"]["stages"][0]["repair_round"], "primary")
+        self.assertEqual(
+            report["repair"]["stages"][0]["provider_outcome"],
+            "provider_unavailable",
+        )
+        self.assertEqual(report["repair"]["stages"][0]["transport_attempts"], 1)
+        self.assertIn(
+            "VISUAL_REFRAME_FALLBACK",
+            report["repair"]["fallback_applied_codes"],
+        )
+        self.assertIn("plan_repair", report["retry"]["reused_stage_names"])
+        self.assertIn("EDIT_PLAN_INVALID", report["repair"]["remaining_codes"])
+        self.assertIn("SOURCE_VIDEO_INVALID", report["repair"]["remaining_codes"])
+        self.assertNotIn("SOURCE_VIDEO_INVALID", report["repair"]["introduced_codes"])
+
     def test_completed_outcome_preserves_bounded_semantic_qa_evidence(self):
         report = build_completed_outcome_report(
             outputs=[{"video": "short-01.mp4", "subtitles": None}],
@@ -426,10 +539,17 @@ class OutcomeTests(unittest.TestCase):
         self.assertEqual(metrics["provider_latency_ms"], 4_000)
         self.assertEqual(metrics["total_tokens"], 260)
         self.assertEqual(metrics["ffmpega_omission_count"], 1)
+        self.assertEqual(metrics["primary_calls"], 1)
+        self.assertEqual(metrics["contingency_calls"], 0)
+        self.assertEqual(metrics["defects_presented"], 2)
+        self.assertEqual(metrics["provider_failures"], 1)
+        self.assertEqual(metrics["repair_invariant_violation_count"], 0)
         self.assertEqual(summary["repair"]["strict_schema"]["validity_rate"], 0.5)
         self.assertEqual(summary["repair"]["semantic_validity"]["rate"], 0.5)
         self.assertEqual(summary["repair"]["success"]["plan"]["rate"], 1.0)
         self.assertEqual(summary["repair"]["success"]["visual"]["rate"], 0.0)
+        self.assertEqual(summary["repair"]["rounds"]["primary_calls"], 1)
+        self.assertEqual(summary["repair"]["rounds"]["contingency_calls"], 0)
         self.assertEqual(
             summary["repair"]["predictive"]["advisory_attachment_rate"],
             1.0,

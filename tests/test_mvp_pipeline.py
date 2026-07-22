@@ -752,6 +752,7 @@ class MVPAgenticPipelineTests(unittest.IsolatedAsyncioTestCase):
                 },
             )
             remote = FakeGeometryRepairClient(fail_calls=(1, 2))
+            checkpoints = FakeCheckpointStore()
             processor = object.__new__(MVPJobProcessor)
             processor.config = config("render")
             processor.config.agentic_editing.baseline_fallbacks_enabled = True
@@ -811,6 +812,10 @@ class MVPAgenticPipelineTests(unittest.IsolatedAsyncioTestCase):
                     "open_storyline.mvp.pipeline.NineRouterClient.from_config",
                     return_value=remote,
                 ),
+                patch(
+                    "open_storyline.mvp.pipeline.CheckpointStore",
+                    return_value=checkpoints,
+                ),
                 patch("open_storyline.mvp.pipeline.ShortsPlanner", FakePlanner),
                 patch(
                     "open_storyline.mvp.pipeline.AgenticShortRenderer",
@@ -861,7 +866,42 @@ class MVPAgenticPipelineTests(unittest.IsolatedAsyncioTestCase):
                 "VISUAL_REFRAME_FALLBACK",
                 fallback_ledger["summary"]["codes"],
             )
+            repair_report = json.loads(
+                (root / "output" / "repair_report.json").read_text(
+                    encoding="utf-8"
+                )
+            )
+            self.assertEqual(repair_report["version"], "repair_report.v2")
+            self.assertEqual(
+                [
+                    item["repair_round"]
+                    for item in repair_report["stages"]
+                    if item["stage"] == "plan_repair"
+                ],
+                ["primary", "contingency"],
+            )
+            self.assertEqual(len(repair_report["attempt_ledger"]), 2)
+            self.assertGreaterEqual(
+                repair_report["summary"]["fallback_after_attempt_count"],
+                1,
+            )
+            self.assertEqual(
+                repair_report["summary"]["repair_invariant_violation_count"],
+                0,
+            )
+            checkpoint_stages = {
+                key[1]
+                for key in checkpoints.jobs
+                if key[0] == "7" * 32
+            }
+            self.assertIn("plan_repair", checkpoint_stages)
+            self.assertIn("plan_repair_contingency", checkpoint_stages)
             self.assertEqual(result["outcome"]["technical_status"], "pass")
+            self.assertEqual(result["outcome"]["repair"]["metrics"]["primary_calls"], 1)
+            self.assertEqual(
+                result["outcome"]["repair"]["metrics"]["contingency_calls"],
+                1,
+            )
             self.assertLess(
                 execution_order.index("dry_run"),
                 execution_order.index("ffmpeg_preflight"),

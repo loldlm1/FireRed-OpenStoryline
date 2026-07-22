@@ -28,9 +28,12 @@ from open_storyline.mvp.structured_outputs import (
 
 
 REPAIR_BATCH_REQUEST_VERSION = "repair_batch_request.v1"
-REPAIR_REPORT_VERSION = "repair_report.v1"
+REPAIR_REPORT_V1 = "repair_report.v1"
+REPAIR_REPORT_VERSION = "repair_report.v2"
+REPAIR_REPORT_VERSIONS = frozenset({REPAIR_REPORT_V1, REPAIR_REPORT_VERSION})
 REPAIR_RESOLUTION_VERSION = "repair_resolution.v1"
 MAX_PLAN_REPAIR_ROUNDS = 2
+MAX_REPAIR_STAGES = 3
 MAX_REPAIR_CLIPS = 8
 MAX_REPAIR_CODES = 32
 MAX_REPAIR_EVIDENCE_RECORDS = 64
@@ -42,6 +45,7 @@ MAX_REPAIR_REPORT_BYTES = 256_000
 MAX_REPAIR_CONTEXT_DEPTH = 12
 
 _SAFE_TOKEN = re.compile(r"^[A-Za-z0-9._:-]{1,120}$")
+_SAFE_ATTRIBUTION_TOKEN = re.compile(r"^[A-Za-z0-9._:/+-]{1,160}$")
 _SAFE_FIELD = re.compile(r"^[a-z][a-z0-9_]{0,79}$")
 _BLOCKED_CONTEXT_KEY_PARTS = frozenset({
     "command",
@@ -173,6 +177,7 @@ class PlanRepairState:
     def __init__(self) -> None:
         self._rounds: list[PlanRepairRound] = []
         self._attempts: dict[str, RepairAttemptEvidence] = {}
+        self._invariant_violation_ids: set[str] = set()
 
     @property
     def rounds(self) -> tuple[PlanRepairRound, ...]:
@@ -181,6 +186,14 @@ class PlanRepairState:
     @property
     def attempts(self) -> tuple[RepairAttemptEvidence, ...]:
         return tuple(self._attempts[key] for key in sorted(self._attempts))
+
+    @property
+    def invariant_violation_count(self) -> int:
+        return len(self._invariant_violation_ids)
+
+    @property
+    def reached_call_cap(self) -> bool:
+        return len(self._rounds) >= MAX_PLAN_REPAIR_ROUNDS
 
     def next_round(self) -> PlanRepairRound:
         if not self._rounds:
@@ -286,6 +299,7 @@ class PlanRepairState:
             else:
                 evidence.append(matched)
         if missing:
+            self._invariant_violation_ids.update(missing)
             raise RepairContractError(
                 "REPAIR_ATTEMPT_REQUIRED",
                 "deterministic fallback requires matching outbound LLM attempt evidence",
@@ -812,22 +826,38 @@ def build_repair_report(
     stage_records: Iterable[Mapping[str, Any]] = (),
     predictive_findings: Iterable[PredictiveFinding | Mapping[str, Any]] = (),
     fallback_entries: Iterable[Any] = (),
+    attempt_evidence: Iterable[RepairAttemptEvidence | Mapping[str, Any]] = (),
     reused_stages: Iterable[str] = (),
     recomputed_stages: Iterable[str] = (),
+    rollout_attribution: Mapping[str, Any] | None = None,
+    invariant_violation_count: int = 0,
 ) -> dict[str, Any]:
-    stages = [_repair_stage_record(item) for item in tuple(stage_records)[:2]]
+    stages = [
+        _repair_stage_record(item, report_version=REPAIR_REPORT_VERSION)
+        for item in tuple(stage_records)[:MAX_REPAIR_STAGES]
+    ]
     predictions = [
         _predictive_report_record(item)
         for item in tuple(predictive_findings)[:MAX_REPAIR_CODES]
     ]
     fallbacks = [_fallback_report_record(item) for item in tuple(fallback_entries)[:64]]
+    attempt_ledger = [
+        _repair_attempt_evidence_record(item)
+        for item in tuple(attempt_evidence)[:MAX_REPAIR_CODES * MAX_PLAN_REPAIR_ROUNDS]
+    ]
+    attribution = dict(rollout_attribution or {})
+    attribution.setdefault("repair_mode", mode.value)
     report = _assemble_repair_report(
+        version=REPAIR_REPORT_VERSION,
         mode=mode,
         stages=stages,
         predictions=predictions,
         fallbacks=fallbacks,
+        attempt_ledger=attempt_ledger,
         reused_stages=reused_stages,
         recomputed_stages=recomputed_stages,
+        rollout_attribution=attribution,
+        invariant_violation_count=invariant_violation_count,
     )
     if _json_size(report) > MAX_REPAIR_REPORT_BYTES:
         raise RepairContractError("REPAIR_REPORT_TOO_LARGE", "repair report exceeds its byte budget")
@@ -836,13 +866,42 @@ def build_repair_report(
 
 def _assemble_repair_report(
     *,
+    version: str,
     mode: RepairMode,
     stages: list[dict[str, Any]],
     predictions: list[dict[str, Any]],
     fallbacks: list[dict[str, Any]],
+    attempt_ledger: list[dict[str, Any]],
     reused_stages: Iterable[str],
     recomputed_stages: Iterable[str],
+    rollout_attribution: Mapping[str, Any] | None,
+    invariant_violation_count: int,
 ) -> dict[str, Any]:
+    if version == REPAIR_REPORT_VERSION:
+        fallbacks = _authorize_fallbacks(fallbacks, attempt_ledger)
+    else:
+        fallbacks = [
+            {
+                key: item[key]
+                for key in ("code", "clip_index", "segment_id", "requested", "executed")
+            }
+            for item in fallbacks
+        ]
+    if version == REPAIR_REPORT_VERSION:
+        for stage in stages:
+            repair_round = str(stage.get("repair_round") or "")
+            authorized = [
+                item
+                for item in fallbacks
+                if item.get("attempt_round") == repair_round
+                and item.get("fallback_authorized") is True
+            ]
+            stage["fallback_authorized"] = bool(authorized)
+            stage["fallback_authorized_defect_instance_ids"] = sorted({
+                str(item.get("defect_instance_id") or "")
+                for item in authorized
+                if _safe_hash(item.get("defect_instance_id"))
+            })[:MAX_REPAIR_CODES]
     resolved = {
         code
         for stage in stages
@@ -868,8 +927,8 @@ def _assemble_repair_report(
         _canonical_registered_code(item["requested"]) or item["code"]
         for item in fallbacks
     }
-    return {
-        "version": REPAIR_REPORT_VERSION,
+    report = {
+        "version": version,
         "registry_version": DEFECT_REGISTRY_VERSION,
         "registry_sha256": DEFECT_REGISTRY_SHA256,
         "mode": mode.value,
@@ -888,11 +947,31 @@ def _assemble_repair_report(
             "not_repairable_codes": sorted(not_repairable),
         },
     }
+    if version == REPAIR_REPORT_VERSION:
+        report.update({
+            "attempt_ledger": attempt_ledger,
+            "attribution": _repair_attribution_record(rollout_attribution),
+        })
+        report["summary"].update({
+            "fallback_after_attempt_count": sum(
+                item.get("fallback_authorized") is True for item in fallbacks
+            ),
+            "repair_invariant_violation_count": max(
+                0,
+                min(int(invariant_violation_count or 0), MAX_REPAIR_CODES),
+            ),
+            "jobs_at_two_call_cap": int(any(
+                item.get("round") == PlanRepairRound.CONTINGENCY.value
+                for item in attempt_ledger
+            )),
+        })
+    return report
 
 
 def validate_repair_report(value: Any) -> dict[str, Any]:
-    if not isinstance(value, Mapping) or value.get("version") != REPAIR_REPORT_VERSION:
+    if not isinstance(value, Mapping) or value.get("version") not in REPAIR_REPORT_VERSIONS:
         raise RepairContractError("REPAIR_REPORT_INVALID", "repair report version is invalid")
+    version = str(value["version"])
     if (
         value.get("registry_version") != DEFECT_REGISTRY_VERSION
         or value.get("registry_sha256") != DEFECT_REGISTRY_SHA256
@@ -905,7 +984,8 @@ def validate_repair_report(value: Any) -> dict[str, Any]:
     stages_value = value.get("stages")
     predictions_value = value.get("predictive_findings")
     fallbacks_value = value.get("fallbacks")
-    if not isinstance(stages_value, list) or len(stages_value) > 2:
+    stage_limit = MAX_REPAIR_STAGES if version == REPAIR_REPORT_VERSION else 2
+    if not isinstance(stages_value, list) or len(stages_value) > stage_limit:
         raise RepairContractError("REPAIR_REPORT_INVALID", "repair report stages are invalid")
     if not isinstance(predictions_value, list) or len(predictions_value) > MAX_REPAIR_CODES:
         raise RepairContractError("REPAIR_REPORT_INVALID", "repair predictions are invalid")
@@ -918,14 +998,37 @@ def validate_repair_report(value: Any) -> dict[str, Any]:
         checkpoints.get("recomputed_stages"), list
     ):
         raise RepairContractError("REPAIR_REPORT_INVALID", "repair checkpoint stages are invalid")
+    attempt_values = value.get("attempt_ledger")
+    if version == REPAIR_REPORT_VERSION and not isinstance(attempt_values, list):
+        raise RepairContractError("REPAIR_REPORT_INVALID", "repair attempt ledger is invalid")
+    if not isinstance(attempt_values, list):
+        attempt_values = []
+    attribution = value.get("attribution")
+    if version == REPAIR_REPORT_VERSION and not isinstance(attribution, Mapping):
+        raise RepairContractError("REPAIR_REPORT_INVALID", "repair attribution is invalid")
+    summary = value.get("summary") if isinstance(value.get("summary"), Mapping) else {}
     try:
         normalized = _assemble_repair_report(
+            version=version,
             mode=mode,
-            stages=[_repair_stage_record(item) for item in stages_value],
+            stages=[
+                _repair_stage_record(item, report_version=version)
+                for item in stages_value
+            ],
             predictions=[_predictive_report_record(item) for item in predictions_value],
             fallbacks=[_fallback_report_record(item) for item in fallbacks_value],
+            attempt_ledger=[
+                _repair_attempt_evidence_record(item)
+                for item in tuple(attempt_values)[:MAX_REPAIR_CODES * MAX_PLAN_REPAIR_ROUNDS]
+                if isinstance(item, Mapping)
+            ],
             reused_stages=checkpoints["reused_stages"],
             recomputed_stages=checkpoints["recomputed_stages"],
+            rollout_attribution=attribution if isinstance(attribution, Mapping) else None,
+            invariant_violation_count=summary.get(
+                "repair_invariant_violation_count",
+                0,
+            ),
         )
     except RepairContractError:
         raise
@@ -939,7 +1042,11 @@ def validate_repair_report(value: Any) -> dict[str, Any]:
     return normalized
 
 
-def _repair_stage_record(value: Mapping[str, Any]) -> dict[str, Any]:
+def _repair_stage_record(
+    value: Mapping[str, Any],
+    *,
+    report_version: str,
+) -> dict[str, Any]:
     if not isinstance(value, Mapping):
         raise RepairContractError("REPAIR_REPORT_INVALID", "repair stage must be an object")
     stage = str(value.get("stage") or "")
@@ -1005,7 +1112,7 @@ def _repair_stage_record(value: Mapping[str, Any]) -> dict[str, Any]:
         for item in tuple(attempt_values)[:16]
         if isinstance(item, Mapping)
     ]
-    return {
+    record = {
         "stage": stage,
         "status": status,
         "request": _repair_request_record(request),
@@ -1027,6 +1134,60 @@ def _repair_stage_record(value: Mapping[str, Any]) -> dict[str, Any]:
         "attempts": attempts,
         "checkpoint_reused": value.get("checkpoint_reused") is True,
     }
+    if report_version == REPAIR_REPORT_VERSION:
+        if "defect_instance_ids" in request and not isinstance(
+            request.get("defect_instance_ids"),
+            (list, tuple, set),
+        ):
+            raise RepairContractError(
+                "REPAIR_REPORT_INVALID",
+                "repair defect instance ids are invalid",
+            )
+        if "fallback_authorized_defect_instance_ids" in value and not isinstance(
+            value.get("fallback_authorized_defect_instance_ids"),
+            (list, tuple, set),
+        ):
+            raise RepairContractError(
+                "REPAIR_REPORT_INVALID",
+                "repair fallback authorization ids are invalid",
+            )
+        default_round = "visual" if stage == "visual_understanding" else "primary"
+        repair_round = str(value.get("repair_round") or default_round)
+        if repair_round not in {"visual", "primary", "contingency"}:
+            raise RepairContractError("REPAIR_REPORT_INVALID", "repair round is invalid")
+        candidate_disposition = str(
+            value.get("candidate_disposition") or "not_applicable"
+        )
+        if candidate_disposition not in {
+            "accepted",
+            "rejected",
+            "unavailable",
+            "not_applicable",
+            "report_only",
+        }:
+            raise RepairContractError(
+                "REPAIR_REPORT_INVALID",
+                "repair candidate disposition is invalid",
+            )
+        record.update({
+            "repair_round": repair_round,
+            "authoritative_plan_fingerprint": _safe_hash(
+                value.get("authoritative_plan_fingerprint")
+                or record["request"].get("authoritative_plan_fingerprint")
+            ),
+            "provider_outcome": _safe_token(value.get("provider_outcome")) or "unknown",
+            "schema_valid": value.get("schema_valid") is True,
+            "semantic_valid": value.get("semantic_valid") is True,
+            "candidate_disposition": candidate_disposition,
+            "fallback_authorized": value.get("fallback_authorized") is True,
+            "fallback_authorized_defect_instance_ids": sorted({
+                candidate
+                for item in value.get("fallback_authorized_defect_instance_ids") or ()
+                if (candidate := _safe_hash(item))
+            })[:MAX_REPAIR_CODES],
+            "checkpoint_fingerprint": _safe_hash(value.get("checkpoint_fingerprint")),
+        })
+    return record
 
 
 def _repair_request_record(value: Mapping[str, Any]) -> dict[str, Any]:
@@ -1041,12 +1202,29 @@ def _repair_request_record(value: Mapping[str, Any]) -> dict[str, Any]:
     ):
         candidate = str(value.get(key) or "").lower()
         hashes[key] = candidate if re.fullmatch(r"[a-f0-9]{64}", candidate) else ""
+    repair_round = str(value.get("repair_round") or "")
     return {
         "report_version": _safe_token(value.get("report_version")),
         "request_version": _safe_token(value.get("request_version")),
         "response_schema": _safe_token(value.get("response_schema")),
         "repair_prompt_version": _safe_token(value.get("repair_prompt_version")),
         **hashes,
+        "repair_round": (
+            repair_round if repair_round in {"visual", "primary", "contingency"} else ""
+        ),
+        "semantic_attempt": (
+            _bounded_int(value.get("semantic_attempt") or 0, 0, 2) or 0
+        ),
+        "authoritative_plan_fingerprint": _safe_hash(
+            value.get("authoritative_plan_fingerprint")
+        ),
+        "defect_instance_ids": sorted({
+            candidate
+            for item in value.get("defect_instance_ids") or ()
+            if (candidate := _safe_hash(item))
+        })[:MAX_REPAIR_CODES],
+        "model": _safe_attribution_token(value.get("model")),
+        "reasoning_effort": _safe_token(value.get("reasoning_effort")),
         "affected_clip_ids": sorted({
             parsed
             for item in value.get("affected_clip_ids") or ()
@@ -1092,6 +1270,123 @@ def _repair_attempt_record(value: Mapping[str, Any]) -> dict[str, Any]:
     }
 
 
+def _repair_attempt_evidence_record(
+    value: RepairAttemptEvidence | Mapping[str, Any],
+) -> dict[str, Any]:
+    source = value.to_dict() if isinstance(value, RepairAttemptEvidence) else value
+    if not isinstance(source, Mapping):
+        raise RepairContractError("REPAIR_REPORT_INVALID", "repair attempt evidence is invalid")
+    defect = source.get("defect")
+    if isinstance(defect, Mapping):
+        defect_id_value = defect.get("id")
+        code_value = defect.get("code")
+        clip_index_value = defect.get("clip_index")
+        operation_id_value = defect.get("operation_id")
+        plan_fingerprint_value = defect.get("authoritative_plan_fingerprint")
+    else:
+        defect_id_value = source.get("defect_instance_id")
+        code_value = source.get("code")
+        clip_index_value = source.get("clip_index")
+        operation_id_value = source.get("operation_id")
+        plan_fingerprint_value = source.get("authoritative_plan_fingerprint")
+    try:
+        repair_round = PlanRepairRound(str(source.get("round") or ""))
+    except ValueError as exc:
+        raise RepairContractError("REPAIR_REPORT_INVALID", "repair attempt round is invalid") from exc
+    defect_id = _safe_hash(defect_id_value)
+    plan_fingerprint = _safe_hash(plan_fingerprint_value)
+    if not defect_id or not plan_fingerprint:
+        raise RepairContractError("REPAIR_REPORT_INVALID", "repair attempt identity is invalid")
+    clip_index = _bounded_int(clip_index_value, 1, MAX_REPAIR_CLIPS)
+    return {
+        "defect_instance_id": defect_id,
+        "code": defect_definition(str(code_value or "")).code,
+        "clip_index": clip_index,
+        "operation_id": _safe_token(operation_id_value) or "plan",
+        "authoritative_plan_fingerprint": plan_fingerprint,
+        "round": repair_round.value,
+        "outbound_attempted": source.get("outbound_attempted") is True,
+        "provider_outcome": _safe_token(source.get("provider_outcome")) or "unknown",
+        "schema_valid": source.get("schema_valid") is True,
+        "semantic_valid": source.get("semantic_valid") is True,
+    }
+
+
+def _repair_attribution_record(value: Mapping[str, Any] | None) -> dict[str, Any]:
+    source = value if isinstance(value, Mapping) else {}
+    boundaries = source.get("structured_output_boundaries")
+    return {
+        "model": _safe_attribution_token(source.get("model")) or "unknown",
+        "reasoning_effort": _safe_token(source.get("reasoning_effort")) or "unknown",
+        "structured_output_mode": (
+            _safe_token(source.get("structured_output_mode")) or "unknown"
+        ),
+        "structured_output_boundaries": sorted({
+            token
+            for item in (
+                boundaries if isinstance(boundaries, (list, tuple, set)) else ()
+            )
+            if (token := _safe_token(item))
+        })[:16],
+        "repair_mode": _safe_token(source.get("repair_mode")) or "off",
+        "delivery_policy": _safe_token(source.get("delivery_policy")) or "unknown",
+        "catalog_version": _safe_token(source.get("catalog_version")) or "unknown",
+        "renderer_profile": _safe_token(source.get("renderer_profile")) or "unknown",
+    }
+
+
+def _authorize_fallbacks(
+    fallbacks: list[dict[str, Any]],
+    attempt_ledger: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    authorized: list[dict[str, Any]] = []
+    for fallback in fallbacks:
+        requested_code = _canonical_registered_code(fallback.get("requested"))
+        candidates = [
+            item
+            for item in attempt_ledger
+            if item.get("outbound_attempted") is True
+            and item.get("clip_index") in {None, fallback.get("clip_index")}
+            and (
+                item.get("operation_id") == fallback.get("segment_id")
+                or (
+                    requested_code
+                    and item.get("operation_id") == "plan"
+                )
+            )
+        ]
+        matching_code = [
+            item for item in candidates if item.get("code") == requested_code
+        ]
+        if requested_code:
+            candidates = matching_code
+        else:
+            matching_fallback = [
+                item
+                for item in candidates
+                if defect_definition(str(item.get("code") or "")).safe_fallback_code
+                == fallback.get("code")
+            ]
+            if matching_fallback:
+                candidates = matching_fallback
+        evidence = sorted(
+            candidates,
+            key=lambda item: (
+                item.get("round") != PlanRepairRound.PRIMARY.value,
+                str(item.get("defect_instance_id") or ""),
+            ),
+        )[0] if candidates else None
+        authorized.append({
+            **fallback,
+            "fallback_authorized": evidence is not None,
+            "defect_instance_id": (
+                str(evidence.get("defect_instance_id") or "") if evidence else ""
+            ),
+            "attempt_round": str(evidence.get("round") or "") if evidence else "",
+        })
+    return authorized
+
+
 def _predictive_report_record(value: PredictiveFinding | Mapping[str, Any]) -> dict[str, Any]:
     if not isinstance(value, (PredictiveFinding, Mapping)):
         raise RepairContractError("REPAIR_REPORT_INVALID", "predictive finding is invalid")
@@ -1123,6 +1418,13 @@ def _fallback_report_record(value: Any) -> dict[str, Any]:
         "segment_id": _safe_token(source.get("segment_id")),
         "requested": _canonical_registered_code(requested) or _safe_token(requested),
         "executed": _safe_token(source.get("executed")),
+        "fallback_authorized": source.get("fallback_authorized") is True,
+        "defect_instance_id": _safe_hash(source.get("defect_instance_id")),
+        "attempt_round": (
+            str(source.get("attempt_round"))
+            if str(source.get("attempt_round")) in {"primary", "contingency"}
+            else ""
+        ),
     }
 
 
@@ -1711,6 +2013,11 @@ def _safe_scalar(value: Any) -> Any:
 def _safe_token(value: Any) -> str:
     token = str(value or "").strip()[:120]
     return token if _SAFE_TOKEN.fullmatch(token) else ""
+
+
+def _safe_attribution_token(value: Any) -> str:
+    token = str(value or "").strip()[:160]
+    return token if _SAFE_ATTRIBUTION_TOKEN.fullmatch(token) else ""
 
 
 def _required_safe_token(value: Any) -> str:

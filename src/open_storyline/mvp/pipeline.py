@@ -173,7 +173,7 @@ SCENE_CHECKPOINT_VERSION = "scene_checkpoint.v1"
 GLOBAL_ANALYSIS_CHECKPOINT_VERSION = "global_analysis_checkpoint.v1"
 CLIP_ANALYSIS_CHECKPOINT_VERSION = "clip_analysis_checkpoint.v1"
 VISUAL_REPAIR_CHECKPOINT_VERSION = "visual_repair_checkpoint.v1"
-PLAN_REPAIR_CHECKPOINT_VERSION = "plan_repair_checkpoint.v1"
+PLAN_REPAIR_CHECKPOINT_VERSION = "plan_repair_checkpoint.v2"
 
 
 def _stt_result(payload: dict[str, Any]) -> STTResult:
@@ -651,6 +651,31 @@ class MVPJobProcessor:
         predictive_repair_findings: tuple[Any, ...] = ()
         plan_repair_state = PlanRepairState()
 
+        def repair_rollout_attribution() -> dict[str, Any]:
+            return {
+                "model": getattr(remote_client, "model", "unknown"),
+                "reasoning_effort": getattr(
+                    remote_client,
+                    "reasoning_effort",
+                    "unknown",
+                ),
+                "structured_output_mode": getattr(
+                    remote_client,
+                    "structured_output_mode",
+                    "json_object",
+                ),
+                "structured_output_boundaries": sorted(
+                    getattr(remote_client, "structured_output_boundaries", ())
+                ),
+                "repair_mode": repair_mode.value,
+                "delivery_policy": "qa_enforced",
+                "catalog_version": (
+                    getattr(creative_catalog, "version", "unknown")
+                    if creative_catalog is not None
+                    else "unknown"
+                ),
+            }
+
         async def persist_partial_repair_report() -> None:
             if not agentic_requested:
                 return
@@ -658,9 +683,12 @@ class MVPJobProcessor:
                 mode=repair_mode,
                 stage_records=repair_stage_records.values(),
                 predictive_findings=predictive_repair_findings,
-                fallback_entries=(),
+                fallback_entries=fallback_entries,
+                attempt_evidence=plan_repair_state.attempts,
                 reused_stages=checkpoint_summary["reused_stages"],
                 recomputed_stages=checkpoint_summary["recomputed_stages"],
+                rollout_attribution=repair_rollout_attribution(),
+                invariant_violation_count=plan_repair_state.invariant_violation_count,
             )
             path = output_dir / names.repair_report
             path.write_text(
@@ -720,7 +748,15 @@ class MVPJobProcessor:
                 editing_prompt=str(user_payload.get("editing_context") or ""),
                 transcript_excerpts=excerpts,
             )
-            report = compact_repair_observability(request.to_report_dict())
+            report = compact_repair_observability({
+                **request.to_report_dict(),
+                "model": getattr(remote_client, "model", "unknown"),
+                "reasoning_effort": getattr(
+                    remote_client,
+                    "reasoning_effort",
+                    "unknown",
+                ),
+            })
             fingerprint = checkpoint_fingerprint({
                 "contract_version": VISUAL_REPAIR_CHECKPOINT_VERSION,
                 "source_sha256": source_hash,
@@ -772,9 +808,23 @@ class MVPJobProcessor:
                                     "accepted": True,
                                     "violation_codes": [],
                                 },
+                                "attempts": [
+                                    item
+                                    for item in hit.payload.get("attempts") or ()
+                                    if isinstance(item, dict)
+                                ],
                                 "checkpoint_reused": True,
+                                "repair_round": "visual",
+                                "provider_outcome": str(
+                                    hit.payload.get("provider_outcome") or "ok"
+                                ),
+                                "schema_valid": True,
+                                "semantic_valid": True,
+                                "candidate_disposition": "accepted",
+                                "checkpoint_fingerprint": fingerprint,
                             }
                             remote_client.last_attempts = ()
+                            await persist_partial_repair_report()
                             return validated.to_dict()
                 else:
                     visual_repair_attempts_used = 1
@@ -793,7 +843,23 @@ class MVPJobProcessor:
                             (finding.code,), (finding.code,)
                         ).to_dict(),
                         "quality_floor": {"accepted": False, "violation_codes": []},
+                        "attempts": [
+                            item
+                            for item in hit.payload.get("attempts") or ()
+                            if isinstance(item, dict)
+                        ],
                         "checkpoint_reused": True,
+                        "repair_round": "visual",
+                        "provider_outcome": str(
+                            hit.payload.get("provider_outcome") or cached_status
+                        ),
+                        "schema_valid": hit.payload.get("schema_valid") is True,
+                        "semantic_valid": False,
+                        "candidate_disposition": str(
+                            hit.payload.get("candidate_disposition")
+                            or "unavailable"
+                        ),
+                        "checkpoint_fingerprint": fingerprint,
                     }
                     await persist_partial_repair_report()
                     raise error
@@ -806,7 +872,14 @@ class MVPJobProcessor:
                     stage="visual_repair",
                     contract_version=VISUAL_REPAIR_CHECKPOINT_VERSION,
                     fingerprint=fingerprint,
-                    payload={"status": "report_only", "report": report},
+                    payload={
+                        "status": "report_only",
+                        "report": report,
+                        "provider_outcome": "report_only",
+                        "schema_valid": False,
+                        "semantic_valid": False,
+                        "candidate_disposition": "report_only",
+                    },
                     metadata={"mode": repair_mode.value, "code": str(error.code)},
                 )
                 repair_stage_records["visual_repair"] = {
@@ -819,6 +892,12 @@ class MVPJobProcessor:
                     ).to_dict(),
                     "quality_floor": {"accepted": False, "violation_codes": []},
                     "checkpoint_reused": False,
+                    "repair_round": "visual",
+                    "provider_outcome": "report_only",
+                    "schema_valid": False,
+                    "semantic_valid": False,
+                    "candidate_disposition": "report_only",
+                    "checkpoint_fingerprint": fingerprint,
                 }
                 await persist_partial_repair_report()
                 raise error
@@ -858,6 +937,18 @@ class MVPJobProcessor:
                         "status": "failed",
                         "report": report,
                         "error_code": str(getattr(exc, "code", "VISUAL_RESPONSE_INVALID")),
+                        "attempts": failed_attempts,
+                        "provider_outcome": str(
+                            getattr(exc, "code", "VISUAL_RESPONSE_INVALID")
+                        ),
+                        "schema_valid": not isinstance(exc, NineRouterError),
+                        "semantic_valid": False,
+                        "candidate_disposition": (
+                            "rejected"
+                            if failed_attempts
+                            and not isinstance(exc, NineRouterError)
+                            else "unavailable"
+                        ),
                     },
                     metadata={"mode": repair_mode.value, "code": str(error.code)},
                 )
@@ -872,6 +963,19 @@ class MVPJobProcessor:
                     "quality_floor": {"accepted": False, "violation_codes": []},
                     "attempts": failed_attempts,
                     "checkpoint_reused": False,
+                    "repair_round": "visual",
+                    "provider_outcome": str(
+                        getattr(exc, "code", "VISUAL_RESPONSE_INVALID")
+                    ),
+                    "schema_valid": not isinstance(exc, NineRouterError),
+                    "semantic_valid": False,
+                    "candidate_disposition": (
+                        "rejected"
+                        if failed_attempts
+                        and not isinstance(exc, NineRouterError)
+                        else "unavailable"
+                    ),
+                    "checkpoint_fingerprint": fingerprint,
                 }
                 await persist_partial_repair_report()
                 raise
@@ -884,6 +988,14 @@ class MVPJobProcessor:
                     "status": "repaired",
                     "report": report,
                     "visual_understanding": validated.to_dict(),
+                    "attempts": [
+                        {**attempt.to_dict(), "category": "visual_repair"}
+                        for attempt in getattr(remote_client, "last_attempts", ())
+                    ],
+                    "provider_outcome": "ok",
+                    "schema_valid": True,
+                    "semantic_valid": True,
+                    "candidate_disposition": "accepted",
                 },
                 metadata={"mode": repair_mode.value, "code": str(error.code)},
             )
@@ -895,9 +1007,20 @@ class MVPJobProcessor:
                 "resolution": compute_repair_resolution(
                     (finding.code,), ()
                 ).to_dict(),
-                "quality_floor": {"accepted": True, "violation_codes": []},
-                "checkpoint_reused": False,
+                    "quality_floor": {"accepted": True, "violation_codes": []},
+                    "attempts": [
+                        {**attempt.to_dict(), "category": "visual_repair"}
+                        for attempt in getattr(remote_client, "last_attempts", ())
+                    ],
+                    "checkpoint_reused": False,
+                "repair_round": "visual",
+                "provider_outcome": "ok",
+                "schema_valid": True,
+                "semantic_valid": True,
+                "candidate_disposition": "accepted",
+                "checkpoint_fingerprint": fingerprint,
             }
+            await persist_partial_repair_report()
             return validated.to_dict()
 
         visual_planner = VisualUnderstandingPlanner(remote_client)
@@ -1620,6 +1743,10 @@ class MVPJobProcessor:
                     if finding.objective
                 }))
                 plan_stage_status = "not_triggered"
+                plan_provider_outcome = "not_triggered"
+                plan_schema_valid = False
+                plan_semantic_valid = False
+                plan_candidate_disposition = "not_applicable"
                 plan_quality_floor: dict[str, Any] = {
                     "accepted": False,
                     "violation_codes": [],
@@ -1686,19 +1813,40 @@ class MVPJobProcessor:
                     if exc.code != "REPAIR_NOT_ELIGIBLE":
                         raise
                 else:
-                    repair_report = compact_repair_observability(
-                        repair_request.to_report_dict()
-                    )
+                    repair_report = compact_repair_observability({
+                        **repair_request.to_report_dict(),
+                        "model": getattr(remote_client, "model", "unknown"),
+                        "reasoning_effort": getattr(
+                            remote_client,
+                            "reasoning_effort",
+                            "unknown",
+                        ),
+                    })
                     repair_checkpoint_reports["plan_repair"] = repair_report
                     plan_repair_fingerprint = checkpoint_fingerprint({
                         "contract_version": PLAN_REPAIR_CHECKPOINT_VERSION,
                         "source_sha256": source_hash,
+                        "model": getattr(remote_client, "model", "unknown"),
+                        "reasoning_effort": getattr(
+                            remote_client,
+                            "reasoning_effort",
+                            "unknown",
+                        ),
+                        "structured_output_mode": getattr(
+                            remote_client,
+                            "structured_output_mode",
+                            "json_object",
+                        ),
                         "request_fingerprint": repair_report["request_fingerprint"],
                         "registry_version": DEFECT_REGISTRY_VERSION,
                         "schema_fingerprint": structured_output(
                             EDIT_PLAN_REPAIR_SCHEMA
                         ).fingerprint,
                         "repair_prompt_version": REPAIR_SYSTEM_PROMPT_VERSION,
+                        "repair_prompt_sha256": repair_report["repair_prompt_sha256"],
+                        "repair_round": PlanRepairRound.PRIMARY.value,
+                        "authoritative_plan_fingerprint": primary_plan_fingerprint,
+                        "defect_instance_ids": repair_report["defect_instance_ids"],
                         "catalog_version": edit_plan.catalog_version,
                         "catalog_manifest_sha256": edit_plan.catalog_manifest_sha256,
                         "renderer_capabilities": sorted(REFRAME_RENDER_CAPABILITIES),
@@ -1769,6 +1917,26 @@ class MVPJobProcessor:
                             plan_stage_status = str(
                                 repair_hit.payload.get("status") or "failed"
                             )
+                            plan_provider_outcome = str(
+                                repair_hit.payload.get("provider_outcome")
+                                or plan_stage_status
+                            )
+                            plan_schema_valid = (
+                                repair_hit.payload.get("schema_valid") is True
+                            )
+                            plan_semantic_valid = (
+                                repair_hit.payload.get("semantic_valid") is True
+                            )
+                            plan_candidate_disposition = str(
+                                repair_hit.payload.get("candidate_disposition")
+                                or (
+                                    "accepted"
+                                    if plan_stage_status == "repaired"
+                                    else "rejected"
+                                    if plan_stage_status == "rejected"
+                                    else "unavailable"
+                                )
+                            )
                             cached_quality = repair_hit.payload.get("quality")
                             if isinstance(cached_quality, dict):
                                 plan_quality_floor = cached_quality
@@ -1802,6 +1970,8 @@ class MVPJobProcessor:
                         track_checkpoint("plan_repair", reused=False)
                     if repair_hit is None and repair_mode is RepairMode.REPORT:
                         plan_stage_status = "report_only"
+                        plan_provider_outcome = "report_only"
+                        plan_candidate_disposition = "report_only"
                         unresolved_repair_findings = tuple(
                             finding
                             for finding in selected_findings
@@ -1828,6 +1998,10 @@ class MVPJobProcessor:
                                     item.to_dict() for item in repair_dispositions
                                 ],
                                 "attempts": [],
+                                "provider_outcome": plan_provider_outcome,
+                                "schema_valid": False,
+                                "semantic_valid": False,
+                                "candidate_disposition": plan_candidate_disposition,
                             },
                             metadata={"mode": repair_mode.value},
                         )
@@ -1961,6 +2135,12 @@ class MVPJobProcessor:
                                 ) + overflow_findings
                                 repair_status = "rejected"
                             plan_stage_status = repair_status
+                            plan_provider_outcome = "ok"
+                            plan_schema_valid = True
+                            plan_semantic_valid = quality.accepted
+                            plan_candidate_disposition = (
+                                "accepted" if quality.accepted else "rejected"
+                            )
                             plan_quality_floor = quality.to_dict()
                             plan_repair_state.record_round(
                                 round=PlanRepairRound.PRIMARY,
@@ -1983,6 +2163,10 @@ class MVPJobProcessor:
                                     "report": repair_report,
                                     "quality": quality.to_dict(),
                                     "attempts": repair_call_attempts,
+                                    "provider_outcome": plan_provider_outcome,
+                                    "schema_valid": plan_schema_valid,
+                                    "semantic_valid": plan_semantic_valid,
+                                    "candidate_disposition": plan_candidate_disposition,
                                     **(
                                         {"edit_plan": edit_plan.to_dict()}
                                         if repair_status == "repaired"
@@ -2009,7 +2193,21 @@ class MVPJobProcessor:
                             if not failed_attempts:
                                 failed_attempts = repair_call_attempts
                             edit_planner_attempts.extend(failed_attempts)
-                            plan_stage_status = "failed"
+                            plan_stage_status = (
+                                "rejected"
+                                if failed_attempts
+                                and not isinstance(exc, NineRouterError)
+                                else "failed"
+                            )
+                            plan_provider_outcome = str(
+                                getattr(exc, "code", "EDIT_PLAN_INVALID")
+                            )
+                            plan_schema_valid = not isinstance(exc, NineRouterError)
+                            plan_candidate_disposition = (
+                                "rejected"
+                                if plan_stage_status == "rejected"
+                                else "unavailable"
+                            )
                             unresolved_repair_findings = tuple(
                                 finding
                                 for finding in selected_findings
@@ -2034,12 +2232,16 @@ class MVPJobProcessor:
                                 contract_version=PLAN_REPAIR_CHECKPOINT_VERSION,
                                 fingerprint=plan_repair_fingerprint,
                                 payload={
-                                    "status": "failed",
+                                    "status": plan_stage_status,
                                     "report": repair_report,
                                     "error_code": str(
                                         getattr(exc, "code", "EDIT_PLAN_INVALID")
                                     ),
                                     "attempts": failed_attempts,
+                                    "provider_outcome": plan_provider_outcome,
+                                    "schema_valid": plan_schema_valid,
+                                    "semantic_valid": False,
+                                    "candidate_disposition": plan_candidate_disposition,
                                 },
                                 metadata={"mode": repair_mode.value},
                             )
@@ -2079,6 +2281,11 @@ class MVPJobProcessor:
                             if finding.objective
                         ),
                     )
+                    plan_resolution_record = (
+                        plan_quality_floor.get("resolution")
+                        if isinstance(plan_quality_floor.get("resolution"), dict)
+                        else plan_resolution.to_dict()
+                    )
                     repair_stage_records["plan_repair"] = {
                         "stage": RepairStage.PLAN_REPAIR.value,
                         "status": (
@@ -2092,7 +2299,7 @@ class MVPJobProcessor:
                         "dispositions": [
                             item.to_dict() for item in repair_dispositions
                         ],
-                        "resolution": plan_resolution.to_dict(),
+                        "resolution": plan_resolution_record,
                         "quality_floor": plan_quality_floor,
                         "attempts": [
                             item
@@ -2100,9 +2307,15 @@ class MVPJobProcessor:
                             if item.get("category") == "plan_repair"
                         ],
                         "checkpoint_reused": plan_checkpoint_reused,
+                        "repair_round": PlanRepairRound.PRIMARY.value,
+                        "authoritative_plan_fingerprint": primary_plan_fingerprint,
+                        "provider_outcome": plan_provider_outcome,
+                        "schema_valid": plan_schema_valid,
+                        "semantic_valid": plan_semantic_valid,
+                        "candidate_disposition": plan_candidate_disposition,
+                        "checkpoint_fingerprint": plan_repair_fingerprint,
                     }
-                    if plan_stage_status in {"report_only", "rejected", "failed"}:
-                        await persist_partial_repair_report()
+                    await persist_partial_repair_report()
 
             proposed_edit_plan = edit_plan
             if (
@@ -2115,10 +2328,14 @@ class MVPJobProcessor:
                     if finding.objective
                 )
                 if fallback_findings and repair_mode is RepairMode.ENFORCE:
-                    plan_repair_state.require_fallback_evidence(
-                        fallback_findings,
-                        authoritative_plan_fingerprint=primary_plan_fingerprint,
-                    )
+                    try:
+                        plan_repair_state.require_fallback_evidence(
+                            fallback_findings,
+                            authoritative_plan_fingerprint=primary_plan_fingerprint,
+                        )
+                    except RepairContractError:
+                        await persist_partial_repair_report()
+                        raise
                 compilation = compile_baseline_plan(
                     edit_plan,
                     visual_coverage=visual_coverage,
@@ -2158,6 +2375,7 @@ class MVPJobProcessor:
                         repair_attempted=True,
                         initial_blocker_codes=visual_coverage.blocker_codes,
                     )
+                    await persist_partial_repair_report()
                 if repair_mode is RepairMode.ENFORCE:
                     _, post_fallback_findings = plan_objective_findings(
                         edit_plan,
@@ -2187,7 +2405,7 @@ class MVPJobProcessor:
                             clip.clip_index: clip.model_dump(mode="json")
                             for clip in edit_plan.clips
                         }
-                        contingency_request, _contingency_dispositions = (
+                        contingency_request, contingency_dispositions = (
                             build_repair_batch(
                                 stage=RepairStage.PLAN_REPAIR,
                                 mode=repair_mode,
@@ -2232,86 +2450,93 @@ class MVPJobProcessor:
                                 ),
                             )
                         )
-                        contingency_attempts: list[dict[str, Any]] = []
-                        contingency_unresolved = late_findings
-                        try:
-                            contingency_response = (
-                                await remote_client.complete_structured(
-                                    schema_name=EDIT_PLAN_REPAIR_SCHEMA,
-                                    system_prompt=REPAIR_SYSTEM_PROMPT,
-                                    user_prompt=json.dumps(
-                                        contingency_request.to_provider_dict(),
-                                        ensure_ascii=False,
-                                    ),
-                                    reasoning_effort=getattr(
-                                        remote_client,
-                                        "reasoning_effort",
-                                        "medium",
-                                    ),
-                                )
+                        contingency_report = compact_repair_observability({
+                            **contingency_request.to_report_dict(),
+                            "model": getattr(remote_client, "model", "unknown"),
+                            "reasoning_effort": getattr(
+                                remote_client,
+                                "reasoning_effort",
+                                "unknown",
+                            ),
+                        })
+                        contingency_fingerprint = checkpoint_fingerprint({
+                            "contract_version": PLAN_REPAIR_CHECKPOINT_VERSION,
+                            "source_sha256": source_hash,
+                            "model": getattr(remote_client, "model", "unknown"),
+                            "reasoning_effort": getattr(
+                                remote_client,
+                                "reasoning_effort",
+                                "unknown",
+                            ),
+                            "structured_output_mode": getattr(
+                                remote_client,
+                                "structured_output_mode",
+                                "json_object",
+                            ),
+                            "request_fingerprint": contingency_report[
+                                "request_fingerprint"
+                            ],
+                            "registry_version": DEFECT_REGISTRY_VERSION,
+                            "schema_fingerprint": structured_output(
+                                EDIT_PLAN_REPAIR_SCHEMA
+                            ).fingerprint,
+                            "repair_prompt_version": REPAIR_SYSTEM_PROMPT_VERSION,
+                            "repair_prompt_sha256": contingency_report[
+                                "repair_prompt_sha256"
+                            ],
+                            "repair_round": contingency_round.value,
+                            "authoritative_plan_fingerprint": (
+                                contingency_plan_fingerprint
+                            ),
+                            "defect_instance_ids": contingency_report[
+                                "defect_instance_ids"
+                            ],
+                            "mode": repair_mode.value,
+                        })
+                        contingency_affected_clips = tuple(
+                            contingency_report["affected_clip_ids"]
+                        )
+
+                        def validate_contingency_response(value: Any):
+                            candidate = merge_repaired_edit_plan_response(
+                                value,
+                                base_plan=edit_plan,
+                                affected_clip_indexes=contingency_affected_clips,
+                                selected_clips=plan.clips,
+                                known_region_ids=(
+                                    region.id
+                                    for region in visual_understanding.regions
+                                ),
+                                known_track_ids=(
+                                    track.id
+                                    for track in visual_understanding.tracks
+                                ),
+                                known_evidence_ids_by_clip=(
+                                    known_evidence_ids_by_clip
+                                ),
+                                max_segments_per_clip=(
+                                    agentic_config.max_segments_per_clip
+                                ),
+                                max_overlays_per_clip=(
+                                    agentic_config.max_overlays_per_clip
+                                ),
+                                max_assets_per_clip=(
+                                    agentic_config.max_assets_per_clip
+                                ),
+                                max_generated_assets_per_clip=(
+                                    effective_generated_asset_cap
+                                ),
+                                max_stock_assets_per_clip=(
+                                    effective_stock_asset_cap
+                                ),
+                                asset_policy=effective_asset_policy,
+                                stock_policy=effective_stock_policy,
+                                renderer_capabilities=REFRAME_RENDER_CAPABILITIES,
+                                catalog_snapshot=catalog_snapshot,
+                                creative_intent=creative_intent,
                             )
-                            contingency_attempts = [
-                                {
-                                    **attempt.to_dict(),
-                                    "category": "plan_repair",
-                                    "repair_round": contingency_round.value,
-                                }
-                                for attempt in getattr(
-                                    remote_client,
-                                    "last_attempts",
-                                    (),
-                                )
-                            ]
-                            contingency_affected_clips = tuple(
-                                contingency_request.to_report_dict()[
-                                    "affected_clip_ids"
-                                ]
-                            )
-                            contingency_candidate = (
-                                merge_repaired_edit_plan_response(
-                                    contingency_response,
-                                    base_plan=edit_plan,
-                                    affected_clip_indexes=(
-                                        contingency_affected_clips
-                                    ),
-                                    selected_clips=plan.clips,
-                                    known_region_ids=(
-                                        region.id
-                                        for region in visual_understanding.regions
-                                    ),
-                                    known_track_ids=(
-                                        track.id
-                                        for track in visual_understanding.tracks
-                                    ),
-                                    known_evidence_ids_by_clip=(
-                                        known_evidence_ids_by_clip
-                                    ),
-                                    max_segments_per_clip=(
-                                        agentic_config.max_segments_per_clip
-                                    ),
-                                    max_overlays_per_clip=(
-                                        agentic_config.max_overlays_per_clip
-                                    ),
-                                    max_assets_per_clip=(
-                                        agentic_config.max_assets_per_clip
-                                    ),
-                                    max_generated_assets_per_clip=(
-                                        effective_generated_asset_cap
-                                    ),
-                                    max_stock_assets_per_clip=(
-                                        effective_stock_asset_cap
-                                    ),
-                                    asset_policy=effective_asset_policy,
-                                    stock_policy=effective_stock_policy,
-                                    renderer_capabilities=(
-                                        REFRAME_RENDER_CAPABILITIES
-                                    ),
-                                    catalog_snapshot=catalog_snapshot,
-                                    creative_intent=creative_intent,
-                                )
-                            )
-                            contingency_coverage = build_clip_visual_coverage(
-                                contingency_candidate,
+                            coverage = build_clip_visual_coverage(
+                                candidate,
                                 visual=visual_understanding,
                                 clip_frame_manifests=clip_frame_manifests,
                                 min_observations=(
@@ -2328,59 +2553,136 @@ class MVPJobProcessor:
                                     visual_coverage.blocker_codes
                                 ),
                             )
-                            _, contingency_candidate_findings = (
-                                plan_objective_findings(
-                                    contingency_candidate,
-                                    contingency_coverage,
-                                )
+                            _, candidate_findings = plan_objective_findings(
+                                candidate,
+                                coverage,
                             )
-                            contingency_codes = {
+                            candidate_codes = {
                                 finding.code
-                                for finding in contingency_candidate_findings
+                                for finding in candidate_findings
                                 if finding.objective
                             }
-                            contingency_operation_ids = {
+                            operation_ids = {
                                 str(record.values.get(key))
                                 for finding in late_findings
                                 for record in finding.evidence
                                 for key in ("operation_id", "segment_id")
                                 if record.values.get(key)
                             }
-                            contingency_mutations: dict[str, set[str]] = {}
+                            mutations: dict[str, set[str]] = {}
                             for finding in late_findings:
                                 paths = allowed_mutation_paths(finding)
                                 if not paths:
                                     continue
-                                operation_ids = {
+                                finding_operation_ids = {
                                     str(record.values.get(key))
                                     for record in finding.evidence
                                     for key in ("operation_id", "segment_id")
                                     if record.values.get(key)
                                 }
-                                for operation_id in operation_ids:
-                                    contingency_mutations.setdefault(
+                                for operation_id in finding_operation_ids:
+                                    mutations.setdefault(
                                         operation_id,
                                         set(),
                                     ).update(paths)
-                            contingency_quality = evaluate_repair_quality_floor(
+                            quality = evaluate_repair_quality_floor(
                                 edit_plan,
-                                contingency_candidate,
+                                candidate,
                                 original_codes={
                                     finding.code for finding in late_findings
                                 },
-                                repaired_codes=contingency_codes,
-                                available_capabilities=(
-                                    REFRAME_RENDER_CAPABILITIES
-                                ),
-                                affected_clip_indexes=(
-                                    contingency_affected_clips
-                                ),
-                                affected_operation_ids=(
-                                    contingency_operation_ids
-                                ),
-                                allowed_mutations_by_operation=(
-                                    contingency_mutations
-                                ),
+                                repaired_codes=candidate_codes,
+                                available_capabilities=REFRAME_RENDER_CAPABILITIES,
+                                affected_clip_indexes=contingency_affected_clips,
+                                affected_operation_ids=operation_ids,
+                                allowed_mutations_by_operation=mutations,
+                            )
+                            return candidate, coverage, quality
+
+                        contingency_attempts: list[dict[str, Any]] = []
+                        contingency_unresolved = late_findings
+                        contingency_quality = None
+                        contingency_quality_record: dict[str, Any] = {
+                            "accepted": False,
+                            "violation_codes": [],
+                        }
+                        contingency_status = "failed"
+                        contingency_provider_outcome = "unknown"
+                        contingency_schema_valid = False
+                        contingency_semantic_valid = False
+                        contingency_candidate_disposition = "unavailable"
+                        contingency_checkpoint_reused = False
+                        contingency_hit = await load_job_checkpoint(
+                            job_id=job_id,
+                            stage="plan_repair_contingency",
+                            fingerprint=contingency_fingerprint,
+                        )
+                        if contingency_hit is not None:
+                            cached_attempts = contingency_hit.payload.get("attempts") or ()
+                            cached_quality = contingency_hit.payload.get("quality")
+                            if isinstance(cached_quality, dict):
+                                contingency_quality_record = cached_quality
+                            if repair_mode is RepairMode.ENFORCE and not cached_attempts:
+                                contingency_hit = None
+                            elif contingency_hit.payload.get("status") == "repaired":
+                                try:
+                                    cached_plan = contingency_hit.payload["edit_plan"]
+                                    (
+                                        contingency_candidate,
+                                        contingency_coverage,
+                                        contingency_quality,
+                                    ) = validate_contingency_response({
+                                        "requested_capabilities": cached_plan[
+                                            "requested_capabilities"
+                                        ],
+                                        "clips": [
+                                            clip
+                                            for clip in cached_plan["clips"]
+                                            if int(clip["clip_index"])
+                                            in contingency_affected_clips
+                                        ],
+                                    })
+                                    if not contingency_quality.accepted:
+                                        contingency_hit = None
+                                    else:
+                                        contingency_quality_record = (
+                                            contingency_quality.to_dict()
+                                        )
+                                except (
+                                    KeyError,
+                                    TypeError,
+                                    ValueError,
+                                    EditPlanError,
+                                ):
+                                    contingency_hit = None
+                        if contingency_hit is not None:
+                            track_checkpoint(
+                                "plan_repair_contingency",
+                                reused=True,
+                            )
+                            contingency_checkpoint_reused = True
+                            contingency_status = str(
+                                contingency_hit.payload.get("status") or "failed"
+                            )
+                            contingency_provider_outcome = str(
+                                contingency_hit.payload.get("provider_outcome")
+                                or contingency_status
+                            )
+                            contingency_schema_valid = (
+                                contingency_hit.payload.get("schema_valid") is True
+                            )
+                            contingency_semantic_valid = (
+                                contingency_hit.payload.get("semantic_valid") is True
+                            )
+                            contingency_candidate_disposition = str(
+                                contingency_hit.payload.get("candidate_disposition")
+                                or (
+                                    "accepted"
+                                    if contingency_status == "repaired"
+                                    else "rejected"
+                                    if contingency_status == "rejected"
+                                    else "unavailable"
+                                )
                             )
                             plan_repair_state.record_round(
                                 round=contingency_round,
@@ -2388,56 +2690,217 @@ class MVPJobProcessor:
                                 authoritative_plan_fingerprint=(
                                     contingency_plan_fingerprint
                                 ),
-                                provider_attempts=contingency_attempts,
-                                provider_outcome="ok",
-                                schema_valid=True,
-                                semantic_valid=contingency_quality.accepted,
+                                provider_attempts=cached_attempts,
+                                provider_outcome=contingency_provider_outcome,
+                                schema_valid=contingency_schema_valid,
+                                semantic_valid=contingency_semantic_valid,
                             )
-                            if contingency_quality.accepted:
+                            if contingency_status == "repaired":
                                 edit_plan = contingency_candidate
                                 visual_coverage = contingency_coverage
                                 contingency_unresolved = ()
-                        except (
-                            EditPlanError,
-                            NineRouterError,
-                            RepairContractError,
-                            ValueError,
-                        ) as exc:
-                            failed_attempts = [
-                                {
-                                    **attempt.to_dict(),
-                                    "category": "plan_repair",
-                                    "repair_round": contingency_round.value,
-                                }
-                                for attempt in tuple(
-                                    getattr(exc, "attempts", ())
+                        else:
+                            track_checkpoint(
+                                "plan_repair_contingency",
+                                reused=False,
+                            )
+                            try:
+                                contingency_response = (
+                                    await remote_client.complete_structured(
+                                        schema_name=EDIT_PLAN_REPAIR_SCHEMA,
+                                        system_prompt=REPAIR_SYSTEM_PROMPT,
+                                        user_prompt=json.dumps(
+                                            contingency_request.to_provider_dict(),
+                                            ensure_ascii=False,
+                                        ),
+                                        reasoning_effort=getattr(
+                                            remote_client,
+                                            "reasoning_effort",
+                                            "medium",
+                                        ),
+                                    )
                                 )
-                            ] or contingency_attempts
-                            contingency_attempts = failed_attempts
-                            plan_repair_state.record_round(
-                                round=contingency_round,
-                                findings=late_findings,
-                                authoritative_plan_fingerprint=(
-                                    contingency_plan_fingerprint
-                                ),
-                                provider_attempts=failed_attempts,
-                                provider_outcome=str(
+                                contingency_attempts = [
+                                    {
+                                        **attempt.to_dict(),
+                                        "category": "plan_repair",
+                                        "repair_round": contingency_round.value,
+                                    }
+                                    for attempt in getattr(
+                                        remote_client,
+                                        "last_attempts",
+                                        (),
+                                    )
+                                ]
+                                (
+                                    contingency_candidate,
+                                    contingency_coverage,
+                                    contingency_quality,
+                                ) = validate_contingency_response(
+                                    contingency_response
+                                )
+                                contingency_status = (
+                                    "repaired"
+                                    if contingency_quality.accepted
+                                    else "rejected"
+                                )
+                                contingency_provider_outcome = "ok"
+                                contingency_schema_valid = True
+                                contingency_semantic_valid = (
+                                    contingency_quality.accepted
+                                )
+                                contingency_candidate_disposition = (
+                                    "accepted"
+                                    if contingency_quality.accepted
+                                    else "rejected"
+                                )
+                                contingency_quality_record = (
+                                    contingency_quality.to_dict()
+                                )
+                                plan_repair_state.record_round(
+                                    round=contingency_round,
+                                    findings=late_findings,
+                                    authoritative_plan_fingerprint=(
+                                        contingency_plan_fingerprint
+                                    ),
+                                    provider_attempts=contingency_attempts,
+                                    provider_outcome=contingency_provider_outcome,
+                                    schema_valid=True,
+                                    semantic_valid=contingency_semantic_valid,
+                                )
+                                if contingency_quality.accepted:
+                                    edit_plan = contingency_candidate
+                                    visual_coverage = contingency_coverage
+                                    contingency_unresolved = ()
+                            except (
+                                EditPlanError,
+                                NineRouterError,
+                                RepairContractError,
+                                ValueError,
+                            ) as exc:
+                                contingency_attempts = [
+                                    {
+                                        **attempt.to_dict(),
+                                        "category": "plan_repair",
+                                        "repair_round": contingency_round.value,
+                                    }
+                                    for attempt in tuple(
+                                        getattr(exc, "attempts", ())
+                                    )
+                                ] or contingency_attempts
+                                contingency_provider_outcome = str(
                                     getattr(exc, "code", "EDIT_PLAN_INVALID")
-                                ),
-                                schema_valid=not isinstance(
+                                )
+                                contingency_schema_valid = not isinstance(
                                     exc,
                                     NineRouterError,
-                                ),
-                                semantic_valid=False,
+                                )
+                                contingency_status = (
+                                    "rejected"
+                                    if contingency_attempts
+                                    and not isinstance(exc, NineRouterError)
+                                    else "failed"
+                                )
+                                contingency_candidate_disposition = (
+                                    "rejected"
+                                    if contingency_status == "rejected"
+                                    else "unavailable"
+                                )
+                                plan_repair_state.record_round(
+                                    round=contingency_round,
+                                    findings=late_findings,
+                                    authoritative_plan_fingerprint=(
+                                        contingency_plan_fingerprint
+                                    ),
+                                    provider_attempts=contingency_attempts,
+                                    provider_outcome=contingency_provider_outcome,
+                                    schema_valid=contingency_schema_valid,
+                                    semantic_valid=False,
+                                )
+                            await save_job_checkpoint(
+                                job_id=job_id,
+                                stage="plan_repair_contingency",
+                                contract_version=PLAN_REPAIR_CHECKPOINT_VERSION,
+                                fingerprint=contingency_fingerprint,
+                                payload={
+                                    "status": contingency_status,
+                                    "report": contingency_report,
+                                    "quality": (
+                                        contingency_quality_record
+                                    ),
+                                    "attempts": contingency_attempts,
+                                    "provider_outcome": (
+                                        contingency_provider_outcome
+                                    ),
+                                    "schema_valid": contingency_schema_valid,
+                                    "semantic_valid": contingency_semantic_valid,
+                                    "candidate_disposition": (
+                                        contingency_candidate_disposition
+                                    ),
+                                    **(
+                                        {"edit_plan": edit_plan.to_dict()}
+                                        if contingency_status == "repaired"
+                                        else {}
+                                    ),
+                                },
+                                metadata={
+                                    "mode": repair_mode.value,
+                                    "round": contingency_round.value,
+                                },
                             )
-                        edit_planner_attempts.extend(contingency_attempts)
+                            edit_planner_attempts.extend(contingency_attempts)
+                        contingency_resolution = (
+                            contingency_quality_record.get("resolution")
+                            if isinstance(
+                                contingency_quality_record.get("resolution"),
+                                dict,
+                            )
+                            else compute_repair_resolution(
+                                (finding.code for finding in late_findings),
+                                (
+                                    finding.code
+                                    for finding in contingency_unresolved
+                                ),
+                            ).to_dict()
+                        )
+                        repair_stage_records["plan_repair_contingency"] = {
+                            "stage": RepairStage.PLAN_REPAIR.value,
+                            "status": contingency_status,
+                            "request": contingency_report,
+                            "dispositions": [
+                                item.to_dict()
+                                for item in contingency_dispositions
+                            ],
+                            "resolution": contingency_resolution,
+                            "quality_floor": (
+                                contingency_quality_record
+                            ),
+                            "attempts": contingency_attempts,
+                            "checkpoint_reused": contingency_checkpoint_reused,
+                            "repair_round": contingency_round.value,
+                            "authoritative_plan_fingerprint": (
+                                contingency_plan_fingerprint
+                            ),
+                            "provider_outcome": contingency_provider_outcome,
+                            "schema_valid": contingency_schema_valid,
+                            "semantic_valid": contingency_semantic_valid,
+                            "candidate_disposition": (
+                                contingency_candidate_disposition
+                            ),
+                            "checkpoint_fingerprint": contingency_fingerprint,
+                        }
+                        await persist_partial_repair_report()
                         if contingency_unresolved:
-                            plan_repair_state.require_fallback_evidence(
-                                contingency_unresolved,
-                                authoritative_plan_fingerprint=(
-                                    contingency_plan_fingerprint
-                                ),
-                            )
+                            try:
+                                plan_repair_state.require_fallback_evidence(
+                                    contingency_unresolved,
+                                    authoritative_plan_fingerprint=(
+                                        contingency_plan_fingerprint
+                                    ),
+                                )
+                            except RepairContractError:
+                                await persist_partial_repair_report()
+                                raise
                             contingency_compilation = compile_baseline_plan(
                                 edit_plan,
                                 visual_coverage=visual_coverage,
@@ -2491,6 +2954,7 @@ class MVPJobProcessor:
                                     visual_coverage.blocker_codes
                                 ),
                             )
+                            await persist_partial_repair_report()
                         _, final_repair_findings = plan_objective_findings(
                             edit_plan,
                             visual_coverage,
@@ -3552,20 +4016,33 @@ class MVPJobProcessor:
                     for item in visual_attempts
                     if item.get("category") == "visual_repair"
                 ]
-            plan_stage = repair_stage_records.get("plan_repair")
-            if plan_stage is not None:
+            for plan_stage in repair_stage_records.values():
+                if plan_stage.get("stage") != RepairStage.PLAN_REPAIR.value:
+                    continue
+                repair_round = str(plan_stage.get("repair_round") or "primary")
                 plan_stage["attempts"] = [
                     item
                     for item in edit_planner_attempts
                     if item.get("category") == "plan_repair"
+                    and str(item.get("repair_round") or "primary") == repair_round
                 ]
             repair_report = build_repair_report(
                 mode=repair_mode,
                 stage_records=repair_stage_records.values(),
                 predictive_findings=predictive_repair_findings,
                 fallback_entries=fallback_entries,
+                attempt_evidence=plan_repair_state.attempts,
                 reused_stages=checkpoint_summary["reused_stages"],
                 recomputed_stages=checkpoint_summary["recomputed_stages"],
+                rollout_attribution={
+                    **repair_rollout_attribution(),
+                    "renderer_profile": render_settings.quality_profile,
+                    "delivery_policy": (promotion_report or {}).get(
+                        "delivery_policy",
+                        "qa_enforced",
+                    ),
+                },
+                invariant_violation_count=plan_repair_state.invariant_violation_count,
             )
             repair_report_path = output_dir / names.repair_report
             repair_report_path.write_text(

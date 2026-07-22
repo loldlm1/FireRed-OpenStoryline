@@ -482,6 +482,162 @@ class RepairContractPrivacyTests(unittest.TestCase):
         self.assertNotIn(private_marker, json.dumps(report))
         self.assertEqual(validate_repair_report(report), report)
 
+    def test_repair_report_v2_preserves_round_attempt_and_fallback_identity(self):
+        primary = make_repair_finding(
+            "COMPOSITION_CROP_TARGET_TOO_WIDE",
+            clip_index=1,
+            objective=True,
+            values={"segment_id": "segment-primary", "observed": "overflow"},
+        )
+        contingency = make_repair_finding(
+            "PREDICTIVE_ACTIVE_PICTURE_RISK",
+            clip_index=1,
+            objective=True,
+            values={"segment_id": "segment-contingency", "observed": "late"},
+        )
+        primary_fingerprint = "a" * 64
+        contingency_fingerprint = "b" * 64
+        state = PlanRepairState()
+        state.record_round(
+            round=PlanRepairRound.PRIMARY,
+            findings=(primary,),
+            authoritative_plan_fingerprint=primary_fingerprint,
+            provider_attempts=({"number": 1},),
+            provider_outcome="provider_unavailable",
+            schema_valid=False,
+            semantic_valid=False,
+        )
+        state.record_round(
+            round=PlanRepairRound.CONTINGENCY,
+            findings=(contingency,),
+            authoritative_plan_fingerprint=contingency_fingerprint,
+            provider_attempts=({"number": 1},),
+            provider_outcome="ok",
+            schema_valid=True,
+            semantic_valid=False,
+        )
+        attempt_by_round = {item.round: item for item in state.attempts}
+
+        def stage_record(round_name, attempt, status, candidate_disposition):
+            return {
+                "stage": "plan_repair",
+                "status": status,
+                "repair_round": round_name.value,
+                "authoritative_plan_fingerprint": (
+                    attempt.defect.authoritative_plan_fingerprint
+                ),
+                "provider_outcome": attempt.provider_outcome,
+                "schema_valid": attempt.schema_valid,
+                "semantic_valid": attempt.semantic_valid,
+                "candidate_disposition": candidate_disposition,
+                "checkpoint_fingerprint": "c" * 64,
+                "request": {
+                    "request_version": "repair_batch_request.v1",
+                    "response_schema": "edit_plan_repair.v1",
+                    "repair_round": round_name.value,
+                    "semantic_attempt": (
+                        1 if round_name is PlanRepairRound.PRIMARY else 2
+                    ),
+                    "authoritative_plan_fingerprint": (
+                        attempt.defect.authoritative_plan_fingerprint
+                    ),
+                    "defect_instance_ids": [attempt.defect.id],
+                    "affected_clip_ids": [1],
+                    "objective_codes": [attempt.defect.code],
+                    "advisory_codes": [],
+                    "evidence_types": ["composition_geometry"],
+                    "evidence_ids": ["evidence-1"],
+                    "evidence_count": 1,
+                    "would_call": True,
+                    "call_allowed": True,
+                },
+                "dispositions": [{
+                    "code": attempt.defect.code,
+                    "eligible": True,
+                    "would_call": True,
+                    "call_allowed": True,
+                    "reason": "eligible",
+                }],
+                "resolution": {
+                    "original_codes": [attempt.defect.code],
+                    "resolved_codes": [],
+                    "remaining_codes": [attempt.defect.code],
+                    "introduced_codes": [],
+                },
+                "quality_floor": {
+                    "accepted": False,
+                    "violation_codes": [],
+                },
+                "attempts": [{
+                    "category": "plan_repair",
+                    "number": 1,
+                    "status_code": 503 if status == "failed" else 200,
+                    "reason": attempt.provider_outcome,
+                    "duration_ms": 100,
+                }],
+                "checkpoint_reused": False,
+            }
+
+        report = build_repair_report(
+            mode=RepairMode.ENFORCE,
+            stage_records=(
+                stage_record(
+                    PlanRepairRound.PRIMARY,
+                    attempt_by_round[PlanRepairRound.PRIMARY],
+                    "failed",
+                    "unavailable",
+                ),
+                stage_record(
+                    PlanRepairRound.CONTINGENCY,
+                    attempt_by_round[PlanRepairRound.CONTINGENCY],
+                    "rejected",
+                    "rejected",
+                ),
+            ),
+            fallback_entries=({
+                "code": "VISUAL_REFRAME_FALLBACK",
+                "clip_index": 1,
+                "segment_id": "segment-contingency",
+                "requested": "semantic_crop",
+                "executed": "content_preserving_fit",
+            },),
+            attempt_evidence=state.attempts,
+            rollout_attribution={
+                "model": "cx/gpt-5.6-sol",
+                "reasoning_effort": "medium",
+                "structured_output_mode": "json_schema",
+                "structured_output_boundaries": ["edit_plan_repair.v1"],
+                "repair_mode": "enforce",
+            },
+        )
+
+        self.assertEqual(report["version"], "repair_report.v2")
+        self.assertEqual(
+            [item["repair_round"] for item in report["stages"]],
+            ["primary", "contingency"],
+        )
+        self.assertEqual(len(report["attempt_ledger"]), 2)
+        self.assertEqual(report["attribution"]["model"], "cx/gpt-5.6-sol")
+        self.assertTrue(report["fallbacks"][0]["fallback_authorized"])
+        self.assertEqual(report["fallbacks"][0]["attempt_round"], "contingency")
+        self.assertEqual(report["summary"]["fallback_after_attempt_count"], 1)
+        self.assertEqual(report["summary"]["jobs_at_two_call_cap"], 1)
+        self.assertEqual(validate_repair_report(report), report)
+
+    def test_historical_repair_report_v1_remains_readable(self):
+        legacy = build_repair_report(mode=RepairMode.REPORT)
+        legacy["version"] = "repair_report.v1"
+        legacy.pop("attempt_ledger")
+        legacy.pop("attribution")
+        legacy["summary"].pop("fallback_after_attempt_count")
+        legacy["summary"].pop("repair_invariant_violation_count")
+        legacy["summary"].pop("jobs_at_two_call_cap")
+
+        normalized = validate_repair_report(legacy)
+
+        self.assertEqual(normalized["version"], "repair_report.v1")
+        self.assertNotIn("attempt_ledger", normalized)
+
     def test_malformed_repair_reports_fail_closed(self):
         report = build_repair_report(mode=RepairMode.REPORT)
         malformed = deepcopy(report)

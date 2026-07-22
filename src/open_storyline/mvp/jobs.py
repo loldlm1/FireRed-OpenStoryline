@@ -38,6 +38,7 @@ from open_storyline.mvp.models import (
 )
 from open_storyline.mvp.observability import emit_event
 from open_storyline.mvp.outcomes import build_failed_outcome_report
+from open_storyline.mvp.repair import RepairContractError, validate_repair_report
 from open_storyline.mvp.security import sanitize_for_persistence, sanitize_text
 
 
@@ -789,13 +790,47 @@ class JobStore:
             and isinstance(details.get("creative_limitation_codes"), list)
             else []
         )
+        state_before_failure = await self.load(job_id)
+        repair_report: dict[str, Any] | None = None
+        fallback_ledger: dict[str, Any] | None = None
+        for name in ("repair_report.json", "fallback_ledger.json"):
+            path = self.output_dir(job_id) / name
+            try:
+                if not path.is_file() or path.stat().st_size > 512_000:
+                    continue
+                raw_text = await asyncio.to_thread(path.read_text, encoding="utf-8")
+                parsed = json.loads(raw_text)
+                if not isinstance(parsed, dict):
+                    continue
+                if name == "repair_report.json":
+                    repair_report = validate_repair_report(parsed)
+                else:
+                    fallback_ledger = parsed
+            except (OSError, json.JSONDecodeError, RepairContractError):
+                continue
+        checkpoint_summary = (
+            repair_report.get("checkpoints")
+            if isinstance(repair_report, dict)
+            and isinstance(repair_report.get("checkpoints"), dict)
+            else None
+        )
+        rollout_attribution = (
+            repair_report.get("attribution")
+            if isinstance(repair_report, dict)
+            and isinstance(repair_report.get("attribution"), dict)
+            else None
+        )
         outcome = build_failed_outcome_report(
             code=code,
-            stage=(await self.load(job_id)).get("stage"),
+            stage=state_before_failure.get("stage"),
             retryable=retryable_error(code),
             blocker_codes=blocker_codes,
             technical_blocker_codes=technical_blocker_codes,
             creative_limitation_codes=creative_limitation_codes,
+            repair_report=repair_report,
+            rollout_attribution=rollout_attribution,
+            checkpoint_summary=checkpoint_summary,
+            fallback_ledger=fallback_ledger,
         )
         state = await self.update(
             job_id,
