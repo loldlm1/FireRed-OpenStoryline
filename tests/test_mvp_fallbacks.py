@@ -5,6 +5,7 @@ import os
 import unittest
 from unittest.mock import patch
 
+from open_storyline.mvp.compositor import resolve_clip_composition
 from open_storyline.mvp.edit_plan import (
     AssetRequest,
     ClipEditPlan,
@@ -16,6 +17,11 @@ from open_storyline.mvp.edit_plan import (
     TimeWindow,
     TransitionSpec,
 )
+from open_storyline.mvp.creative_intent import (
+    CreativeIntentDecision,
+    build_creative_intent,
+    validate_creative_intent_conformance,
+)
 from open_storyline.mvp.fallbacks import (
     FallbackDirective,
     FallbackConfigurationError,
@@ -23,6 +29,7 @@ from open_storyline.mvp.fallbacks import (
     compile_baseline_plan,
 )
 from open_storyline.mvp.outcomes import build_completed_outcome_report
+from open_storyline.mvp.render import MediaInfo
 
 
 def plan_with_segment(segment: EditSegment, *, assets=()) -> EditPlan:
@@ -137,6 +144,124 @@ class BaselineFallbackTests(unittest.TestCase):
         self.assertIsNone(compiled.layout.focal_target)
         self.assertEqual(result.entries[0].code, "VISUAL_REFRAME_FALLBACK")
         self.assertEqual(result.ledger()["status"], "with_limitations")
+
+    def test_visual_coverage_fallback_preserves_required_reframe_sequence(self):
+        segment_ids = ("reframe-1", "reframe-2", "reframe-3")
+        windows = (
+            TimeWindow(start_ms=0, end_ms=1333),
+            TimeWindow(start_ms=1333, end_ms=2666),
+            TimeWindow(start_ms=2666, end_ms=4000),
+        )
+        segments = tuple(
+            EditSegment(
+                id=segment_id,
+                source_window=window,
+                timeline_window=window,
+                layout=LayoutSpec(
+                    mode="crop",
+                    focal_target=FocalTarget(track_id="speaker-track"),
+                    max_zoom=zoom,
+                ),
+                evidence_ids=("speaker-track",),
+                reason="follow the speaker",
+            )
+            for segment_id, window, zoom in zip(
+                segment_ids,
+                windows,
+                (1.04, 1.08, 1.06),
+            )
+        )
+        plan = EditPlan(
+            planner_version="test.v1",
+            source_duration_ms=4000,
+            requested_capabilities=(
+                "crop",
+                "fit",
+                "focus_zoom",
+                "hard_cut",
+                "subtitles",
+            ),
+            clips=(ClipEditPlan(
+                clip_index=1,
+                source_window=TimeWindow(start_ms=0, end_ms=4000),
+                output_name="short-01.mp4",
+                segments=segments,
+                intent_decisions=(CreativeIntentDecision(
+                    intent_id="prompt-reframe-sequence",
+                    decision="execute",
+                    operation_ids=segment_ids,
+                ),),
+            ),),
+        )
+        coverage = SimpleNamespace(segments=(SimpleNamespace(
+            clip_index=1,
+            segment_id="reframe-2",
+            blocker_codes=("CROP_VISUAL_TEMPORAL_COVERAGE_LOW",),
+        ),))
+
+        result = compile_baseline_plan(
+            plan,
+            visual_coverage=coverage,
+            available_capabilities={
+                "crop", "fit", "focus_zoom", "hard_cut", "subtitles"
+            },
+            remaining_defects=(FallbackDirective(
+                code="CROP_VISUAL_TEMPORAL_COVERAGE_LOW",
+                clip_index=1,
+                segment_id="reframe-2",
+                attempt_evidenced=True,
+            ),),
+            enforce_attempt_gate=True,
+        )
+
+        compiled = result.plan.clips[0].segments[1]
+        self.assertEqual(
+            [item.layout.mode for item in result.plan.clips[0].segments],
+            ["crop", "crop", "crop"],
+        )
+        self.assertEqual(compiled.layout.mode, "crop")
+        self.assertIsNone(compiled.layout.focal_target)
+        self.assertEqual(compiled.layout.fallback, "crop")
+        self.assertFalse(compiled.layout.allow_full_frame_fallback)
+        self.assertEqual(compiled.layout.max_zoom, 1.08)
+        self.assertEqual(compiled.evidence_ids, ())
+        self.assertEqual(result.entries[0].executed, "bounded_center_reframe")
+        intent = build_creative_intent(
+            "Apply exactly 3 gentle reframes or zooms.",
+            {"asset_policy": "off", "stock_policy": "off"},
+            selected_clip_count=1,
+        )
+        validate_creative_intent_conformance(result.plan, intent)
+        executable_segment = compiled.model_copy(update={
+            "source_window": TimeWindow(
+                start_ms=0,
+                end_ms=compiled.source_window.duration_ms,
+            ),
+            "timeline_window": TimeWindow(
+                start_ms=0,
+                end_ms=compiled.timeline_window.duration_ms,
+            ),
+        })
+        composition = resolve_clip_composition(
+            ClipEditPlan(
+                clip_index=1,
+                source_window=executable_segment.source_window,
+                output_name="short-01.mp4",
+                segments=(executable_segment,),
+            ),
+            visual=SimpleNamespace(
+                frame_manifest={"frames": []},
+                regions=(),
+                tracks=(),
+            ),
+            source_media=MediaInfo(4000, 1920, 1080, True),
+            output_width=1080,
+            output_height=1920,
+        )
+        resolved = composition.segments[0]
+        self.assertEqual(resolved.operation, "focus_zoom")
+        self.assertEqual(resolved.strategy, "crop")
+        self.assertIsNotNone(resolved.crop)
 
     def test_active_picture_risk_replaces_letterbox_with_blurred_fit(self):
         segment = EditSegment(

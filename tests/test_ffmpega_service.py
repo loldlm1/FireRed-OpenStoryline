@@ -2,12 +2,14 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 from unittest.mock import patch
 import json
+import os
 import unittest
 
 from open_storyline.mvp.ffmpega_contracts import FFMPEGA_SOURCE_COMMIT
 from open_storyline.mvp.ffmpega_service import (
     ServiceError,
     ServiceState,
+    _dry_run_timeout,
     parse_prompt_request,
 )
 
@@ -41,6 +43,25 @@ def workflow(source: Path, destination: Path, **overrides):
 
 
 class FFMPEGAServiceContractTests(unittest.TestCase):
+    def test_dry_run_timeout_allows_production_resolution_preflight(self):
+        with patch.dict(os.environ, {}, clear=True):
+            self.assertEqual(_dry_run_timeout(1800), 180)
+        with patch.dict(
+            os.environ,
+            {"FFMPEGA_DRY_RUN_TIMEOUT_SECONDS": "240"},
+            clear=True,
+        ):
+            self.assertEqual(_dry_run_timeout(1800), 240)
+            self.assertEqual(_dry_run_timeout(120), 120)
+        with patch.dict(
+            os.environ,
+            {"FFMPEGA_DRY_RUN_TIMEOUT_SECONDS": "10"},
+            clear=True,
+        ):
+            with self.assertRaises(ServiceError) as caught:
+                _dry_run_timeout(1800)
+            self.assertEqual(caught.exception.code, "FFMPEGA_CONFIG_INVALID")
+
     def test_accepts_only_manual_model_free_shared_paths(self):
         with TemporaryDirectory() as tmpdir:
             root = Path(tmpdir).resolve()
@@ -110,6 +131,7 @@ class FFMPEGAServiceContractTests(unittest.TestCase):
         self.assertIn("--no-checkout", dockerfile)
         self.assertIn("USER 65532:65532", dockerfile)
         self.assertIn("HEALTHCHECK", dockerfile)
+        self.assertIn("FFMPEGA_DRY_RUN_TIMEOUT_SECONDS=180", dockerfile)
         self.assertIn("pyyaml==6.0.2", dockerfile)
         self.assertNotIn("COPY src/open_storyline/mvp/__init__.py", dockerfile)
         self.assertNotIn("openai-whisper", dockerfile)

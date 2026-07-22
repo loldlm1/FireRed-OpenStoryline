@@ -127,7 +127,10 @@ isolated so upstream behavior can continue to be merged into this fork.
   reframe count, restrained transitions, subtitles, source windows, and output
   count instead of collapsing to a one-segment baseline. Restrained transitions
   select an executable fade from a compatible creative-catalog style instead
-  of emitting an empty or invented catalog ID. Track targets retain
+  of emitting an empty or invented catalog ID. When a required reframe has low
+  temporal evidence after its bounded LLM attempts, the segment uses a target-free
+  center reframe instead of silently becoming a static fit; semantic output QA
+  remains authoritative for the rendered focus. Track targets retain
   their semantic role so clip-local observations can safely replace a sparse
   track without inventing private evidence or external assets.
 - Final post-render conformance also consumes the plan-level intent verdict. If
@@ -171,7 +174,10 @@ isolated so upstream behavior can continue to be merged into this fork.
   deterministic allowlist again, prohibits raw FFmpeg/model/vision paths, and
   can access only `KAMAL_OUTPUTS_DIR`. It is deployed and health-checked with
   `./bin/kamal-mvp ffmpega deploy`; the web image remains unchanged and keeps
-  the native render when the optional finishing pass fails.
+  the native render when the optional finishing pass fails. Its deterministic
+  command preflight has a bounded 180-second allowance so high-resolution
+  portrait renders are not rejected by the former 30-second cap before the
+  separately bounded execution begins.
 - Cross-niche regression fixtures under `tests/fixtures/mvp_agentic/` contain
   only synthetic schema expectations. Authorized private production sessions
   are operator-only regression gates; their identifiers, media, transcripts,

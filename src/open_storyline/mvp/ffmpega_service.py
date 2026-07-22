@@ -65,6 +65,16 @@ def _bounded_int(name: str, default: int, minimum: int, maximum: int) -> int:
     return value
 
 
+def _dry_run_timeout(execution_timeout: int) -> int:
+    configured = _bounded_int(
+        "FFMPEGA_DRY_RUN_TIMEOUT_SECONDS",
+        180,
+        30,
+        600,
+    )
+    return min(execution_timeout, configured)
+
+
 def _inside(root: Path, path: Path) -> bool:
     return path == root or root in path.parents
 
@@ -241,7 +251,7 @@ def render_with_upstream(job: RenderJob) -> None:
         raise ServiceError("FFMPEGA_PLAN_INVALID")
     command = composer.compose(pipeline)
     manager = ProcessManager()
-    dry_run = manager.dry_run(command, timeout=min(timeout, 30))
+    dry_run = manager.dry_run(command, timeout=_dry_run_timeout(timeout))
     if not dry_run.success:
         raise ServiceError("FFMPEGA_EXECUTION_FAILED")
     result = manager.execute(command, timeout=timeout)

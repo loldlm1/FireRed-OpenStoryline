@@ -196,6 +196,14 @@ def compile_baseline_plan(
 
         removed_asset_ids = set(omitted_assets)
         transition_unsupported = False
+        required_reframe_segment_ids = {
+            str(operation_id)
+            for decision in clip.get("intent_decisions") or []
+            if isinstance(decision, dict)
+            and decision.get("decision") == "execute"
+            and decision.get("intent_id") == "prompt-reframe-sequence"
+            for operation_id in decision.get("operation_ids") or []
+        }
         if directive_codes & {
             "EDIT_PLAN_CATALOG_ID_UNKNOWN",
             "EDIT_PLAN_CATALOG_KIND_INVALID",
@@ -265,19 +273,37 @@ def compile_baseline_plan(
                 if not enforce_attempt_gate or code in segment_codes
             )
             if directed_coverage_codes and layout.get("mode") == "crop":
-                layout.update({
-                    "mode": "fit",
-                    "focal_target": None,
-                    "fallback": "fit",
-                    "allow_full_frame_fallback": True,
-                    "max_zoom": 1.0,
-                })
+                preserve_required_reframe = (
+                    segment_id in required_reframe_segment_ids
+                    and (not available or "crop" in available)
+                )
+                layout.update(
+                    {
+                        "mode": "crop",
+                        "focal_target": None,
+                        "fallback": "crop",
+                        "allow_full_frame_fallback": False,
+                    }
+                    if preserve_required_reframe
+                    else {
+                        "mode": "fit",
+                        "focal_target": None,
+                        "fallback": "fit",
+                        "allow_full_frame_fallback": True,
+                        "max_zoom": 1.0,
+                    }
+                )
+                segment["evidence_ids"] = []
                 entries.append(FallbackEntry(
                     code="VISUAL_REFRAME_FALLBACK",
                     clip_index=clip_index,
                     segment_id=segment_id,
                     requested="semantic_crop",
-                    executed="content_preserving_fit",
+                    executed=(
+                        "bounded_center_reframe"
+                        if preserve_required_reframe
+                        else "content_preserving_fit"
+                    ),
                     reason=",".join(directed_coverage_codes)[:240],
                 ))
             if layout.get("mode") == "crop" and available and "crop" not in available:
