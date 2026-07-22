@@ -1,7 +1,7 @@
 # Plan: Agentic LLM-First Recovery Hardening
 
 **Generated**: 2026-07-22
-**Status**: Sprints 1-5 implemented; final authorized production QA in progress
+**Status**: Complete; Sprints 1-5 and authorized production MVP QA passed
 **Estimated Complexity**: High
 
 ## Overview
@@ -843,8 +843,50 @@ not downgrade PostgreSQL.
   without separate explicit authorization.
 - [x] Exactly one Sprint 5 commit is created: `a2ca85a`.
 - [x] The Sprint 5 rollback reference is `bef1043`.
-- [ ] The active-plan execution state is marked complete only after all gates
+- [x] The active-plan execution state is marked complete only after all gates
   and documentation are current.
+
+## Authorized Production QA Completion
+
+The separately authorized production validation completed on 2026-07-22 using
+the retained source/session lineage without copying private identifiers,
+prompts, transcripts, frames, filenames, or provider payloads into Git.
+
+- Two fresh immutable prompt versions were executed after the final application
+  fix: one Spanish version and one English version. Both reached enhanced
+  delivery and passed technical, semantic, creative-conformance, frame,
+  caption, and audit verification.
+- Both final plans contain one visible opening title, exactly three requested
+  portrait crop/reframe operations, two catalog-backed fades, and ten valid,
+  ordered subtitle cues. Both outputs are 1080x1920 H.264/AAC videos without
+  portrait side bars.
+- Direct MP4 frame inspection confirmed visible titles, three distinct portrait
+  reframes, continuity across transition boundaries, visible synchronized
+  subtitles at sampled cue times, and full-width portrait composition.
+- The Spanish version used one primary LLM repair, no contingency call, and no
+  deterministic fallback. The English version used one primary LLM repair, no
+  contingency call, and three deterministic fallbacks only after matching
+  repair-attempt evidence. Both recorded zero repair-invariant violations.
+- An initial pre-fix Spanish QA run exposed a separate geometry branch that
+  converted two required reframes into static fits. The branch now preserves
+  requested reframes as bounded, target-free center crops when coverage is
+  sparse or unsafe; focused compositor tests prove all three operations remain
+  executable. Both fresh prompt versions were generated after this fix.
+- The English result retains the advisory
+  `CROP_VISUAL_TEMPORAL_COVERAGE_LOW`; its post-attempt bounded center fallback
+  preserves the requested reframe and the delivery has no technical blocker.
+- Focused recovery validation passed 37 tests. The full local suite passed 498
+  tests with 81 expected PostgreSQL skips. Remote and FFMPEGA image builds,
+  rollout validation, shell syntax, compilation, diff checks, and private-data
+  scans passed.
+- Production provider/readiness gates, exact application-image verification,
+  database readiness, public health endpoints, and recent redacted log checks
+  passed. The application runs `f2fee8d`; the compatible immediate application
+  rollback is `7d5209f`. No migration or persistent-data format changed.
+
+This is an MVP acceptance result for two independent fresh prompt versions, not
+a statistical zero-failure or 99% reliability claim. Broader reliability still
+requires the existing sample-size and rollout thresholds.
 
 ## Testing Strategy
 
@@ -952,27 +994,27 @@ not downgrade PostgreSQL.
 
 ## Completion Checklist
 
-- [ ] Every repairable authoritative defect receives primary or contingency LLM
+- [x] Every repairable authoritative defect receives primary or contingency LLM
   attempt evidence before deterministic fallback.
-- [ ] Known defects are comprehensively detected before the primary batch.
-- [ ] Candidate-only defects are rejected without wasting the contingency call.
-- [ ] New authoritative pre-render defects receive the one allowed contingency
+- [x] Known defects are comprehensively detected before the primary batch.
+- [x] Candidate-only defects are rejected without wasting the contingency call.
+- [x] New authoritative pre-render defects receive the one allowed contingency
   batch.
-- [ ] No job can make a third plan-repair call.
-- [ ] No FFmpeg execution starts before full validation and compositor dry-run.
-- [ ] Geometry overflow resolves through valid LLM repair or segment-local
+- [x] No job can make a third plan-repair call.
+- [x] No FFmpeg execution starts before full validation and compositor dry-run.
+- [x] Geometry overflow resolves through valid LLM repair or segment-local
   content-preserving fallback instead of terminal product failure.
-- [ ] Failed outcomes preserve actual repair, checkpoint, attribution, and
+- [x] Failed outcomes preserve actual repair, checkpoint, attribution, and
   fallback evidence.
-- [ ] Retained failed sessions expose plain rerun independently of quality
+- [x] Retained failed sessions expose plain rerun independently of quality
   feedback.
-- [ ] Non-repairable security, source-integrity, executable, auth, database, and
+- [x] Non-repairable security, source-integrity, executable, auth, database, and
   infrastructure failures continue to fail closed.
-- [ ] Synthetic fixtures contain no private production evidence.
-- [ ] Every sprint passes its exact validation gate.
-- [ ] Every sprint has exactly one sprint-specific commit and recorded rollback
+- [x] Synthetic fixtures contain no private production evidence.
+- [x] Every sprint passes its exact validation gate.
+- [x] Every sprint has exactly one sprint-specific commit and recorded rollback
   point.
-- [ ] Final local integration, browser, security/privacy, and rollout-validator
+- [x] Final local integration, browser, security/privacy, and rollout-validator
   checks pass with exact skips documented.
-- [ ] Production rollout remains separately authorized and has a practical
+- [x] Production rollout remains separately authorized and has a practical
   rollback reference before canary execution.

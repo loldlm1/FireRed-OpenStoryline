@@ -88,6 +88,7 @@ The completed agentic defect-repair working plan was retired after increments
 | 71 | LLM-first recovery Sprint 5: release gates and runbooks | Registry-wide regression evals, enforced rollout ordering, provider/deploy gates, rollback evidence, and production configuration validation | `chore(mvp): gate llm-first recovery rollout` |
 | 72 | Production portrait-fit stabilization | Content-preserving blurred portrait fill, active-picture evidence, real-FFmpeg regressions, exact-image rollout, and retained rollback | `fix(mvp): fill portrait fit canvas safely` |
 | 73 | Dark-source portrait-fit visibility | Navy/slate tonal floor for dark source media, full-canvas frame QA, focused/full tests, and exact-image production validation | `fix(mvp): keep blurred fit visible on dark sources` |
+| 74 | Two-prompt production creative recovery QA | Fixed a geometry branch that weakened required reframes, then passed two fresh bilingual immutable prompt versions with visible titles, three executable reframes, restrained fades, synchronized subtitles, portrait frame inspection, truthful LLM-first attribution, exact-image health gates, and redacted evidence only | `docs(mvp): record two-prompt production qa` |
 
 Pull-request, merge, and release state belongs in the hosting platform, not in
 this historical implementation record.
