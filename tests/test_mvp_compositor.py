@@ -1,8 +1,14 @@
 import json
+from pathlib import Path
 from types import SimpleNamespace
 import unittest
 
-from open_storyline.mvp.compositor import CompositionError, resolve_clip_composition
+from open_storyline.mvp.compositor import (
+    CROP_TARGET_MAX_OVERFLOW_RATIO,
+    CompositionError,
+    assess_segment_crop_geometry,
+    resolve_clip_composition,
+)
 from open_storyline.mvp.edit_plan import (
     ClipEditPlan,
     EditSegment,
@@ -46,6 +52,53 @@ def clip_plan(segments):
 
 
 class CompositorTests(unittest.TestCase):
+    def test_shared_assessment_detects_incident_shaped_crop_overflow(self):
+        fixture = json.loads(
+            (
+                Path(__file__).parent
+                / "fixtures"
+                / "mvp_agentic"
+                / "crop-geometry-overflow.json"
+            ).read_text(encoding="utf-8")
+        )
+        segment = EditSegment(
+            id=fixture["segment_id"],
+            source_window=TimeWindow(start_ms=0, end_ms=4_000),
+            timeline_window=TimeWindow(start_ms=0, end_ms=4_000),
+            layout=LayoutSpec(
+                mode="crop",
+                focal_target=FocalTarget(semantic_role="speaker"),
+                fallback="crop",
+            ),
+            reason="keep both synthetic speakers visible",
+        )
+        observations = [
+            region(
+                item["id"],
+                item["frame_id"],
+                x=item["bbox"]["x"],
+                width=item["bbox"]["width"],
+            )
+            for item in fixture["regions"]
+        ]
+        assessment = assess_segment_crop_geometry(
+            segment,
+            visual=visual(fixture["frames"], observations),
+            source_width=fixture["source"]["width"],
+            source_height=fixture["source"]["height"],
+            output_width=fixture["output"]["width"],
+            output_height=fixture["output"]["height"],
+        )
+
+        self.assertIsNotNone(assessment)
+        self.assertTrue(assessment.overflowing)
+        self.assertGreater(assessment.width_overflow_ratio, 1.16)
+        self.assertLess(assessment.width_overflow_ratio, 1.17)
+        self.assertEqual(
+            assessment.to_evidence_dict()["threshold"],
+            CROP_TARGET_MAX_OVERFLOW_RATIO,
+        )
+
     def test_execution_dict_serializes_nested_overlay_windows(self):
         composition = resolve_clip_composition(
             clip_plan([EditSegment(

@@ -64,7 +64,17 @@ _EVIDENCE_FIELDS = frozenset({
     "end_ms",
     "evidence_id",
     "expected",
+    "fallback",
+    "fallback_allowed",
     "height_ratio",
+    "height_overflow_ratio",
+    "source_height",
+    "source_width",
+    "target_height",
+    "target_region_ids",
+    "target_width",
+    "crop_height",
+    "crop_width",
     "margin_ratio",
     "maximum",
     "maximum_gap_ms",
@@ -75,6 +85,7 @@ _EVIDENCE_FIELDS = frozenset({
     "operation_id",
     "position",
     "region_id",
+    "repair_scope",
     "requested",
     "segment_id",
     "source",
@@ -82,6 +93,7 @@ _EVIDENCE_FIELDS = frozenset({
     "threshold",
     "track_id",
     "width_ratio",
+    "width_overflow_ratio",
 })
 
 
@@ -503,13 +515,24 @@ def repair_findings_from_preflight(report: Any) -> tuple[RepairFinding, ...]:
         source = str(getattr(item, "source", "") or "")
         match = re.search(r"(?:^|\.)clips\.(\d+)(?:\.|$)", source)
         clip_index = int(match.group(1)) if match else None
-        segment_match = re.search(r"(?:^|\.)segments\.([A-Za-z0-9._:-]+)", source)
+        segment_match = re.search(
+            r"(?:^|\.)segments\.([A-Za-z0-9._:-]+?)"
+            r"(?:\.(?:layout|visual_coverage|transition_in|overlays|evidence_ids)(?:\.|$)|$)",
+            source,
+        )
         values: dict[str, Any] = {
             "observed": str(getattr(item, "severity", "") or "finding"),
             "source": source[:120],
         }
         if segment_match:
             values["segment_id"] = segment_match.group(1)
+        details = getattr(item, "details", None)
+        if isinstance(details, Mapping):
+            for key, value in details.items():
+                if str(key) in _EVIDENCE_FIELDS and (
+                    value is None or isinstance(value, (bool, int, float, str))
+                ):
+                    values[str(key)] = value
         findings.append(make_repair_finding(
             str(getattr(item, "code", "") or ""),
             clip_index=clip_index,

@@ -1540,6 +1540,11 @@ class MVPJobProcessor:
                         max_segments_per_clip=agentic_config.max_segments_per_clip,
                         max_overlays_per_clip=agentic_config.max_overlays_per_clip,
                         max_assets_per_clip=agentic_config.max_assets_per_clip,
+                        visual_understanding=visual_understanding,
+                        source_width=media.width,
+                        source_height=media.height,
+                        output_width=self.config.mvp.render_width,
+                        output_height=self.config.mvp.render_height,
                     )
                     predictions = predict_plan_findings(
                         candidate,
@@ -2159,6 +2164,11 @@ class MVPJobProcessor:
                 max_segments_per_clip=self.config.agentic_editing.max_segments_per_clip,
                 max_overlays_per_clip=self.config.agentic_editing.max_overlays_per_clip,
                 max_assets_per_clip=self.config.agentic_editing.max_assets_per_clip,
+                visual_understanding=visual_understanding,
+                source_width=media.width,
+                source_height=media.height,
+                output_width=self.config.mvp.render_width,
+                output_height=self.config.mvp.render_height,
             )
             shadow_allows_blocked = (
                 server_mode == "shadow"
@@ -2255,6 +2265,11 @@ class MVPJobProcessor:
                     max_segments_per_clip=self.config.agentic_editing.max_segments_per_clip,
                     max_overlays_per_clip=self.config.agentic_editing.max_overlays_per_clip,
                     max_assets_per_clip=self.config.agentic_editing.max_assets_per_clip,
+                    visual_understanding=visual_understanding,
+                    source_width=media.width,
+                    source_height=media.height,
+                    output_width=self.config.mvp.render_width,
+                    output_height=self.config.mvp.render_height,
                 )
                 if preflight.blocking:
                     raise EditPlanError("EDIT_PREFLIGHT_BLOCKED", "resolved agentic edit preflight is blocked")
@@ -2516,6 +2531,11 @@ class MVPJobProcessor:
                         max_assets_per_clip=(
                             self.config.agentic_editing.max_assets_per_clip
                         ),
+                        visual_understanding=visual_understanding,
+                        source_width=media.width,
+                        source_height=media.height,
+                        output_width=self.config.mvp.render_width,
+                        output_height=self.config.mvp.render_height,
                     )
                     if preflight.blocking:
                         raise EditPlanError(

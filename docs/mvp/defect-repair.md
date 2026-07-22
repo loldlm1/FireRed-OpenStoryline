@@ -24,3 +24,10 @@ Registry metadata never replaces detector-owned technical classification,
 Pydantic/domain validation, FFmpeg preflight, post-render QA, or promotion
 checks. A model may propose a corrected candidate only for an eligible code;
 the backend always decides whether the defect was resolved.
+
+Repairable composition geometry is detected before provider repair and FFmpeg
+execution with the same crop-feasibility calculation used by the compositor.
+The bounded finding records only normalized identifiers and numeric geometry;
+it never stores frames or raw provider content. Composition configuration,
+source integrity, executable validation, authentication, database, and unsafe
+path failures remain deterministic fail-closed boundaries.
