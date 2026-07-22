@@ -47,6 +47,12 @@ from open_storyline.mvp.session_media import SessionMediaStore
 
 RECENT_ATTEMPTS_PER_VERSION = 3
 DETAIL_ATTEMPT_LIMIT = 50
+RERUN_UNAVAILABLE_CODES = frozenset({
+    "SESSION_NOT_FOUND",
+    "SESSION_SOURCE_EXPIRED",
+    "SESSION_SOURCE_NOT_FOUND",
+    "SESSION_SOURCE_UNAVAILABLE",
+})
 
 
 def _utcnow() -> datetime:
@@ -368,6 +374,7 @@ class PromptVersionService:
         await self.store.get_session(session_id)
         if not 1 <= int(limit) <= 50:
             raise JobStoreError("PAGE_LIMIT_INVALID", "limit must be between 1 and 50")
+        rerun_capability = await self._rerun_capability(session_id)
         boundary = _decode_cursor(cursor)
         query = (
             select(PromptVersion)
@@ -398,7 +405,9 @@ class PromptVersionService:
             ) from None
         grouped: dict[str, list[dict[str, Any]]] = {row.id: [] for row in selected}
         for row in attempts:
-            grouped[row.prompt_version_id].append(self._run_summary(row))
+            grouped[row.prompt_version_id].append(
+                self._run_summary(row, rerun_capability=rerun_capability)
+            )
         has_more = len(rows) > int(limit)
         return {
             "items": [
@@ -463,10 +472,15 @@ class PromptVersionService:
             raise JobStoreError(
                 "DATABASE_UNAVAILABLE", "prompt version is unavailable"
             ) from None
+        rerun_capability = await self._rerun_capability(version.editing_session_id)
         return self._version_state(
             version,
             attempts=[
-                self.store._job_state(row, artifacts_by_job[row.id]) for row in attempts
+                self._apply_rerun_capability(
+                    self.store._job_state(row, artifacts_by_job[row.id]),
+                    rerun_capability,
+                )
+                for row in attempts
             ],
         )
 
@@ -760,11 +774,17 @@ class PromptVersionService:
                 "PRIOR_QUALITY_EVIDENCE_UNAVAILABLE",
                 "prior attempt has no eligible deterministic quality evidence",
             )
-        return compact_prior_attempt_quality_feedback(
+        feedback = compact_prior_attempt_quality_feedback(
             prior_attempt_id=prior.id,
             prior_attempt_number=int(prior.attempt_number or 1),
             documents=documents,
         )
+        if not feedback.get("blocker_codes") and not feedback.get("retry_reason_codes"):
+            raise JobStoreError(
+                "PRIOR_QUALITY_EVIDENCE_UNAVAILABLE",
+                "prior attempt has no eligible deterministic quality evidence",
+            )
+        return feedback
 
     async def _recent_attempts(
         self,
@@ -828,16 +848,32 @@ class PromptVersionService:
                 connection=connection,
             )
 
+    async def _rerun_capability(self, session_id: str) -> dict[str, Any]:
+        try:
+            await self._ready_source(session_id)
+        except JobStoreError as exc:
+            if exc.code not in RERUN_UNAVAILABLE_CODES:
+                raise
+            return {
+                "supported": False,
+                "unavailable_reason": exc.code,
+            }
+        return {"supported": True, "unavailable_reason": ""}
+
     @staticmethod
     def _validate_identifier(value: str, code: str) -> None:
         if not JOB_ID_PATTERN.fullmatch(str(value or "")):
             raise JobStoreError(code, "identifier is invalid")
 
     @staticmethod
-    def _run_summary(row: VideoJob) -> dict[str, Any]:
+    def _run_summary(
+        row: VideoJob,
+        *,
+        rerun_capability: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
         result_data = row.result_data if isinstance(row.result_data, dict) else {}
         request_data = row.request_data if isinstance(row.request_data, dict) else {}
-        return {
+        state = {
             "id": row.id,
             "attempt_number": row.attempt_number,
             "state": row.state,
@@ -855,6 +891,34 @@ class PromptVersionService:
             "completed_at": _iso(row.completed_at),
             "media_expires_at": _iso(row.media_expires_at),
         }
+        return PromptVersionService._apply_rerun_capability(
+            state,
+            rerun_capability,
+        )
+
+    @staticmethod
+    def _apply_rerun_capability(
+        run: dict[str, Any],
+        capability: dict[str, Any] | None,
+    ) -> dict[str, Any]:
+        if capability is None or not isinstance(run.get("outcome"), dict):
+            return run
+        state = dict(run)
+        outcome = dict(state["outcome"])
+        retry = dict(outcome.get("retry") or {})
+        retry["supported"] = capability.get("supported") is True
+        retry["unavailable_reason"] = str(
+            capability.get("unavailable_reason") or ""
+        )[:80]
+        if not retry["supported"]:
+            retry["recommended_action"] = "none"
+        elif retry.get("quality_feedback_supported"):
+            retry["recommended_action"] = "retry_defects"
+        else:
+            retry["recommended_action"] = "rerun"
+        outcome["retry"] = retry
+        state["outcome"] = outcome
+        return state
 
     @classmethod
     def _version_state(

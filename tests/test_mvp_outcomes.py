@@ -52,6 +52,8 @@ class OutcomeTests(unittest.TestCase):
         self.assertEqual(technical["grade"], "retryable_failure")
         self.assertEqual(technical["technical_status"], "blocked")
         self.assertEqual(technical["fatal_errors"][0]["code"], "AUDIO_MISSING")
+        self.assertTrue(limited["retry"]["supported"])
+        self.assertTrue(technical["retry"]["supported"])
         self.assertEqual(
             technical["fatal_errors"][0]["presentation"]["en"]["title"],
             "Audio is missing",
@@ -162,6 +164,39 @@ class OutcomeTests(unittest.TestCase):
 
         self.assertEqual(report["grade"], "terminal_failure")
         self.assertEqual(report["technical_status"], "blocked")
+        self.assertTrue(report["retry"]["supported"])
+        self.assertFalse(report["retry"]["quality_feedback_supported"])
+        self.assertEqual(report["retry"]["recommended_action"], "rerun")
+
+    def test_clean_completed_outcome_still_supports_plain_rerun(self):
+        report = build_completed_outcome_report(
+            outputs=[{"video": "short-01.mp4", "subtitles": None}],
+        )
+
+        self.assertTrue(report["retry"]["supported"])
+        self.assertFalse(report["retry"]["quality_feedback_supported"])
+        self.assertEqual(report["retry"]["recommended_action"], "rerun")
+        self.assertEqual(report["retry"]["unavailable_reason"], "")
+
+    def test_summary_preserves_safe_rerun_unavailable_reason(self):
+        report = build_failed_outcome_report(
+            code="SOURCE_VIDEO_INVALID",
+            stage="validating",
+            retryable=False,
+        )
+        report["retry"].update({
+            "supported": False,
+            "recommended_action": "none",
+            "unavailable_reason": "SESSION_SOURCE_EXPIRED",
+        })
+
+        summary = outcome_summary(report)
+
+        self.assertFalse(summary["retry"]["supported"])
+        self.assertEqual(
+            summary["retry"]["unavailable_reason"],
+            "SESSION_SOURCE_EXPIRED",
+        )
 
     def test_failed_outcome_preserves_repair_checkpoint_and_fallback_evidence(self):
         repair = build_repair_report(

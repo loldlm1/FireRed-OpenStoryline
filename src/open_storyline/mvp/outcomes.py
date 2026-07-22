@@ -723,11 +723,12 @@ def build_completed_outcome_report(
             "metrics": repair_metrics,
         },
         "retry": {
-            "supported": bool(limitations or fatal_errors),
+            "supported": True,
             "quality_feedback_supported": bool(limitations or fatal_errors),
             "recommended_action": (
-                "retry_defects" if limitations or fatal_errors else "none"
+                "retry_defects" if limitations or fatal_errors else "rerun"
             ),
+            "unavailable_reason": "",
             "reused_stage_names": sorted({str(value) for value in reused_stages}),
             "recomputed_stage_names": sorted({str(value) for value in recomputed_stages}),
             "prior_limitation_codes": sorted(prior_codes),
@@ -962,9 +963,12 @@ def build_failed_outcome_report(
             "metrics": repair_metrics,
         },
         "retry": {
-            "supported": retryable,
+            "supported": True,
             "quality_feedback_supported": quality_feedback_supported,
-            "recommended_action": "retry_defects" if retryable else "none",
+            "recommended_action": (
+                "retry_defects" if quality_feedback_supported else "rerun"
+            ),
+            "unavailable_reason": "",
             "reused_stage_names": _tokens(
                 checkpoints.get("reused_stages") or ()
             ),
@@ -1137,6 +1141,9 @@ def outcome_summary(value: Any) -> dict[str, Any] | None:
                 retry.get("quality_feedback_supported")
             ),
             "recommended_action": str(retry.get("recommended_action") or "")[:40],
+            "unavailable_reason": str(
+                retry.get("unavailable_reason") or ""
+            )[:80],
             "reused_stage_names": _tokens(retry.get("reused_stage_names") or ()),
             "recomputed_stage_names": _tokens(
                 retry.get("recomputed_stage_names") or ()

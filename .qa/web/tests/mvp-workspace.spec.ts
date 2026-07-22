@@ -107,9 +107,10 @@ function outcome(grade: 'enhanced' | 'with_limitations' | 'retryable_failure' | 
       }] : [],
     },
     retry: {
-      supported: limited || grade === 'retryable_failure',
+      supported: true,
       quality_feedback_supported: limited || grade === 'retryable_failure',
-      recommended_action: limited || grade === 'retryable_failure' ? 'retry_defects' : 'none',
+      recommended_action: limited || grade === 'retryable_failure' ? 'retry_defects' : 'rerun',
+      unavailable_reason: '',
       reused_stage_names: limited ? ['transcript', 'global_analysis'] : [],
       recomputed_stage_names: limited ? ['edit_plan', 'render'] : [],
       resolved_limitation_codes: limited ? ['CAPTION_WIDTH_EXCEEDED'] : [],
@@ -417,6 +418,7 @@ function historyVersion(index: number, options: {
 async function installHistoryApi(page: Page, options: {
   legacy?: boolean;
   versions?: HistoryVersion[];
+  retryDelayMs?: number;
 } = {}) {
   const ready: SourceState = {
     id: uploadId,
@@ -441,6 +443,7 @@ async function installHistoryApi(page: Page, options: {
   let favoriteId = versions.flatMap((version) => version.attempts).find((run) => run.is_favorite)?.id || null;
   let failNextFavorite = false;
   let lastRetryPayload: Record<string, unknown> | null = null;
+  let retryRequestCount = 0;
 
   const syncFavorites = () => {
     for (const version of versions) {
@@ -503,8 +506,13 @@ async function installHistoryApi(page: Page, options: {
     if (rerunMatch && method === 'POST') {
       const version = detailFor(rerunMatch[1]);
       if (!version) return json(route, { detail: { code: 'PROMPT_VERSION_NOT_FOUND' } }, 404);
+      retryRequestCount += 1;
       lastRetryPayload = request.postDataJSON();
-      const next = historyRun('9'.repeat(32), version.id, version.attempts.length + 1, {
+      if (options.retryDelayMs) {
+        await new Promise((resolve) => setTimeout(resolve, options.retryDelayMs));
+      }
+      const nextId = (900 + retryRequestCount).toString(16).padStart(32, '0');
+      const next = historyRun(nextId, version.id, version.attempts.length + 1, {
         state: 'queued',
         grade: 'enhanced',
       });
@@ -563,6 +571,7 @@ async function installHistoryApi(page: Page, options: {
     failNextFavorite() { failNextFavorite = true; },
     get favoriteId() { return favoriteId; },
     get lastRetryPayload() { return lastRetryPayload; },
+    get retryRequestCount() { return retryRequestCount; },
   };
 }
 
@@ -764,7 +773,7 @@ test.describe('reusable video workspace', () => {
     await expect(page.locator('#comparison-open')).toBeFocused();
   });
 
-  test('explains limited outcomes, prefills an improved version, and retries with prior evidence', async ({ page }) => {
+  test('separates plain rerun from evidence-backed repair and reports unavailable retention', async ({ page }) => {
     const limited = historyVersion(2, {
       id: secondPromptVersionId,
       runId: secondJobId,
@@ -772,12 +781,30 @@ test.describe('reusable video workspace', () => {
     limited.attempts[0] = historyRun(secondJobId, secondPromptVersionId, 1, {
       grade: 'with_limitations',
     });
-    const enhanced = historyVersion(1, { id: promptVersionId, runId: jobId });
-    const mock = await installHistoryApi(page, { versions: [limited, enhanced] });
+    const terminal = historyVersion(1, { id: promptVersionId, runId: jobId });
+    terminal.attempts[0] = historyRun(jobId, promptVersionId, 1, {
+      state: 'failed',
+      grade: 'terminal_failure',
+    });
+    const unavailable = historyVersion(3);
+    unavailable.attempts[0].outcome.retry.supported = false;
+    unavailable.attempts[0].outcome.retry.recommended_action = 'none';
+    unavailable.attempts[0].outcome.retry.unavailable_reason = 'SESSION_SOURCE_EXPIRED';
+    const mock = await installHistoryApi(page, {
+      versions: [unavailable, limited, terminal],
+      retryDelayMs: 100,
+    });
     await page.goto(`/?session=${sessionId}`);
 
-    const card = page.locator('#recent-jobs .version-card').first();
+    const unavailableCard = page.locator('#recent-jobs .version-card').first();
+    await expect(unavailableCard).toContainText('Nueva ejecución no disponible');
+    await expect(unavailableCard).toContainText('plazo de conservación');
+    await expect(unavailableCard.getByRole('button', { name: 'Volver a ejecutar' })).toHaveCount(0);
+
+    const card = page.locator('#recent-jobs .version-card').nth(1);
     await expect(card.locator('.outcome-badge')).toHaveText('! Completado con limitaciones');
+    await expect(card.getByRole('button', { name: 'Volver a ejecutar' })).toBeVisible();
+    await expect(card.getByRole('button', { name: 'Reparar con evidencia' })).toBeVisible();
     await card.getByRole('button', { name: 'Ver salidas y QA' }).click();
     await expect(card.locator('.outcome-detail')).toContainText('ACTIVE_PICTURE_TOO_SMALL');
     await expect(card.locator('.outcome-detail')).toContainText('Etapas reutilizadas');
@@ -802,12 +829,20 @@ test.describe('reusable video workspace', () => {
     await expect(page.locator('#comparison-dialog')).toContainText('Resueltas: CAPTION_WIDTH_EXCEEDED');
     await page.keyboard.press('Escape');
 
-    await card.getByRole('button', { name: 'Reintentar defectos' }).click();
+    await card.getByRole('button', { name: 'Reparar con evidencia' }).click();
     await expect(card.locator('.attempt-row')).toHaveCount(2);
     expect(mock.lastRetryPayload).toEqual({
       prior_attempt_id: secondJobId,
       use_quality_feedback: true,
     });
+
+    const terminalCard = page.locator('#recent-jobs .version-card').nth(2);
+    await expect(terminalCard.getByRole('button', { name: 'Reparar con evidencia' })).toHaveCount(0);
+    await terminalCard.getByRole('button', { name: 'Volver a ejecutar' }).click();
+    await expect(terminalCard.getByRole('button', { name: 'Preparando intento…' })).toBeDisabled();
+    await expect(terminalCard.locator('.attempt-row')).toHaveCount(2);
+    expect(mock.lastRetryPayload).toEqual({ use_quality_feedback: false });
+    expect(mock.retryRequestCount).toBe(2);
   });
 
   test('persists a human favorite, clears it, and rolls optimistic state back after failure', async ({ page }) => {

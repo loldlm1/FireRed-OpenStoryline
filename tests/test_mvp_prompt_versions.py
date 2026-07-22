@@ -88,6 +88,41 @@ class RunSettingsTests(unittest.TestCase):
         self.assertEqual(stock.exception.code, "REQUIRED_STOCK_ASSET_COUNT_INVALID")
 
 
+class RerunCapabilityTests(unittest.TestCase):
+    def test_current_source_capability_overrides_historical_retry_semantics(self):
+        run = {
+            "outcome": {
+                "grade": "terminal_failure",
+                "retry": {
+                    "supported": False,
+                    "quality_feedback_supported": False,
+                    "recommended_action": "none",
+                },
+            },
+        }
+
+        available = PromptVersionService._apply_rerun_capability(
+            run,
+            {"supported": True, "unavailable_reason": ""},
+        )
+        unavailable = PromptVersionService._apply_rerun_capability(
+            available,
+            {
+                "supported": False,
+                "unavailable_reason": "SESSION_SOURCE_EXPIRED",
+            },
+        )
+
+        self.assertTrue(available["outcome"]["retry"]["supported"])
+        self.assertEqual(available["outcome"]["retry"]["recommended_action"], "rerun")
+        self.assertFalse(unavailable["outcome"]["retry"]["supported"])
+        self.assertEqual(unavailable["outcome"]["retry"]["recommended_action"], "none")
+        self.assertEqual(
+            unavailable["outcome"]["retry"]["unavailable_reason"],
+            "SESSION_SOURCE_EXPIRED",
+        )
+
+
 @unittest.skipUnless(os.getenv("TEST_DATABASE_URL"), "TEST_DATABASE_URL is not configured")
 class PromptVersionPostgresTests(unittest.IsolatedAsyncioTestCase):
     @classmethod
@@ -457,7 +492,25 @@ class PromptVersionPostgresTests(unittest.IsolatedAsyncioTestCase):
         self.assertFalse((self.root / "limited_jobs" / rejected_job_id).exists())
 
         await limited_store.fail(first["run"]["id"], code="TEST_DONE", message="done")
+        available_history = await self.service.list_versions(editing_session["id"])
+        available_retry = available_history["items"][0]["attempts"][0]["outcome"][
+            "retry"
+        ]
+        self.assertTrue(available_retry["supported"])
+        self.assertFalse(available_retry["quality_feedback_supported"])
+        self.assertEqual(available_retry["recommended_action"], "rerun")
         original_bytes = source_path.read_bytes()
+        source_path.unlink()
+        missing_history = await self.service.list_versions(editing_session["id"])
+        missing_retry = missing_history["items"][0]["attempts"][0]["outcome"][
+            "retry"
+        ]
+        self.assertFalse(missing_retry["supported"])
+        self.assertEqual(
+            missing_retry["unavailable_reason"],
+            "SESSION_SOURCE_UNAVAILABLE",
+        )
+        source_path.write_bytes(original_bytes)
         source_path.write_bytes(b"tampered")
         with self.assertRaises(JobStoreError) as changed:
             await self.service.create_version(
@@ -501,8 +554,17 @@ class PromptVersionPostgresTests(unittest.IsolatedAsyncioTestCase):
             await connection.execute(
                 update(SessionInputVideo)
                 .where(SessionInputVideo.id == source["id"])
-                .values(expires_at=datetime.now(UTC) - timedelta(seconds=1))
+                    .values(expires_at=datetime.now(UTC) - timedelta(seconds=1))
             )
+        expired_history = await self.service.list_versions(editing_session["id"])
+        expired_retry = expired_history["items"][0]["attempts"][0]["outcome"][
+            "retry"
+        ]
+        self.assertFalse(expired_retry["supported"])
+        self.assertEqual(
+            expired_retry["unavailable_reason"],
+            "SESSION_SOURCE_EXPIRED",
+        )
         with self.assertRaises(JobStoreError) as expired:
             await self.service.rerun(first["prompt_version"]["id"])
         self.assertEqual(expired.exception.code, "SESSION_SOURCE_EXPIRED")
@@ -603,6 +665,48 @@ class PromptVersionPostgresTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(
             missing_flag.exception.code,
             "PRIOR_QUALITY_FEEDBACK_FLAG_REQUIRED",
+        )
+
+    async def test_quality_feedback_rejects_documents_without_objective_defects(self):
+        editing_session, _source, _source_path = await self.ready_session()
+        created = await self.service.create_version(
+            editing_session["id"],
+            prompt="plain rerun should remain independent",
+            settings=self.settings,
+        )
+        prior = created["run"]
+        await self.store.update(prior["id"], state="completed", progress=1)
+        document = {
+            "version": "outcome_report.v2",
+            "grade": "enhanced",
+            "limitations": [],
+        }
+        raw = json.dumps(document)
+        async with self.database.sessions() as session:
+            async with session.begin():
+                session.add(AuditDocument(
+                    job_id=prior["id"],
+                    kind="outcome_report",
+                    source_name="outcome_report.json",
+                    raw_text=raw,
+                    parsed_data=document,
+                    parse_status="parsed",
+                    parser_version="audit.v1",
+                    sha256=hashlib.sha256(raw.encode()).hexdigest(),
+                    byte_size=len(raw.encode()),
+                ))
+
+        plain = await self.service.rerun(created["prompt_version"]["id"])
+        self.assertNotIn("prior_attempt_quality_feedback", plain["request"])
+        with self.assertRaises(JobStoreError) as unsupported:
+            await self.service.rerun(
+                created["prompt_version"]["id"],
+                prior_attempt_id=prior["id"],
+                use_quality_feedback=True,
+            )
+        self.assertEqual(
+            unsupported.exception.code,
+            "PRIOR_QUALITY_EVIDENCE_UNAVAILABLE",
         )
 
     async def test_history_favorite_and_cross_session_rules(self):
