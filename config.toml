@@ -104,6 +104,8 @@ render_fps_cap = 60
 
 [agentic_editing]
 mode = "off"
+# Strict output, repair, delivery, and retry rollout controls remain env-only so
+# bin/kamal-mvp can validate their production ordering before a release.
 shadow_allow_blocked_plans = true
 baseline_fallbacks_enabled = false
 max_segments_per_clip = 24
@@ -123,6 +125,7 @@ creative_qa_enabled = true
 creative_qa_strict = true
 render_promotion_mode = "report"
 completion_policy = "strict"
+delivery_policy = "qa_enforced"
 semantic_qa_enabled = false
 semantic_qa_max_frames = 4
 scene_threshold = 0.35

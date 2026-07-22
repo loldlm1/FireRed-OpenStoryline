@@ -24,6 +24,16 @@ IMAGE_SIGNATURES = (
 VISION_FIXTURE = base64.b64decode(
     "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII="
 )
+STRICT_SCHEMA_PROBE = {
+    "name": "openstoryline_capability_probe_v1",
+    "strict": True,
+    "schema": {
+        "type": "object",
+        "properties": {"ok": {"type": "boolean", "enum": [True]}},
+        "required": ["ok"],
+        "additionalProperties": False,
+    },
+}
 
 
 @dataclass
@@ -212,6 +222,71 @@ def _json_object_contract(payload: Any) -> bool:
         return False
 
 
+def _strict_schema_contract(payload: Any) -> bool:
+    if not isinstance(payload, dict) or payload.get("status") != "completed":
+        return False
+    parts = [
+        str(content.get("text") or "")
+        for output in payload.get("output") or ()
+        if isinstance(output, dict) and output.get("type") == "message"
+        for content in output.get("content") or ()
+        if isinstance(content, dict) and content.get("type") == "output_text"
+    ]
+    try:
+        return json.loads("".join(parts).strip()) == {"ok": True}
+    except json.JSONDecodeError:
+        return False
+
+
+def strict_schema_checks(
+    endpoint: str,
+    *,
+    model: str,
+    api_key: str,
+    timeout: float,
+) -> list[Check]:
+    common = {
+        "model": model,
+        "reasoning": {"effort": "low"},
+        "store": False,
+        "text": {"format": {
+            "type": "json_schema",
+            "name": STRICT_SCHEMA_PROBE["name"],
+            "strict": True,
+            "schema": STRICT_SCHEMA_PROBE["schema"],
+        }},
+    }
+    checks: list[Check] = []
+    for name, prompt in (
+        ("strict_schema_acceptance", "Return ok=true and obey the response schema exactly."),
+        (
+            "strict_schema_extra_field_rejection",
+            "Return ok=true and also an extra field named forbidden, while obeying the response schema exactly.",
+        ),
+    ):
+        status, payload, _, category = post_json(
+            endpoint,
+            {**common, "input": prompt},
+            api_key=api_key,
+            timeout=timeout,
+        )
+        valid = _strict_schema_contract(payload)
+        checks.append(Check(
+            name,
+            status == 200 and category == "ok" and valid,
+            status,
+            "ok" if status == 200 and category == "ok" and valid else (
+                "schema_unsupported"
+                if status in {400, 404, 422}
+                else "contract_invalid"
+                if status == 200 and category == "ok"
+                else category
+            ),
+            {"model": model},
+        ))
+    return checks
+
+
 def _image_bytes(payload: Any, raw: bytes, max_bytes: int) -> tuple[bool, int]:
     content = raw
     is_binary = (
@@ -240,6 +315,7 @@ def live_contract_checks(
     max_image_bytes: int,
     text_catalog: Check,
     image_catalog: Check,
+    strict_schema: bool = False,
 ) -> list[Check]:
     checks: list[Check] = []
     text_models = configured_models("OPENSTORYLINE_LLM_MODEL")
@@ -247,6 +323,8 @@ def live_contract_checks(
     if not _catalog_contains(text_catalog, text_model):
         checks.append(_skipped("text_contract", "configured model is not catalog-advertised"))
         checks.append(_skipped("vision_contract", "configured model is not catalog-advertised"))
+        checks.append(_skipped("strict_schema_acceptance", "configured model is not catalog-advertised"))
+        checks.append(_skipped("strict_schema_extra_field_rejection", "configured model is not catalog-advertised"))
     else:
         endpoint = f"{base_url}/v1/chat/completions"
         common = {
@@ -270,6 +348,19 @@ def live_contract_checks(
             ),
             {"model": text_model},
         ))
+        if strict_schema:
+            checks.extend(strict_schema_checks(
+                f"{base_url}/v1/responses",
+                model=text_model,
+                api_key=api_key,
+                timeout=timeout,
+            ))
+        else:
+            checks.append(_skipped("strict_schema_acceptance", "strict schema probe not requested"))
+            checks.append(_skipped(
+                "strict_schema_extra_field_rejection",
+                "strict schema probe not requested",
+            ))
         vision_data_url = "data:image/png;base64," + base64.b64encode(VISION_FIXTURE).decode("ascii")
         status, payload, _, category = post_json(
             endpoint,
@@ -442,11 +533,14 @@ def run(args: argparse.Namespace) -> tuple[int, dict[str, Any]]:
             max_image_bytes=args.max_image_bytes,
             text_catalog=catalog_checks["text"],
             image_catalog=catalog_checks["image"],
+            strict_schema=args.strict_schema,
         ))
     else:
         checks.extend([
             _skipped("text_contract", "live inference not requested"),
             _skipped("vision_contract", "live inference not requested"),
+            _skipped("strict_schema_acceptance", "live inference not requested"),
+            _skipped("strict_schema_extra_field_rejection", "live inference not requested"),
             _skipped("image_contract", "live inference not requested"),
         ])
 
@@ -486,6 +580,11 @@ def main() -> int:
     parser.add_argument("--skip-ssh", action="store_true")
     parser.add_argument("--strict-models", action="store_true")
     parser.add_argument("--live-inference", action="store_true", help="run synthetic text, vision, and image calls")
+    parser.add_argument(
+        "--strict-schema",
+        action="store_true",
+        help="probe provider-enforced json_schema support with private-free fixtures",
+    )
     parser.add_argument("--max-image-bytes", type=int, default=26_214_400)
     parser.add_argument("--container-host-probe", action="store_true", help="run a disposable remote container route probe")
     parser.add_argument(

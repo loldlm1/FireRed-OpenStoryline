@@ -1,4 +1,14 @@
-import { activityMessage, activityMeta, errorMessage, stateLabel } from './messages.js';
+import {
+  activityMessage,
+  activityMeta,
+  defectDescription,
+  defectTitle,
+  deliveryDecisionLabel,
+  errorMessage,
+  qaDecisionLabel,
+  repairDispositionLabel,
+  stateLabel,
+} from './messages.js';
 
 const byId = (id) => document.getElementById(id);
 
@@ -544,7 +554,11 @@ function createRunDetail(run) {
     const retry = run.outcome.retry || {};
     const checkpointCopy = document.createElement('p');
     checkpointCopy.textContent = `Etapas reutilizadas: ${stageNames(retry.reused_stage_names)}. Recalculadas: ${stageNames(retry.recomputed_stage_names)}.`;
-    outcome.append(heading, checkpointCopy);
+    const decisions = document.createElement('p');
+    decisions.className = 'outcome-decisions';
+    decisions.setAttribute('role', 'status');
+    decisions.textContent = `QA estricta: ${qaDecisionLabel(run.outcome.strict_qa?.decision)}. Entrega: ${deliveryDecisionLabel(run.outcome.delivery?.decision)}.`;
+    outcome.append(heading, decisions, checkpointCopy);
     const limitations = [
       ...(run.outcome.limitations || []),
       ...(run.outcome.fatal_errors || []),
@@ -558,11 +572,14 @@ function createRunDetail(run) {
       for (const limitation of limitations) {
         const item = document.createElement('li');
         const title = document.createElement('strong');
-        title.textContent = limitation.code;
+        title.textContent = `${defectTitle(limitation)} · ${limitation.code}`;
         const copy = document.createElement('span');
         const execution = limitation.executed
           ? `Se ejecutó ${codeLabel(limitation.executed)}${limitation.requested ? ` en lugar de ${codeLabel(limitation.requested)}` : ''}.`
-          : limitation.description || `Hallazgo en ${codeLabel(limitation.stage || 'qa')}.`;
+          : defectDescription(
+            limitation,
+            `Hallazgo en ${codeLabel(limitation.stage || 'qa')}.`,
+          );
         copy.textContent = execution;
         item.append(title, copy);
         list.append(item);
@@ -586,6 +603,48 @@ function createRunDetail(run) {
       comparisonCopy.className = 'outcome-comparison';
       comparisonCopy.textContent = comparison;
       outcome.append(comparisonCopy);
+    }
+    const repair = run.outcome.repair || {};
+    const repairDefects = (repair.defects || []).filter((item) => item?.code);
+    if (repairDefects.length) {
+      const disclosure = document.createElement('details');
+      disclosure.className = 'repair-disclosure';
+      const summary = document.createElement('summary');
+      summary.textContent = `Registro agéntico ${repair.registry_version || 'sin versión'} · ${repairDefects.length} defecto${repairDefects.length === 1 ? '' : 's'}`;
+      const list = document.createElement('ul');
+      for (const defect of repairDefects) {
+        const item = document.createElement('li');
+        const title = document.createElement('strong');
+        const rawCode = defect.presentation?.raw_code || defect.code;
+        title.textContent = `${defectTitle(defect)} · ${rawCode}`;
+        const lifecycle = document.createElement('span');
+        const attempt = defect.repair_attempted
+          ? 'Reparación LLM intentada.'
+          : defect.eligible
+            ? 'Elegible, sin llamada ejecutada.'
+            : 'No elegible para reparación LLM.';
+        const states = (defect.dispositions || []).map(repairDispositionLabel).join(', ');
+        lifecycle.textContent = `${attempt} Estado: ${states || 'sin disposición registrada'}. Estrategia: ${codeLabel(defect.strategy)}.`;
+        item.append(title, lifecycle);
+        for (const stage of defect.stage_statuses || []) {
+          const stageCopy = document.createElement('span');
+          stageCopy.textContent = `Etapa ${codeLabel(stage.stage)}: ${codeLabel(stage.status)}${stage.checkpoint_reused ? ' (checkpoint reutilizado)' : ''}.`;
+          item.append(stageCopy);
+        }
+        for (const fallback of defect.fallbacks || []) {
+          const fallbackCopy = document.createElement('span');
+          fallbackCopy.textContent = `Fallback: ${codeLabel(fallback.executed || 'no ejecutado')}${fallback.requested ? ` en lugar de ${codeLabel(fallback.requested)}` : ''}.`;
+          item.append(fallbackCopy);
+        }
+        const nextAction = document.createElement('span');
+        nextAction.textContent = `Siguiente acción: ${codeLabel(defect.presentation?.retry_action || 'ninguna')}.`;
+        item.append(nextAction);
+        list.append(item);
+      }
+      const caveat = document.createElement('p');
+      caveat.textContent = '“Resuelto” confirma que pasó las comprobaciones deterministas registradas; no garantiza calidad subjetiva ni viralidad.';
+      disclosure.append(summary, list, caveat);
+      outcome.append(disclosure);
     }
     detail.append(outcome);
   }

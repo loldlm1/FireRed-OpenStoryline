@@ -166,6 +166,12 @@ Si `OPENSTORYLINE_PEXELS_ENABLED=true`, el wrapper también exige la key y una
 revisión vigente de licencia antes de esos gates, pero no consume cuota ni
 descarga medios Pexels.
 
+Antes de cambiar schemas estrictos, reparación, entrega de candidatos técnicos
+o detalles de reintento, sigue el orden reversible de
+[`agentic-defect-repair-rollout.md`](agentic-defect-repair-rollout.md) y ejecuta
+`./bin/kamal-mvp rollout validate`. Ese validador es local: no llama proveedores
+ni modifica el despliegue.
+
 El primer rollout con PostgreSQL se prepara por etapas para que la base de
 datos y la copia verificable existan antes de arrancar la nueva aplicación:
 
@@ -371,6 +377,7 @@ OPENSTORYLINE_RENDER_FPS_CAP=60
 OPENSTORYLINE_RENDER_PROMOTION_MODE=report
 OPENSTORYLINE_COMPLETION_POLICY=strict
 OPENSTORYLINE_LIMITED_OUTPUT_PROMOTION_ENABLED=false
+OPENSTORYLINE_DELIVERY_POLICY=qa_enforced
 OPENSTORYLINE_RETRY_UX_ENABLED=false
 OPENSTORYLINE_CHECKPOINTS_ENABLED=false
 OPENSTORYLINE_BASELINE_FALLBACKS_ENABLED=false
@@ -385,19 +392,22 @@ orden: render agentivo source-only, imágenes generadas y, finalmente, Pexels.
 Verifica `/up`, `/health`, recuperación de cola, descargas, auditoría, retención,
 visibilidad del objetivo, sincronía, latencia y errores de proveedor después de
 cada cambio. `report` conserva la finalización mientras calibra los bloqueadores;
-`enforce` se activa sólo para el canary aprobado. Conserva `strict` durante la
-comparación inicial. Después, `baseline_guaranteed` junto con
-`OPENSTORYLINE_LIMITED_OUTPUT_PROMOTION_ENABLED=true` permite descargar salidas
-técnicamente válidas con limitaciones creativas declaradas; estructura, codec,
-audio, duración o evidencia técnica inválida siguen bloqueando. Activa
+`enforce` se activa sólo para el canary aprobado. Conserva `qa_enforced` durante
+la comparación inicial. Después,
+`OPENSTORYLINE_DELIVERY_POLICY=technical_pass_guaranteed` permite descargar
+salidas técnicamente válidas con limitaciones creativas declaradas, sin cambiar
+el veredicto bloqueado de la QA estricta; estructura, codec, audio, duración o
+evidencia técnica inválida siguen bloqueando. La combinación histórica
+`baseline_guaranteed` más promoción limitada se conserva sólo como
+compatibilidad. Activa
 `OPENSTORYLINE_RETRY_UX_ENABLED=true` por separado para mostrar reintento de
 defectos y prellenado de una versión mejorada.
 
 La capa de fiabilidad también se activa por etapas: primero checkpoints,
 después fallbacks deterministas y por último planificación con catálogo. Tras
 cada cambio, reinicia con la misma imagen, ejecuta un intento de la misma
-versión inmutable y revisa `audit outcomes`, `audit show` y `audit verify`.
-Activa `baseline_guaranteed` con promoción limitada sólo cuando el artefacto,
+versión inmutable y revisa `audit outcomes`, `audit defects`, `audit show` y
+`audit verify`. Activa `technical_pass_guaranteed` sólo cuando el artefacto,
 los subtítulos, la evidencia de frames y la decisión de promoción pasen; activa
 la UX de reintento en un reinicio separado. Este orden mantiene un kill switch
 independiente para catálogo, promoción, checkpoints y UI.
@@ -406,35 +416,53 @@ Sin autorización para desplegar o llamar proveedores, todos los flags permanece
 apagados. El rollback normal no requiere restaurar PostgreSQL: vuelve la UI a
 legacy, fija `OPENSTORYLINE_AGENTIC_EDITING_MODE=off`, desactiva assets/QA
 semántica, catálogo, promoción limitada, UX de reintento y lectura de
-checkpoints; luego usa `OPENSTORYLINE_COMPLETION_POLICY=strict`,
+checkpoints; luego usa `OPENSTORYLINE_DELIVERY_POLICY=qa_enforced`,
+`OPENSTORYLINE_COMPLETION_POLICY=strict`,
 `OPENSTORYLINE_RENDER_PROMOTION_MODE=off` y el perfil `legacy`, y
 ejecuta `./bin/kamal-mvp rollback VERSION_EXPLICITA` al release previo. Restaura la base
 sólo ante una migración incompatible revisada por separado; esta entrega no añade
 migraciones.
 
-## 8. Activa ComfyUI-FFMPEGA, si lo deseas
+## 8. Activa el servicio FFMPEGA determinista, si lo deseas
 
-El despliegue base ya incluye todos los componentes obligatorios. FFMPEGA es un
-servicio opcional separado: instala ComfyUI y
-<https://github.com/AEmotionStudio/ComfyUI-FFMPEGA> en el mismo VPS, hazlo
-escuchar en el puerto 8188 y dale acceso de lectura/escritura a
-`/var/lib/openstoryline/outputs`.
+El despliegue base ya incluye todos los componentes obligatorios. FFMPEGA corre
+como un sidecar opcional, privado y separado de la imagen web. El builder fija
+el código de <https://github.com/AEmotionStudio/ComfyUI-FFMPEGA> al commit
+`0cfe2db05df104f95c98cc45e11f129fa5ef5193`, instala sólo FFmpeg y el contrato
+Python necesario, y no instala Torch, Whisper, modelos ni la interfaz completa
+de ComfyUI. Primero construye, entrega y verifica el servicio:
 
-Después cambia:
+```bash
+./bin/kamal-mvp ffmpega deploy
+./bin/kamal-mvp ffmpega readiness
+```
+
+El contenedor corre sin root, sin puertos públicos, con filesystem raíz de sólo
+lectura, límites de CPU/memoria/procesos y acceso de lectura/escritura únicamente
+a `KAMAL_OUTPUTS_DIR`. Después cambia:
 
 ```dotenv
 OPENSTORYLINE_FFMPEGA_ENABLED=true
-FFMPEGA_URL=http://host.docker.internal:8188
+FFMPEGA_URL=http://openstoryline-mvp-ffmpega:8188
 FFMPEGA_REMOTE_OUTPUT_ROOT=/var/lib/openstoryline/outputs
 ```
 
-Y ejecuta `./bin/kamal-mvp deploy`. La configuración Kamal crea el alias
-`host.docker.internal` dentro del contenedor. El adaptador sólo permite una
-lista blanca de efectos FFmpeg deterministas, usa el modo manual sin LLM,
-prohíbe descargas de modelos y falla todo el trabajo si FFMPEGA falla.
+Y ejecuta `./bin/kamal-mvp deploy`. El release falla antes de Kamal cuando el
+sidecar no está saludable, el commit no coincide o las rutas compartidas no son
+exactas. El adaptador y el servicio validan la misma lista blanca tipada, usan
+modo manual sin LLM y prohíben descargas de modelos. Si planificación,
+ejecución, descubrimiento o validación de FFMPEGA falla, el trabajo conserva el
+primer render nativo reproducible y registra la limitación exacta.
 
-En un VPS sin GPU esta ruta determinista puede correr en CPU. Los efectos que
-requieran modelos de ComfyUI quedan fuera de este MVP remoto-only.
+En un VPS sin GPU esta ruta corre en CPU. Los efectos que requieran modelos de
+ComfyUI quedan fuera del MVP remoto-only. Para rollback usa, en orden:
+
+```bash
+# Primero desactiva OPENSTORYLINE_FFMPEGA_ENABLED y redeploya la aplicación.
+./bin/kamal-mvp ffmpega rollback
+# Si sólo necesitas detener el sidecar ya desactivado:
+./bin/kamal-mvp ffmpega stop
+```
 
 ## 9. Diagnóstico rápido
 

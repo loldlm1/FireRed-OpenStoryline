@@ -7,6 +7,7 @@ import asyncio
 import json
 import re
 
+from open_storyline.mvp.defects import retryable_for_code
 from open_storyline.mvp.observability import emit_event
 
 
@@ -50,23 +51,6 @@ PUBLIC_FIELDS = frozenset(
         *PUBLIC_NUMERIC_FIELDS,
     }
 )
-RETRYABLE_ERROR_CODES = frozenset(
-    {
-        "DATABASE_UNAVAILABLE",
-        "EDIT_PLAN_VISUAL_COVERAGE_INSUFFICIENT",
-        "JOB_STATE_UNAVAILABLE",
-        "NINEROUTER_REQUEST_FAILED",
-        "NINEROUTER_RATE_LIMITED",
-        "MISTRAL_STT_REQUEST_FAILED",
-        "MISTRAL_STT_RATE_LIMITED",
-        "PEXELS_SEARCH_FAILED",
-        "PEXELS_DOWNLOAD_FAILED",
-        "REMOTE_IMAGE_REQUEST_FAILED",
-        "RENDER_PROMOTION_BLOCKED",
-    }
-)
-
-
 def _error(code: str, message: str) -> RuntimeError:
     from open_storyline.mvp.jobs import JobStoreError
 
@@ -172,10 +156,7 @@ STAGES: dict[str, ActivityStage] = {
 
 
 def retryable_error(code: str | None) -> bool:
-    normalized = str(code or "").strip().upper()
-    return normalized in RETRYABLE_ERROR_CODES or normalized.endswith(
-        ("_TIMEOUT", "_RATE_LIMITED", "_UNAVAILABLE")
-    )
+    return retryable_for_code(code, legacy_suffix_compatibility=True)
 
 
 def normalize_activity(payload: Mapping[str, Any]) -> dict[str, Any]:

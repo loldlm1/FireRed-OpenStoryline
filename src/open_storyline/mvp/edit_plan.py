@@ -21,6 +21,10 @@ from open_storyline.mvp.prompts import EDIT_PLAN_PROMPT_VERSION, EDIT_PLAN_SYSTE
 from open_storyline.mvp.scene_boundaries import SceneBoundaryReport
 from open_storyline.mvp.shorts import ShortCandidate, ShortsPlan
 from open_storyline.mvp.visual_understanding import VisualUnderstanding
+from open_storyline.mvp.structured_outputs import (
+    EDIT_PLAN_REPAIR_SCHEMA,
+    EDIT_PLAN_SCHEMA,
+)
 
 
 EDIT_PLAN_VERSION = "edit_plan.v2"
@@ -560,7 +564,11 @@ def _valid_clip_plan_template(
     valid_tracks = [item for item in tracks if isinstance(item, dict) and item.get("id")]
     if valid_tracks:
         track = max(valid_tracks, key=lambda item: float(item.get("confidence") or 0))
-        focal_target = {"track_id": str(track["id"])}
+        focal_target = {
+            "region_id": None,
+            "track_id": str(track["id"]),
+            "semantic_role": None,
+        }
         evidence_ids.append(str(track["id"]))
     elif valid_regions:
         region = max(
@@ -570,15 +578,20 @@ def _valid_clip_plan_template(
                 float(item.get("confidence") or 0),
             ),
         )
-        focal_target = {"region_id": str(region["id"])}
+        focal_target = {
+            "region_id": str(region["id"]),
+            "track_id": None,
+            "semantic_role": None,
+        }
         evidence_ids.append(str(region["id"]))
     layout = {
         "mode": "crop" if focal_target else "fit",
+        "focal_target": focal_target,
         "fallback": "crop",
         "allow_full_frame_fallback": False,
+        "safe_margin_ratio": 0.08,
+        "max_zoom": 1.0,
     }
-    if focal_target:
-        layout["focal_target"] = focal_target
     catalog_defaults = _catalog_template(catalog_snapshot)
     return {
         "requested_capabilities": [
@@ -813,6 +826,15 @@ def _normalize_edit_plan_response(
             for decision in intent_decisions:
                 if isinstance(decision, dict) and decision.get("omission_reason") is None:
                     decision["omission_reason"] = ""
+        catalog_selection = clip.get("catalog_selection")
+        if isinstance(catalog_selection, dict):
+            for field in (
+                "style_profile_id",
+                "caption_treatment_id",
+                "color_treatment_id",
+            ):
+                if catalog_selection.get(field) is None:
+                    catalog_selection[field] = ""
         segments = clip.get("segments")
         if not isinstance(segments, list):
             continue
@@ -826,6 +848,8 @@ def _normalize_edit_plan_response(
             transition = segment.get("transition_in")
             if isinstance(transition, dict) and transition.get("kind") == "hard_cut":
                 transition["kind"] = "cut"
+            if isinstance(transition, dict) and transition.get("catalog_id") is None:
+                transition["catalog_id"] = ""
             layout = segment.get("layout")
             focal_target = layout.get("focal_target") if isinstance(layout, dict) else None
             if isinstance(focal_target, dict):
@@ -1203,6 +1227,137 @@ def validate_catalog_plan_context(
     return plan
 
 
+def merge_repaired_edit_plan_response(
+    value: Any,
+    *,
+    base_plan: EditPlan,
+    affected_clip_indexes: Iterable[int],
+    selected_clips: Sequence[ShortCandidate],
+    known_region_ids: Iterable[str],
+    known_track_ids: Iterable[str],
+    known_evidence_ids_by_clip: dict[int, Iterable[str]],
+    max_segments_per_clip: int,
+    max_overlays_per_clip: int,
+    max_assets_per_clip: int,
+    max_generated_assets_per_clip: int,
+    max_stock_assets_per_clip: int,
+    asset_policy: AssetPolicy,
+    stock_policy: AssetPolicy,
+    renderer_capabilities: Iterable[str],
+    catalog_snapshot: dict[str, Any] | None = None,
+    creative_intent: CreativeIntent | None = None,
+) -> EditPlan:
+    normalized = _normalize_edit_plan_response(value)
+    if not isinstance(normalized, dict) or not isinstance(normalized.get("clips"), list):
+        raise EditPlanError("EDIT_PLAN_INVALID", "repair response must contain clip plans")
+    affected = tuple(sorted({int(index) for index in affected_clip_indexes}))
+    returned_indexes = tuple(sorted({
+        int(clip.get("clip_index") or 0)
+        for clip in normalized["clips"]
+        if isinstance(clip, dict)
+    }))
+    if not affected or returned_indexes != affected or len(normalized["clips"]) != len(affected):
+        raise EditPlanError(
+            "EDIT_PLAN_CLIP_MISMATCH",
+            "repair response must replace exactly the affected clips",
+        )
+    replacements = {
+        int(clip["clip_index"]): clip
+        for clip in normalized["clips"]
+        if isinstance(clip, dict)
+    }
+    payload = base_plan.to_dict()
+    payload.update({
+        "planner_version": AGENTIC_PLANNER_VERSION,
+        "prompt_version": EDIT_PLAN_PROMPT_VERSION,
+        "degraded": False,
+        "degradation_reason": "",
+    })
+    payload["clips"] = [
+        replacements.get(int(clip["clip_index"]), clip)
+        for clip in payload["clips"]
+    ]
+    response_capabilities = normalized.get("requested_capabilities")
+    if not isinstance(response_capabilities, list):
+        raise EditPlanError(
+            "EDIT_PLAN_INVALID",
+            "repair response must declare requested capabilities",
+        )
+    payload["requested_capabilities"] = sorted({
+        *base_plan.requested_capabilities,
+        *(str(value) for value in response_capabilities),
+    })
+    candidate = validate_edit_plan(payload, source_duration_ms=base_plan.source_duration_ms)
+    candidate = candidate.model_copy(update={
+        "requested_capabilities": tuple(sorted(
+            set(candidate.requested_capabilities) | set(required_capabilities(candidate))
+        )),
+    })
+    candidate = validate_edit_plan_context(
+        candidate,
+        selected_clips=selected_clips,
+        known_region_ids=known_region_ids,
+        known_track_ids=known_track_ids,
+        known_evidence_ids_by_clip=known_evidence_ids_by_clip,
+        max_segments_per_clip=max_segments_per_clip,
+        max_overlays_per_clip=max_overlays_per_clip,
+        max_assets_per_clip=max_assets_per_clip,
+    )
+    candidate = validate_catalog_plan_context(candidate, catalog_snapshot)
+    generated_counts = {
+        clip.clip_index: sum(
+            asset.kind == "generated_image" for asset in clip.asset_requests
+        )
+        for clip in candidate.clips
+    }
+    stock_counts = {
+        clip.clip_index: sum(
+            asset.kind in {"stock_image", "stock_video"}
+            for asset in clip.asset_requests
+        )
+        for clip in candidate.clips
+    }
+    if asset_policy == "off" and any(generated_counts.values()):
+        raise EditPlanError(
+            "EDIT_PLAN_ASSET_POLICY_BLOCKED",
+            "repair requested generated images while that job policy is off",
+        )
+    if stock_policy == "off" and any(stock_counts.values()):
+        raise EditPlanError(
+            "EDIT_PLAN_STOCK_POLICY_BLOCKED",
+            "repair requested stock assets while that job policy is off",
+        )
+    if any(count > max_generated_assets_per_clip for count in generated_counts.values()):
+        raise EditPlanError(
+            "EDIT_PLAN_GENERATED_ASSET_BUDGET_EXCEEDED",
+            "repair exceeds the generated image budget",
+        )
+    if any(count > max_stock_assets_per_clip for count in stock_counts.values()):
+        raise EditPlanError(
+            "EDIT_PLAN_STOCK_ASSET_BUDGET_EXCEEDED",
+            "repair exceeds the stock asset budget",
+        )
+    available = {str(value) for value in renderer_capabilities}
+    unavailable = sorted(set(candidate.requested_capabilities) - available)
+    if unavailable:
+        raise EditPlanError(
+            "EDIT_PLAN_CAPABILITY_UNAVAILABLE",
+            "repair requested unavailable capabilities: " + ", ".join(unavailable),
+        )
+    if creative_intent is not None:
+        try:
+            validate_creative_intent_conformance(candidate, creative_intent)
+        except ValueError as exc:
+            raise EditPlanError(
+                "EDIT_PLAN_INTENT_MISMATCH",
+                _safe_text(str(exc), limit=1000),
+                evidence={
+                    "intent_conformance": creative_intent_conformance_evidence(exc),
+                },
+            ) from exc
+    return candidate
+
+
 def _clip_context(
     clip: ShortCandidate,
     *,
@@ -1268,9 +1423,18 @@ def _clip_context(
     }
 
 
+@dataclass(frozen=True)
+class DeferredEditPlanDefect:
+    code: str
+    clip_index: int
+    evidence: dict[str, Any]
+    invalid_candidate: dict[str, Any]
+
+
 class AgenticEditPlanner:
     def __init__(self, client: NineRouterClient) -> None:
         self.client = client
+        self.deferred_defects: tuple[DeferredEditPlanDefect, ...] = ()
 
     async def plan(
         self,
@@ -1295,7 +1459,10 @@ class AgenticEditPlanner:
         prior_attempt_quality_feedback: dict[str, Any] | None = None,
         catalog_snapshot: dict[str, Any] | None = None,
         renderer_capabilities: Iterable[str] = SUPPORTED_CAPABILITIES,
+        defer_registry_repair: bool = False,
     ) -> EditPlan:
+        self.deferred_defects = ()
+        deferred_defects: list[DeferredEditPlanDefect] = []
         available_capabilities = frozenset(str(value) for value in renderer_capabilities)
         if not available_capabilities or not available_capabilities <= SUPPORTED_CAPABILITIES:
             raise EditPlanError(
@@ -1397,7 +1564,7 @@ class AgenticEditPlanner:
 
         async def complete(**kwargs: Any) -> dict[str, Any]:
             try:
-                return await self.client.complete_json(**kwargs)
+                return await self.client.complete_structured(**kwargs)
             finally:
                 all_attempts.extend(tuple(getattr(self.client, "last_attempts", ())))
                 if hasattr(self.client, "last_attempts"):
@@ -1530,6 +1697,7 @@ class AgenticEditPlanner:
                 return clip_plan
 
             response = await complete(
+                schema_name=EDIT_PLAN_SCHEMA,
                 system_prompt=EDIT_PLAN_SYSTEM_PROMPT,
                 user_prompt=json.dumps(user_payload, ensure_ascii=False),
                 reasoning_effort=getattr(self.client, "reasoning_effort", "medium"),
@@ -1537,6 +1705,22 @@ class AgenticEditPlanner:
             try:
                 clip_plan = validate_response(response)
             except EditPlanError as initial_error:
+                if defer_registry_repair:
+                    deferred_defects.append(DeferredEditPlanDefect(
+                        code=initial_error.code,
+                        clip_index=clip_index,
+                        evidence=dict(initial_error.evidence),
+                        invalid_candidate=deepcopy(response),
+                    ))
+                    fallback = deepcopy(user_payload["valid_output_template"])
+                    fallback["clips"][0]["segments"][0]["reason"] = (
+                        "Use the strongest validated source evidence while the bounded "
+                        "job-level repair policy evaluates the invalid candidate."
+                    )
+                    clip_plan = validate_response(fallback, enforce_intent=False)
+                    planned_clips.extend(clip_plan.clips)
+                    requested_capabilities.update(clip_plan.requested_capabilities)
+                    continue
                 repair_payload = {
                     "repair_task": (
                         "Rewrite invalid_response using valid_output_template and "
@@ -1553,6 +1737,7 @@ class AgenticEditPlanner:
                     "invalid_response": response,
                 }
                 repaired = await complete(
+                    schema_name=EDIT_PLAN_REPAIR_SCHEMA,
                     system_prompt=EDIT_PLAN_SYSTEM_PROMPT,
                     user_prompt=json.dumps(repair_payload, ensure_ascii=False),
                     reasoning_effort=getattr(self.client, "reasoning_effort", "medium"),
@@ -1596,6 +1781,7 @@ class AgenticEditPlanner:
                 (catalog_snapshot or {}).get("manifest_sha256") or ""
             ),
         )
+        self.deferred_defects = tuple(deferred_defects)
         generated_assets = [
             asset
             for clip in plan.clips
@@ -1768,6 +1954,7 @@ class AgenticArtifactNames:
     render_quality_profile: str = "render_quality_profile.json"
     frame_quality_qa: str = "frame_quality_qa.json"
     render_promotion: str = "render_promotion.json"
+    repair_report: str = "repair_report.json"
     outcome_report: str = "outcome_report.json"
     render_qa: str = "render_qa.json"
     retention_rhythm_qa: str = "retention_rhythm_qa.json"

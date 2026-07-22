@@ -17,6 +17,7 @@ from open_storyline.mvp.edit_plan import (
     TransitionSpec,
 )
 from open_storyline.mvp.fallbacks import (
+    FallbackDirective,
     FallbackConfigurationError,
     baseline_fallbacks_enabled,
     compile_baseline_plan,
@@ -46,6 +47,47 @@ def plan_with_segment(segment: EditSegment, *, assets=()) -> EditPlan:
 
 
 class BaselineFallbackTests(unittest.TestCase):
+    def test_registered_reference_fallback_preserves_unaffected_operations(self):
+        segment = EditSegment(
+            id="speaker",
+            source_window=TimeWindow(start_ms=0, end_ms=4000),
+            timeline_window=TimeWindow(start_ms=0, end_ms=4000),
+            layout=LayoutSpec(
+                mode="crop",
+                focal_target=FocalTarget(region_id="missing-region"),
+            ),
+            overlays=(OverlaySpec(
+                id="title",
+                kind="text",
+                timeline_window=TimeWindow(start_ms=0, end_ms=1000),
+                text="Keep me",
+                opacity=0.8,
+                position="top",
+            ),),
+            evidence_ids=("missing-region",),
+            reason="Follow the visible speaker.",
+        )
+
+        result = compile_baseline_plan(
+            plan_with_segment(segment),
+            available_capabilities={
+                "fit", "hard_cut", "text_emphasis", "subtitles"
+            },
+            remaining_defects=(FallbackDirective(
+                code="REGION_REFERENCE_UNKNOWN",
+                clip_index=1,
+                segment_id="speaker",
+            ),),
+        )
+
+        repaired = result.plan.clips[0].segments[0]
+        self.assertEqual(repaired.layout.mode, "fit")
+        self.assertIsNone(repaired.layout.focal_target)
+        self.assertEqual(repaired.evidence_ids, ())
+        self.assertEqual(repaired.overlays, segment.overlays)
+        self.assertEqual(result.entries[-1].requested, "REGION_REFERENCE_UNKNOWN")
+        self.assertEqual(result.entries[-1].code, "VISUAL_REFRAME_FALLBACK")
+
     def test_flag_defaults_off_and_invalid_values_fail_closed(self):
         with patch.dict(os.environ, {}, clear=True):
             self.assertFalse(

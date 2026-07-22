@@ -3,6 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 import asyncio
+from hashlib import sha256
 import json
 import re
 
@@ -32,8 +33,10 @@ from open_storyline.mvp.edit_plan import (
     AgenticEditPlanner,
     AgenticArtifactNames,
     EditPlanError,
+    merge_repaired_edit_plan_response,
     resolve_agentic_server_mode,
 )
+from open_storyline.mvp.defects import DEFECT_REGISTRY_VERSION, defect_definition
 from open_storyline.mvp.ffmpega import (
     AGENTIC_FINISHING_SKILLS,
     DETERMINISTIC_SKILLS,
@@ -49,6 +52,7 @@ from open_storyline.mvp.frame_quality import (
 )
 from open_storyline.mvp.fallbacks import (
     FallbackEntry,
+    FallbackDirective,
     baseline_fallbacks_enabled,
     compile_baseline_plan,
     merge_fallback_entries,
@@ -70,7 +74,7 @@ from open_storyline.mvp.creative_qa import (
 )
 from open_storyline.mvp.jobs import JobStore
 from open_storyline.mvp.ninerouter import NineRouterClient, NineRouterError
-from open_storyline.mvp.observability import emit_event
+from open_storyline.mvp.observability import compact_repair_observability, emit_event
 from open_storyline.mvp.outcomes import build_completed_outcome_report
 from open_storyline.mvp.render import (
     AgenticShortRenderer,
@@ -82,9 +86,35 @@ from open_storyline.mvp.render import (
     render_settings_from_config,
 )
 from open_storyline.mvp.preflight import build_preflight
+from open_storyline.mvp.prompts import (
+    EDIT_PLAN_SYSTEM_PROMPT,
+    REPAIR_SYSTEM_PROMPT,
+    REPAIR_SYSTEM_PROMPT_VERSION,
+    VISUAL_UNDERSTANDING_SYSTEM_PROMPT,
+)
+from open_storyline.mvp.repair import (
+    REPAIR_BATCH_REQUEST_VERSION,
+    REPAIR_REPORT_VERSION,
+    RepairBudget,
+    RepairContractError,
+    RepairMode,
+    RepairStage,
+    TranscriptExcerpt,
+    bounded_repair_findings,
+    build_repair_batch,
+    build_repair_report,
+    compute_repair_resolution,
+    evaluate_repair_quality_floor,
+    make_repair_finding,
+    predict_plan_findings,
+    repair_findings_from_preflight,
+    repair_findings_from_visual_coverage,
+    resolve_repair_mode,
+)
 from open_storyline.mvp.promotion import (
     build_render_promotion_report,
     completion_policy,
+    delivery_policy,
     enforce_render_promotion,
     limited_output_promotion_enabled,
     render_promotion_mode,
@@ -104,9 +134,16 @@ from open_storyline.mvp.stock import PexelsClient, pexels_enabled, pexels_server
 from open_storyline.mvp.visual_coverage import build_clip_visual_coverage
 from open_storyline.mvp.visual_understanding import (
     VisualUnderstanding,
+    VisualUnderstandingError,
     VisualUnderstandingPlanner,
     merge_visual_understandings,
     scope_visual_understanding,
+    validate_visual_understanding,
+)
+from open_storyline.mvp.structured_outputs import (
+    EDIT_PLAN_REPAIR_SCHEMA,
+    VISUAL_UNDERSTANDING_SCHEMA,
+    structured_output,
 )
 from open_storyline.utils.remote_stt import (
     MISTRAL_STT_MODEL,
@@ -123,6 +160,8 @@ TRANSCRIPT_CHECKPOINT_VERSION = "transcript_checkpoint.v1"
 SCENE_CHECKPOINT_VERSION = "scene_checkpoint.v1"
 GLOBAL_ANALYSIS_CHECKPOINT_VERSION = "global_analysis_checkpoint.v1"
 CLIP_ANALYSIS_CHECKPOINT_VERSION = "clip_analysis_checkpoint.v1"
+VISUAL_REPAIR_CHECKPOINT_VERSION = "visual_repair_checkpoint.v1"
+PLAN_REPAIR_CHECKPOINT_VERSION = "plan_repair_checkpoint.v1"
 
 
 def _stt_result(payload: dict[str, Any]) -> STTResult:
@@ -593,6 +632,286 @@ class MVPJobProcessor:
         shorts_attempts: list[dict[str, Any]] = []
         edit_planner_attempts: list[dict[str, Any]] = []
         remote_client = NineRouterClient.from_config(self.config.ninerouter)
+        repair_mode = resolve_repair_mode() if agentic_requested else RepairMode.OFF
+        visual_repair_attempts_used = 0
+        repair_checkpoint_reports: dict[str, dict[str, Any]] = {}
+        repair_stage_records: dict[str, dict[str, Any]] = {}
+        predictive_repair_findings: tuple[Any, ...] = ()
+
+        async def persist_partial_repair_report() -> None:
+            if not agentic_requested:
+                return
+            report = build_repair_report(
+                mode=repair_mode,
+                stage_records=repair_stage_records.values(),
+                predictive_findings=predictive_repair_findings,
+                fallback_entries=(),
+                reused_stages=checkpoint_summary["reused_stages"],
+                recomputed_stages=checkpoint_summary["recomputed_stages"],
+            )
+            path = output_dir / names.repair_report
+            path.write_text(
+                json.dumps(report, ensure_ascii=False, indent=2),
+                encoding="utf-8",
+            )
+            await store.register_artifact(job_id, path, kind="repair_report")
+
+        async def registry_visual_repair_handler(
+            *,
+            invalid_response: dict[str, Any],
+            error: Any,
+            user_payload: dict[str, Any],
+            frame_manifest: FrameManifest,
+            scene_report: SceneBoundaryReport,
+        ) -> dict[str, Any]:
+            nonlocal visual_repair_attempts_used
+            clip_match = re.match(
+                r"clip-(\d{2})-",
+                frame_manifest.frames[0].id if frame_manifest.frames else "",
+            )
+            clip_index = int(clip_match.group(1)) if clip_match else 1
+            finding = make_repair_finding(
+                str(error.code),
+                clip_index=clip_index,
+                objective=True,
+                values={
+                    "observed": str(error.code),
+                    "count": len(invalid_response.get("regions") or ()),
+                },
+                source="visual_validator",
+            )
+            transcript_text = str(user_payload.get("transcript_context") or "")[:12_000]
+            excerpts = (
+                TranscriptExcerpt(
+                    clip_index=clip_index,
+                    start_ms=0,
+                    end_ms=frame_manifest.source_duration_ms,
+                    text=transcript_text,
+                ),
+            ) if transcript_text else ()
+            request, dispositions = build_repair_batch(
+                stage=RepairStage.VISUAL_UNDERSTANDING,
+                mode=repair_mode,
+                findings=(finding,),
+                budget=RepairBudget(
+                    visual_attempts_used=visual_repair_attempts_used,
+                ),
+                candidate_clips={clip_index: invalid_response},
+                available_capabilities=("visual_understanding",),
+                catalog_context={},
+                immutable_constraints={
+                    "source_duration_ms": frame_manifest.source_duration_ms,
+                    "frame_ids": [frame.id for frame in frame_manifest.frames],
+                    "scene_ids": [scene.id for scene in scene_report.scenes],
+                },
+                editing_prompt=str(user_payload.get("editing_context") or ""),
+                transcript_excerpts=excerpts,
+            )
+            report = compact_repair_observability(request.to_report_dict())
+            fingerprint = checkpoint_fingerprint({
+                "contract_version": VISUAL_REPAIR_CHECKPOINT_VERSION,
+                "source_sha256": source_hash,
+                "request_fingerprint": report["request_fingerprint"],
+                "registry_version": DEFECT_REGISTRY_VERSION,
+                "schema_fingerprint": structured_output(
+                    VISUAL_UNDERSTANDING_SCHEMA
+                ).fingerprint,
+                "repair_prompt_version": REPAIR_SYSTEM_PROMPT_VERSION,
+                "mode": repair_mode.value,
+            })
+            hit = await load_job_checkpoint(
+                job_id=job_id,
+                stage="visual_repair",
+                fingerprint=fingerprint,
+            )
+            if hit is not None:
+                repair_checkpoint_reports["visual_repair"] = compact_repair_observability(
+                    dict(hit.payload.get("report") or {})
+                )
+                if hit.payload.get("status") == "repaired":
+                    cached_visual = hit.payload.get("visual_understanding")
+                    if not isinstance(cached_visual, dict):
+                        hit = None
+                    if hit is not None:
+                        try:
+                            validated = validate_visual_understanding(
+                                cached_visual,
+                                frame_manifest=frame_manifest,
+                                scene_report=scene_report,
+                                model=remote_client.model,
+                            )
+                        except (TypeError, ValueError, VisualUnderstandingError):
+                            hit = None
+                        else:
+                            visual_repair_attempts_used = 1
+                            track_checkpoint("visual_repair", reused=True)
+                            repair_stage_records["visual_repair"] = {
+                                "stage": RepairStage.VISUAL_UNDERSTANDING.value,
+                                "status": "repaired",
+                                "request": repair_checkpoint_reports["visual_repair"],
+                                "dispositions": [
+                                    item.to_dict() for item in dispositions
+                                ],
+                                "resolution": compute_repair_resolution(
+                                    (finding.code,), ()
+                                ).to_dict(),
+                                "quality_floor": {
+                                    "accepted": True,
+                                    "violation_codes": [],
+                                },
+                                "checkpoint_reused": True,
+                            }
+                            remote_client.last_attempts = ()
+                            return validated.to_dict()
+                else:
+                    visual_repair_attempts_used = 1
+                    track_checkpoint("visual_repair", reused=True)
+                    cached_status = str(hit.payload.get("status") or "failed")
+                    repair_stage_records["visual_repair"] = {
+                        "stage": RepairStage.VISUAL_UNDERSTANDING.value,
+                        "status": (
+                            cached_status
+                            if cached_status in {"report_only", "failed", "rejected"}
+                            else "failed"
+                        ),
+                        "request": repair_checkpoint_reports["visual_repair"],
+                        "dispositions": [item.to_dict() for item in dispositions],
+                        "resolution": compute_repair_resolution(
+                            (finding.code,), (finding.code,)
+                        ).to_dict(),
+                        "quality_floor": {"accepted": False, "violation_codes": []},
+                        "checkpoint_reused": True,
+                    }
+                    await persist_partial_repair_report()
+                    raise error
+            track_checkpoint("visual_repair", reused=False)
+            visual_repair_attempts_used += 1
+            repair_checkpoint_reports["visual_repair"] = report
+            if repair_mode is RepairMode.REPORT:
+                await save_job_checkpoint(
+                    job_id=job_id,
+                    stage="visual_repair",
+                    contract_version=VISUAL_REPAIR_CHECKPOINT_VERSION,
+                    fingerprint=fingerprint,
+                    payload={"status": "report_only", "report": report},
+                    metadata={"mode": repair_mode.value, "code": str(error.code)},
+                )
+                repair_stage_records["visual_repair"] = {
+                    "stage": RepairStage.VISUAL_UNDERSTANDING.value,
+                    "status": "report_only",
+                    "request": report,
+                    "dispositions": [item.to_dict() for item in dispositions],
+                    "resolution": compute_repair_resolution(
+                        (finding.code,), (finding.code,)
+                    ).to_dict(),
+                    "quality_floor": {"accepted": False, "violation_codes": []},
+                    "checkpoint_reused": False,
+                }
+                await persist_partial_repair_report()
+                raise error
+            try:
+                repaired = await remote_client.complete_structured(
+                    schema_name=VISUAL_UNDERSTANDING_SCHEMA,
+                    system_prompt=REPAIR_SYSTEM_PROMPT,
+                    user_prompt=json.dumps(request.to_provider_dict(), ensure_ascii=False),
+                    image_data_urls=frame_manifest.image_data_urls,
+                )
+                validated = validate_visual_understanding(
+                    repaired,
+                    frame_manifest=frame_manifest,
+                    scene_report=scene_report,
+                    model=remote_client.model,
+                )
+            except (
+                NineRouterError,
+                RepairContractError,
+                VisualUnderstandingError,
+                ValueError,
+            ) as exc:
+                failed_attempts = [
+                    {**attempt.to_dict(), "category": "visual_repair"}
+                    for attempt in (
+                        tuple(getattr(exc, "attempts", ()))
+                        or tuple(getattr(remote_client, "last_attempts", ()))
+                    )
+                ]
+                visual_attempts.extend(failed_attempts)
+                await save_job_checkpoint(
+                    job_id=job_id,
+                    stage="visual_repair",
+                    contract_version=VISUAL_REPAIR_CHECKPOINT_VERSION,
+                    fingerprint=fingerprint,
+                    payload={
+                        "status": "failed",
+                        "report": report,
+                        "error_code": str(getattr(exc, "code", "VISUAL_RESPONSE_INVALID")),
+                    },
+                    metadata={"mode": repair_mode.value, "code": str(error.code)},
+                )
+                repair_stage_records["visual_repair"] = {
+                    "stage": RepairStage.VISUAL_UNDERSTANDING.value,
+                    "status": "failed",
+                    "request": report,
+                    "dispositions": [item.to_dict() for item in dispositions],
+                    "resolution": compute_repair_resolution(
+                        (finding.code,), (finding.code,)
+                    ).to_dict(),
+                    "quality_floor": {"accepted": False, "violation_codes": []},
+                    "attempts": failed_attempts,
+                    "checkpoint_reused": False,
+                }
+                await persist_partial_repair_report()
+                raise
+            await save_job_checkpoint(
+                job_id=job_id,
+                stage="visual_repair",
+                contract_version=VISUAL_REPAIR_CHECKPOINT_VERSION,
+                fingerprint=fingerprint,
+                payload={
+                    "status": "repaired",
+                    "report": report,
+                    "visual_understanding": validated.to_dict(),
+                },
+                metadata={"mode": repair_mode.value, "code": str(error.code)},
+            )
+            repair_stage_records["visual_repair"] = {
+                "stage": RepairStage.VISUAL_UNDERSTANDING.value,
+                "status": "repaired",
+                "request": report,
+                "dispositions": [item.to_dict() for item in dispositions],
+                "resolution": compute_repair_resolution(
+                    (finding.code,), ()
+                ).to_dict(),
+                "quality_floor": {"accepted": True, "violation_codes": []},
+                "checkpoint_reused": False,
+            }
+            return validated.to_dict()
+
+        visual_planner = VisualUnderstandingPlanner(remote_client)
+        visual_planner.registry_repair_handler = (
+            registry_visual_repair_handler
+            if repair_mode in {RepairMode.REPORT, RepairMode.ENFORCE}
+            else None
+        )
+        visual_planner.legacy_repair_enabled = repair_mode is RepairMode.OFF
+
+        def classified_visual_attempts() -> list[dict[str, Any]]:
+            attempts = tuple(getattr(remote_client, "last_attempts", ()))
+            categories = tuple(
+                getattr(visual_planner, "last_attempt_categories", ())
+            )
+            return [
+                {
+                    **attempt.to_dict(),
+                    "category": (
+                        categories[index]
+                        if index < len(categories)
+                        else "initial_generation"
+                    ),
+                }
+                for index, attempt in enumerate(attempts)
+            ]
+
         plan: ShortsPlan | None = None
         frames: tuple[str, ...] | list[str] = ()
         global_analysis_fingerprint = ""
@@ -751,18 +1070,13 @@ class MVPJobProcessor:
                     sampled_frames=len(frame_manifest.frames),
                 )
                 await activity.stage(job_id, "remote_visual_understanding")
-                global_visual_understanding = await VisualUnderstandingPlanner(
-                    remote_client
-                ).plan(
+                global_visual_understanding = await visual_planner.plan(
                     frame_manifest=frame_manifest,
                     scene_report=scene_report,
                     editing_prompt=state["prompt"],
                     transcript_text=transcript.text,
                 )
-                visual_attempts = [
-                    attempt.to_dict()
-                    for attempt in getattr(remote_client, "last_attempts", ())
-                ]
+                visual_attempts = classified_visual_attempts()
                 await activity.emit_safely(
                     job_id,
                     stage="remote_visual_understanding",
@@ -881,7 +1195,7 @@ class MVPJobProcessor:
                         id_prefix=f"clip-{clip_index:02d}-",
                         focus_windows=(focus_windows_by_clip or {}).get(clip_index, ()),
                     )
-                    local_understanding = await VisualUnderstandingPlanner(remote_client).plan(
+                    local_understanding = await visual_planner.plan(
                         frame_manifest=local_manifest,
                         scene_report=scene_report,
                         editing_prompt=state["prompt"],
@@ -898,10 +1212,7 @@ class MVPJobProcessor:
                         local_understanding,
                         clip_index=clip_index,
                     )
-                    visual_attempts.extend(
-                        attempt.to_dict()
-                        for attempt in getattr(remote_client, "last_attempts", ())
-                    )
+                    visual_attempts.extend(classified_visual_attempts())
 
             clip_analysis_fingerprint = checkpoint_fingerprint({
                 "contract_version": CLIP_ANALYSIS_CHECKPOINT_VERSION,
@@ -1050,10 +1361,11 @@ class MVPJobProcessor:
             )
 
             await activity.stage(job_id, "planning_agentic_edit")
+            edit_planner = AgenticEditPlanner(remote_client)
             async def plan_agentic_edit(
                 visual_coverage_feedback: dict[str, Any] | None = None,
             ):
-                return await AgenticEditPlanner(remote_client).plan(
+                return await edit_planner.plan(
                     editing_prompt=state["prompt"],
                     shorts_plan=plan,
                     shorts_plan_artifact=shorts_plan_artifact,
@@ -1077,9 +1389,17 @@ class MVPJobProcessor:
                     prior_attempt_quality_feedback=prior_quality_feedback,
                     catalog_snapshot=catalog_snapshot,
                     renderer_capabilities=REFRAME_RENDER_CAPABILITIES,
+                    defer_registry_repair=repair_mode in {
+                        RepairMode.REPORT,
+                        RepairMode.ENFORCE,
+                    },
                 )
 
             edit_plan = await plan_agentic_edit()
+            edit_planner_attempts = [
+                {**attempt.to_dict(), "category": "initial_generation"}
+                for attempt in getattr(remote_client, "last_attempts", ())
+            ]
             visual_coverage = build_clip_visual_coverage(
                 edit_plan,
                 visual=visual_understanding,
@@ -1142,9 +1462,10 @@ class MVPJobProcessor:
                     shorts_plan_path,
                     kind="shorts_plan",
                 )
-                edit_plan = await plan_agentic_edit(
-                    visual_coverage.compact_feedback(),
-                )
+                if repair_mode is RepairMode.OFF:
+                    edit_plan = await plan_agentic_edit(
+                        visual_coverage.compact_feedback(),
+                    )
                 visual_coverage = build_clip_visual_coverage(
                     edit_plan,
                     visual=visual_understanding,
@@ -1181,6 +1502,511 @@ class MVPJobProcessor:
                         prior_attempt_id if clip_hit is not None else None
                     ),
                 )
+            unresolved_repair_findings = ()
+            if repair_mode in {RepairMode.REPORT, RepairMode.ENFORCE}:
+                known_evidence_ids_by_clip = {
+                    int(clip["clip_index"]): clip["evidence_ids"]
+                    for clip in shorts_plan_artifact["clips"]
+                }
+
+                def plan_objective_findings(candidate: Any, coverage: Any):
+                    nonlocal predictive_repair_findings
+                    candidate_assets = {
+                        asset.id
+                        for clip in candidate.clips
+                        for asset in clip.asset_requests
+                    }
+                    candidate_preflight = build_preflight(
+                        candidate,
+                        available_capabilities=REFRAME_RENDER_CAPABILITIES,
+                        asset_policy=effective_asset_policy,
+                        stock_policy=effective_stock_policy,
+                        pending_asset_ids=(
+                            candidate_assets
+                            if (
+                                effective_asset_policy in {"auto", "required"}
+                                or effective_stock_policy in {"auto", "required"}
+                            )
+                            else set()
+                        ),
+                        known_region_ids=(
+                            region.id for region in visual_understanding.regions
+                        ),
+                        known_track_ids=(
+                            track.id for track in visual_understanding.tracks
+                        ),
+                        known_evidence_ids_by_clip=known_evidence_ids_by_clip,
+                        visual_coverage=coverage,
+                        max_segments_per_clip=agentic_config.max_segments_per_clip,
+                        max_overlays_per_clip=agentic_config.max_overlays_per_clip,
+                        max_assets_per_clip=agentic_config.max_assets_per_clip,
+                    )
+                    predictions = predict_plan_findings(
+                        candidate,
+                        source_aspect_ratios={
+                            clip.clip_index: media.width / max(1, media.height)
+                            for clip in candidate.clips
+                        },
+                    )
+                    if not predictive_repair_findings:
+                        predictive_repair_findings = tuple(predictions)
+                    findings = [
+                        *repair_findings_from_preflight(candidate_preflight),
+                        *repair_findings_from_visual_coverage(coverage),
+                        *(
+                            item.to_repair_finding()
+                            for item in predictions
+                        ),
+                    ]
+                    try:
+                        validate_creative_intent_conformance(candidate, creative_intent)
+                    except ValueError:
+                        findings.append(make_repair_finding(
+                            "EDIT_PLAN_INTENT_MISMATCH",
+                            clip_index=1,
+                            objective=True,
+                            values={"observed": "intent_mismatch"},
+                            source="creative_intent",
+                        ))
+                    return candidate_preflight, findings
+
+                _, repair_findings = plan_objective_findings(
+                    edit_plan,
+                    visual_coverage,
+                )
+                deferred_by_clip = {
+                    defect.clip_index: defect
+                    for defect in edit_planner.deferred_defects
+                }
+                for defect in edit_planner.deferred_defects:
+                    issue_count = int(
+                        (defect.evidence.get("validation") or {}).get("issue_count")
+                        or 0
+                    )
+                    repair_findings.append(make_repair_finding(
+                        defect.code,
+                        clip_index=defect.clip_index,
+                        objective=True,
+                        values={
+                            "observed": defect.code,
+                            "count": issue_count,
+                        },
+                        source="edit_plan_validator",
+                    ))
+                selected_findings, overflow_findings = bounded_repair_findings(
+                    repair_findings
+                )
+                plan_original_codes = tuple(sorted({
+                    finding.code
+                    for finding in selected_findings
+                    if finding.objective
+                }))
+                plan_stage_status = "not_triggered"
+                plan_quality_floor: dict[str, Any] = {
+                    "accepted": False,
+                    "violation_codes": [],
+                }
+                plan_checkpoint_reused = False
+                unresolved_repair_findings = overflow_findings
+                candidate_clips = {}
+                for clip in edit_plan.clips:
+                    candidate = clip.model_dump(mode="json")
+                    deferred = deferred_by_clip.get(clip.clip_index)
+                    if deferred is not None:
+                        candidate["invalid_candidate"] = deferred.invalid_candidate
+                    candidate_clips[clip.clip_index] = candidate
+                excerpts = []
+                for clip_index, selected_clip in enumerate(plan.clips, start=1):
+                    text = " ".join(
+                        str(segment.get("text") or "").strip()
+                        for segment in transcript.segments
+                        if int(segment.get("end") or 0) > selected_clip.start_ms
+                        and int(segment.get("start") or 0) < selected_clip.end_ms
+                    )[:1_500]
+                    if text:
+                        excerpts.append(TranscriptExcerpt(
+                            clip_index=clip_index,
+                            start_ms=selected_clip.start_ms,
+                            end_ms=selected_clip.end_ms,
+                            text=text,
+                        ))
+                try:
+                    repair_request, repair_dispositions = build_repair_batch(
+                        stage=RepairStage.PLAN_REPAIR,
+                        mode=repair_mode,
+                        findings=selected_findings,
+                        budget=RepairBudget(),
+                        candidate_clips=candidate_clips,
+                        available_capabilities=REFRAME_RENDER_CAPABILITIES,
+                        catalog_context=catalog_snapshot or {},
+                        immutable_constraints={
+                            "source_duration_ms": media.duration_ms,
+                            "selected_source_windows": [
+                                {
+                                    "clip_index": index,
+                                    "start_ms": selected_clip.start_ms,
+                                    "end_ms": selected_clip.end_ms,
+                                }
+                                for index, selected_clip in enumerate(plan.clips, start=1)
+                            ],
+                            "max_segments_per_clip": agentic_config.max_segments_per_clip,
+                            "max_overlays_per_clip": agentic_config.max_overlays_per_clip,
+                            "max_assets_per_clip": agentic_config.max_assets_per_clip,
+                            "max_generated_assets_per_clip": effective_generated_asset_cap,
+                            "max_stock_assets_per_clip": effective_stock_asset_cap,
+                            "asset_policy": effective_asset_policy,
+                            "stock_policy": effective_stock_policy,
+                            "subtitles_required": True,
+                        },
+                        editing_prompt=state["prompt"],
+                        transcript_excerpts=tuple(excerpts),
+                    )
+                except RepairContractError as exc:
+                    if exc.code != "REPAIR_NOT_ELIGIBLE":
+                        raise
+                else:
+                    repair_report = compact_repair_observability(
+                        repair_request.to_report_dict()
+                    )
+                    repair_checkpoint_reports["plan_repair"] = repair_report
+                    plan_repair_fingerprint = checkpoint_fingerprint({
+                        "contract_version": PLAN_REPAIR_CHECKPOINT_VERSION,
+                        "source_sha256": source_hash,
+                        "request_fingerprint": repair_report["request_fingerprint"],
+                        "registry_version": DEFECT_REGISTRY_VERSION,
+                        "schema_fingerprint": structured_output(
+                            EDIT_PLAN_REPAIR_SCHEMA
+                        ).fingerprint,
+                        "repair_prompt_version": REPAIR_SYSTEM_PROMPT_VERSION,
+                        "catalog_version": edit_plan.catalog_version,
+                        "catalog_manifest_sha256": edit_plan.catalog_manifest_sha256,
+                        "renderer_capabilities": sorted(REFRAME_RENDER_CAPABILITIES),
+                        "mode": repair_mode.value,
+                    })
+                    affected_clip_indexes = tuple(
+                        repair_report["affected_clip_ids"]
+                    )
+
+                    def validate_repaired_response(value: Any):
+                        return merge_repaired_edit_plan_response(
+                            value,
+                            base_plan=edit_plan,
+                            affected_clip_indexes=affected_clip_indexes,
+                            selected_clips=plan.clips,
+                            known_region_ids=(
+                                region.id for region in visual_understanding.regions
+                            ),
+                            known_track_ids=(
+                                track.id for track in visual_understanding.tracks
+                            ),
+                            known_evidence_ids_by_clip=known_evidence_ids_by_clip,
+                            max_segments_per_clip=agentic_config.max_segments_per_clip,
+                            max_overlays_per_clip=agentic_config.max_overlays_per_clip,
+                            max_assets_per_clip=agentic_config.max_assets_per_clip,
+                            max_generated_assets_per_clip=effective_generated_asset_cap,
+                            max_stock_assets_per_clip=effective_stock_asset_cap,
+                            asset_policy=effective_asset_policy,
+                            stock_policy=effective_stock_policy,
+                            renderer_capabilities=REFRAME_RENDER_CAPABILITIES,
+                            catalog_snapshot=catalog_snapshot,
+                            creative_intent=creative_intent,
+                        )
+
+                    repair_hit = await load_job_checkpoint(
+                        job_id=job_id,
+                        stage="plan_repair",
+                        fingerprint=plan_repair_fingerprint,
+                    )
+                    repaired_plan = None
+                    if repair_hit is not None:
+                        repair_checkpoint_reports["plan_repair"] = (
+                            compact_repair_observability(
+                                dict(repair_hit.payload.get("report") or {})
+                            )
+                        )
+                        if repair_hit.payload.get("status") == "repaired":
+                            try:
+                                cached_plan = repair_hit.payload["edit_plan"]
+                                repaired_plan = validate_repaired_response({
+                                    "requested_capabilities": cached_plan[
+                                        "requested_capabilities"
+                                    ],
+                                    "clips": [
+                                        clip
+                                        for clip in cached_plan["clips"]
+                                        if int(clip["clip_index"])
+                                        in affected_clip_indexes
+                                    ],
+                                })
+                            except (KeyError, TypeError, ValueError, EditPlanError):
+                                repair_hit = None
+                                repaired_plan = None
+                                repair_checkpoint_reports["plan_repair"] = repair_report
+                        if repair_hit is not None:
+                            track_checkpoint("plan_repair", reused=True)
+                            plan_checkpoint_reused = True
+                            plan_stage_status = str(
+                                repair_hit.payload.get("status") or "failed"
+                            )
+                            cached_quality = repair_hit.payload.get("quality")
+                            if isinstance(cached_quality, dict):
+                                plan_quality_floor = cached_quality
+                    if repair_hit is None:
+                        track_checkpoint("plan_repair", reused=False)
+                    if repair_hit is None and repair_mode is RepairMode.REPORT:
+                        plan_stage_status = "report_only"
+                        unresolved_repair_findings = tuple(
+                            finding
+                            for finding in selected_findings
+                            if finding.objective
+                        ) + overflow_findings
+                        await save_job_checkpoint(
+                            job_id=job_id,
+                            stage="plan_repair",
+                            contract_version=PLAN_REPAIR_CHECKPOINT_VERSION,
+                            fingerprint=plan_repair_fingerprint,
+                            payload={
+                                "status": "report_only",
+                                "report": repair_report,
+                                "dispositions": [
+                                    item.to_dict() for item in repair_dispositions
+                                ],
+                            },
+                            metadata={"mode": repair_mode.value},
+                        )
+                    elif repair_hit is None:
+                        repair_call_attempts: list[dict[str, Any]] = []
+                        try:
+                            repaired_response = await remote_client.complete_structured(
+                                schema_name=EDIT_PLAN_REPAIR_SCHEMA,
+                                system_prompt=REPAIR_SYSTEM_PROMPT,
+                                user_prompt=json.dumps(
+                                    repair_request.to_provider_dict(),
+                                    ensure_ascii=False,
+                                ),
+                                reasoning_effort=getattr(
+                                    remote_client,
+                                    "reasoning_effort",
+                                    "medium",
+                                ),
+                            )
+                            repair_call_attempts = [
+                                {
+                                    **attempt.to_dict(),
+                                    "category": "plan_repair",
+                                }
+                                for attempt in getattr(
+                                    remote_client,
+                                    "last_attempts",
+                                    (),
+                                )
+                            ]
+                            repaired_plan = validate_repaired_response(
+                                repaired_response
+                            )
+                            repaired_coverage = build_clip_visual_coverage(
+                                repaired_plan,
+                                visual=visual_understanding,
+                                clip_frame_manifests=clip_frame_manifests,
+                                min_observations=agentic_config.crop_coverage_min_observations,
+                                min_temporal_coverage_ratio=agentic_config.crop_coverage_min_ratio,
+                                max_observation_gap_ms=agentic_config.crop_coverage_max_gap_ms,
+                                repair_attempted=True,
+                                initial_blocker_codes=visual_coverage.blocker_codes,
+                            )
+                            _, repaired_findings = plan_objective_findings(
+                                repaired_plan,
+                                repaired_coverage,
+                            )
+                            repaired_objective_codes = {
+                                finding.code
+                                for finding in repaired_findings
+                                if finding.objective
+                            }
+                            original_objective_codes = {
+                                finding.code
+                                for finding in selected_findings
+                                if finding.objective
+                                and any(
+                                    disposition.code == finding.code
+                                    and disposition.eligible
+                                    for disposition in repair_dispositions
+                                )
+                            }
+                            affected_operation_ids = set()
+                            allow_all_operations = set()
+                            for finding in selected_findings:
+                                if not finding.objective or finding.clip_index is None:
+                                    continue
+                                operation_ids = {
+                                    str(record.values.get(key))
+                                    for record in finding.evidence
+                                    for key in ("operation_id", "segment_id")
+                                    if record.values.get(key)
+                                }
+                                if operation_ids:
+                                    affected_operation_ids.update(operation_ids)
+                                else:
+                                    allow_all_operations.add(finding.clip_index)
+                            for clip in edit_plan.clips:
+                                if clip.clip_index in allow_all_operations:
+                                    affected_operation_ids.update(
+                                        segment.id for segment in clip.segments
+                                    )
+                                    affected_operation_ids.update(
+                                        overlay.id
+                                        for segment in clip.segments
+                                        for overlay in segment.overlays
+                                    )
+                                    affected_operation_ids.update(
+                                        asset.id for asset in clip.asset_requests
+                                    )
+                            quality = evaluate_repair_quality_floor(
+                                edit_plan,
+                                repaired_plan,
+                                original_codes=original_objective_codes,
+                                repaired_codes=repaired_objective_codes,
+                                available_capabilities=REFRAME_RENDER_CAPABILITIES,
+                                affected_clip_indexes=affected_clip_indexes,
+                                affected_operation_ids=affected_operation_ids,
+                                allow_catalog_change_clip_indexes={
+                                    finding.clip_index
+                                    for finding in selected_findings
+                                    if "CATALOG" in finding.code
+                                    and finding.clip_index is not None
+                                },
+                            )
+                            if quality.accepted:
+                                edit_plan = repaired_plan
+                                visual_coverage = repaired_coverage
+                                unresolved_repair_findings = tuple(
+                                    finding
+                                    for finding in repaired_findings
+                                    if finding.objective
+                                ) + overflow_findings
+                                repair_status = "repaired"
+                            else:
+                                repaired_plan = None
+                                unresolved_repair_findings = tuple(
+                                    finding
+                                    for finding in selected_findings
+                                    if finding.objective
+                                ) + overflow_findings
+                                repair_status = "rejected"
+                            plan_stage_status = repair_status
+                            plan_quality_floor = quality.to_dict()
+                            await save_job_checkpoint(
+                                job_id=job_id,
+                                stage="plan_repair",
+                                contract_version=PLAN_REPAIR_CHECKPOINT_VERSION,
+                                fingerprint=plan_repair_fingerprint,
+                                payload={
+                                    "status": repair_status,
+                                    "report": repair_report,
+                                    "quality": quality.to_dict(),
+                                    **(
+                                        {"edit_plan": edit_plan.to_dict()}
+                                        if repair_status == "repaired"
+                                        else {}
+                                    ),
+                                },
+                                metadata={"mode": repair_mode.value},
+                            )
+                            edit_planner_attempts.extend(repair_call_attempts)
+                        except (
+                            EditPlanError,
+                            NineRouterError,
+                            RepairContractError,
+                            ValueError,
+                        ) as exc:
+                            failed_attempts = [
+                                {**attempt.to_dict(), "category": "plan_repair"}
+                                for attempt in tuple(getattr(exc, "attempts", ()))
+                            ]
+                            if not failed_attempts:
+                                failed_attempts = repair_call_attempts
+                            edit_planner_attempts.extend(failed_attempts)
+                            plan_stage_status = "failed"
+                            unresolved_repair_findings = tuple(
+                                finding
+                                for finding in selected_findings
+                                if finding.objective
+                            ) + overflow_findings
+                            await save_job_checkpoint(
+                                job_id=job_id,
+                                stage="plan_repair",
+                                contract_version=PLAN_REPAIR_CHECKPOINT_VERSION,
+                                fingerprint=plan_repair_fingerprint,
+                                payload={
+                                    "status": "failed",
+                                    "report": repair_report,
+                                    "error_code": str(
+                                        getattr(exc, "code", "EDIT_PLAN_INVALID")
+                                    ),
+                                },
+                                metadata={"mode": repair_mode.value},
+                            )
+                    elif repaired_plan is not None:
+                        edit_plan = repaired_plan
+                        visual_coverage = build_clip_visual_coverage(
+                            edit_plan,
+                            visual=visual_understanding,
+                            clip_frame_manifests=clip_frame_manifests,
+                            min_observations=agentic_config.crop_coverage_min_observations,
+                            min_temporal_coverage_ratio=agentic_config.crop_coverage_min_ratio,
+                            max_observation_gap_ms=agentic_config.crop_coverage_max_gap_ms,
+                            repair_attempted=True,
+                            initial_blocker_codes=visual_coverage.blocker_codes,
+                        )
+                        _, repaired_findings = plan_objective_findings(
+                            edit_plan,
+                            visual_coverage,
+                        )
+                        unresolved_repair_findings = tuple(
+                            finding
+                            for finding in repaired_findings
+                            if finding.objective
+                        ) + overflow_findings
+                    else:
+                        unresolved_repair_findings = tuple(
+                            finding
+                            for finding in selected_findings
+                            if finding.objective
+                        ) + overflow_findings
+
+                    plan_resolution = compute_repair_resolution(
+                        plan_original_codes,
+                        (
+                            finding.code
+                            for finding in unresolved_repair_findings
+                            if finding.objective
+                        ),
+                    )
+                    repair_stage_records["plan_repair"] = {
+                        "stage": RepairStage.PLAN_REPAIR.value,
+                        "status": (
+                            plan_stage_status
+                            if plan_stage_status in {
+                                "report_only", "repaired", "rejected", "failed"
+                            }
+                            else "failed"
+                        ),
+                        "request": repair_checkpoint_reports["plan_repair"],
+                        "dispositions": [
+                            item.to_dict() for item in repair_dispositions
+                        ],
+                        "resolution": plan_resolution.to_dict(),
+                        "quality_floor": plan_quality_floor,
+                        "attempts": [
+                            item
+                            for item in edit_planner_attempts
+                            if item.get("category") == "plan_repair"
+                        ],
+                        "checkpoint_reused": plan_checkpoint_reused,
+                    }
+                    if plan_stage_status in {"report_only", "rejected", "failed"}:
+                        await persist_partial_repair_report()
+
             proposed_edit_plan = edit_plan
             if (
                 server_mode == "render"
@@ -1190,6 +2016,22 @@ class MVPJobProcessor:
                     edit_plan,
                     visual_coverage=visual_coverage,
                     available_capabilities=REFRAME_RENDER_CAPABILITIES,
+                    remaining_defects=tuple(
+                        FallbackDirective(
+                            code=finding.code,
+                            clip_index=finding.clip_index,
+                            segment_id=next((
+                                str(record.values.get("segment_id"))
+                                for record in finding.evidence
+                                if record.values.get("segment_id")
+                            ), ""),
+                        )
+                        for finding in unresolved_repair_findings
+                        if finding.objective
+                    ),
+                    max_segments_per_clip=agentic_config.max_segments_per_clip,
+                    max_overlays_per_clip=agentic_config.max_overlays_per_clip,
+                    max_assets_per_clip=agentic_config.max_assets_per_clip,
                 )
                 edit_plan = compilation.plan
                 fallback_entries = merge_fallback_entries(
@@ -1247,10 +2089,6 @@ class MVPJobProcessor:
                             reason="The proposed plan did not fully satisfy the creative intent contract.",
                         ),),
                     )
-            edit_planner_attempts = [
-                attempt.to_dict()
-                for attempt in getattr(remote_client, "last_attempts", ())
-            ]
             await activity.emit_safely(
                 job_id,
                 stage="planning_agentic_edit",
@@ -1849,8 +2687,6 @@ class MVPJobProcessor:
                     ),
                 )
             except (FFMPEGAError, NineRouterError) as exc:
-                if not fallback_enabled:
-                    raise
                 effects_plan = None
                 fallback_entries = merge_fallback_entries(
                     fallback_entries,
@@ -1895,8 +2731,6 @@ class MVPJobProcessor:
                         plan=effects_plan,
                     )
                 except FFMPEGAError as exc:
-                    if not fallback_enabled:
-                        raise
                     fallback_entries = merge_fallback_entries(
                         fallback_entries,
                         (FallbackEntry(
@@ -1932,6 +2766,13 @@ class MVPJobProcessor:
 
         render_qa_report: dict[str, Any] | None = None
         creative_conformance_report: dict[str, Any] | None = None
+        semantic_review_report: dict[str, Any] = {
+            "status": "disabled",
+            "provider_calls": 0,
+            "frame_count": 0,
+            "observations": [],
+            "attempts": [],
+        }
         promotion_report: dict[str, Any] | None = None
         if agentic_requested and server_mode == "render":
             qa_manifest: dict[str, Any] = {"enabled": False, "status": "disabled"}
@@ -1975,6 +2816,14 @@ class MVPJobProcessor:
                     }
                     render_qa_report = qa_artifacts.render_qa
                     creative_conformance_report = qa_artifacts.conformance
+                    semantic_review_report = (
+                        qa_artifacts.conformance.get("semantic_review")
+                        if isinstance(
+                            qa_artifacts.conformance.get("semantic_review"),
+                            dict,
+                        )
+                        else semantic_review_report
+                    )
                     await activity.emit_safely(
                         job_id,
                         stage="post_render_qa",
@@ -2002,6 +2851,14 @@ class MVPJobProcessor:
                     "enabled": True,
                     "status": "unavailable",
                     "error_code": error_code,
+                }
+                semantic_review_report = {
+                    "status": "unavailable",
+                    "provider_calls": 0,
+                    "frame_count": 0,
+                    "error_code": error_code,
+                    "observations": [],
+                    "attempts": [],
                 }
                 await activity.emit_safely(
                     job_id,
@@ -2070,6 +2927,7 @@ class MVPJobProcessor:
                 mode=promotion_mode,
                 policy=completion_policy(self.config.agentic_editing),
                 limited_output_enabled=limited_output_promotion_enabled(),
+                delivery=delivery_policy(self.config.agentic_editing),
                 frame_quality=frame_quality_report,
                 render_qa=render_qa_report,
                 creative_conformance=creative_conformance_report,
@@ -2148,6 +3006,42 @@ class MVPJobProcessor:
             )
             agentic_manifest["fallbacks"] = fallback_ledger["summary"]
 
+        repair_report = None
+        if agentic_requested:
+            visual_stage = repair_stage_records.get("visual_repair")
+            if visual_stage is not None:
+                visual_stage["attempts"] = [
+                    item
+                    for item in visual_attempts
+                    if item.get("category") == "visual_repair"
+                ]
+            plan_stage = repair_stage_records.get("plan_repair")
+            if plan_stage is not None:
+                plan_stage["attempts"] = [
+                    item
+                    for item in edit_planner_attempts
+                    if item.get("category") == "plan_repair"
+                ]
+            repair_report = build_repair_report(
+                mode=repair_mode,
+                stage_records=repair_stage_records.values(),
+                predictive_findings=predictive_repair_findings,
+                fallback_entries=fallback_entries,
+                reused_stages=checkpoint_summary["reused_stages"],
+                recomputed_stages=checkpoint_summary["recomputed_stages"],
+            )
+            repair_report_path = output_dir / names.repair_report
+            repair_report_path.write_text(
+                json.dumps(repair_report, ensure_ascii=False, indent=2),
+                encoding="utf-8",
+            )
+            await store.register_artifact(
+                job_id,
+                repair_report_path,
+                kind="repair_report",
+            )
+            agentic_manifest["repair_report"] = names.repair_report
+
         outcome_report = build_completed_outcome_report(
             outputs=final_outputs,
             fallback_entries=fallback_entries,
@@ -2173,6 +3067,49 @@ class MVPJobProcessor:
                 "retry_reason_codes",
                 (),
             ),
+            repair_report=repair_report,
+            semantic_review=semantic_review_report,
+            rollout_attribution={
+                "model": getattr(remote_client, "model", "unknown"),
+                "reasoning_effort": getattr(
+                    remote_client,
+                    "reasoning_effort",
+                    "unknown",
+                ),
+                "structured_output_mode": getattr(
+                    remote_client,
+                    "structured_output_mode",
+                    "json_object",
+                ),
+                "structured_output_boundaries": sorted(
+                    getattr(remote_client, "structured_output_boundaries", ())
+                ),
+                "repair_mode": repair_mode.value,
+                "delivery_policy": (promotion_report or {}).get(
+                    "delivery_policy",
+                    "qa_enforced",
+                ),
+                "catalog_version": (
+                    creative_catalog.version
+                    if creative_catalog is not None
+                    else "unavailable"
+                ),
+                "renderer_profile": render_settings.quality_profile,
+                "schema_hashes": [
+                    structured_output(name).fingerprint
+                    for name in sorted(
+                        getattr(remote_client, "structured_output_boundaries", ())
+                    )
+                ],
+                "prompt_hashes": [
+                    sha256(prompt.encode("utf-8")).hexdigest()
+                    for prompt in (
+                        EDIT_PLAN_SYSTEM_PROMPT,
+                        VISUAL_UNDERSTANDING_SYSTEM_PROMPT,
+                        REPAIR_SYSTEM_PROMPT,
+                    )
+                ],
+            },
         )
         outcome_report_path = output_dir / names.outcome_report
         outcome_report_path.write_text(

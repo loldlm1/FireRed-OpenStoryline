@@ -11,6 +11,34 @@ import yaml
 ROOT = Path(__file__).resolve().parents[1]
 
 
+def validate_rollout_flags(**overrides: str) -> subprocess.CompletedProcess[str]:
+    env = {
+        **os.environ,
+        "KAMAL_ENV_FILE": str(ROOT / ".missing-rollout-test-env"),
+        "OPENSTORYLINE_POSTGRES_ADMIN_MODE": "local",
+        "OPENSTORYLINE_STRUCTURED_OUTPUT_MODE": "json_object",
+        "OPENSTORYLINE_STRUCTURED_OUTPUT_BOUNDARIES": "",
+        "OPENSTORYLINE_STRUCTURED_OUTPUT_CAPABILITY_VERIFIED": "false",
+        "OPENSTORYLINE_LLM_DEFECT_REPAIR_MODE": "off",
+        "OPENSTORYLINE_AGENTIC_EDITING_MODE": "off",
+        "OPENSTORYLINE_SEMANTIC_QA_ENABLED": "false",
+        "OPENSTORYLINE_FFMPEGA_ENABLED": "false",
+        "OPENSTORYLINE_DELIVERY_POLICY": "qa_enforced",
+        "OPENSTORYLINE_RETRY_UX_ENABLED": "false",
+        "OPENSTORYLINE_RENDER_PROMOTION_MODE": "report",
+        "OPENSTORYLINE_CREATIVE_QA_ENABLED": "true",
+        "OPENSTORYLINE_CREATIVE_QA_STRICT": "true",
+        **overrides,
+    }
+    return subprocess.run(
+        [str(ROOT / "bin" / "kamal-mvp"), "rollout", "validate"],
+        env=env,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+
 def render_sample(*, domain: str = "", http_port: str = "80") -> str:
     text = (ROOT / "config" / "deploy.yml").read_text(encoding="utf-8")
     values = {
@@ -114,6 +142,24 @@ class KamalConfigTests(unittest.TestCase):
             config["env"]["clear"]["OPENSTORYLINE_IMAGE_MODELS"],
             "cx/gpt-5.5-image",
         )
+        self.assertEqual(
+            config["env"]["clear"]["OPENSTORYLINE_STRUCTURED_OUTPUT_MODE"],
+            "json_object",
+        )
+        self.assertEqual(
+            config["env"]["clear"]["OPENSTORYLINE_STRUCTURED_OUTPUT_BOUNDARIES"],
+            "",
+        )
+        self.assertIs(
+            config["env"]["clear"][
+                "OPENSTORYLINE_STRUCTURED_OUTPUT_CAPABILITY_VERIFIED"
+            ],
+            False,
+        )
+        self.assertEqual(
+            config["env"]["clear"]["OPENSTORYLINE_LLM_DEFECT_REPAIR_MODE"],
+            "off",
+        )
         self.assertNotIn("OPENSTORYLINE_STT_MODELS", config["env"]["clear"])
         self.assertEqual(config["env"]["clear"]["MISTRAL_STT_TIMEOUT"], 180)
         self.assertEqual(
@@ -182,12 +228,20 @@ class KamalConfigTests(unittest.TestCase):
             config["env"]["clear"]["OPENSTORYLINE_LIMITED_OUTPUT_PROMOTION_ENABLED"],
             False,
         )
+        self.assertEqual(
+            config["env"]["clear"]["OPENSTORYLINE_DELIVERY_POLICY"],
+            "qa_enforced",
+        )
         self.assertIs(
             config["env"]["clear"]["OPENSTORYLINE_RETRY_UX_ENABLED"],
             False,
         )
         self.assertIs(config["env"]["clear"]["OPENSTORYLINE_SEMANTIC_QA_ENABLED"], False)
         self.assertEqual(config["env"]["clear"]["OPENSTORYLINE_SEMANTIC_QA_MAX_FRAMES"], 4)
+        self.assertEqual(
+            config["env"]["clear"]["FFMPEGA_URL"],
+            "http://openstoryline-mvp-ffmpega:8188",
+        )
         self.assertEqual(
             config["env"]["clear"]["OPENSTORYLINE_RENDER_QUALITY_PROFILE"],
             "high",
@@ -216,6 +270,15 @@ class KamalConfigTests(unittest.TestCase):
         self.assertIn("MISTRAL_QA_STT_AUDIO=", kamal_env)
         self.assertIn("OPENSTORYLINE_SESSION_WORKSPACE_MODE=legacy", kamal_env)
         self.assertIn("OPENSTORYLINE_SESSION_WORKSPACE_MODE=legacy", local_env)
+        self.assertIn("OPENSTORYLINE_STRUCTURED_OUTPUT_MODE=json_object", kamal_env)
+        self.assertIn("OPENSTORYLINE_STRUCTURED_OUTPUT_MODE=json_object", local_env)
+        self.assertIn("OPENSTORYLINE_STRUCTURED_OUTPUT_BOUNDARIES=", kamal_env)
+        self.assertIn("OPENSTORYLINE_LLM_DEFECT_REPAIR_MODE=off", kamal_env)
+        self.assertIn("OPENSTORYLINE_LLM_DEFECT_REPAIR_MODE=off", local_env)
+        self.assertIn(
+            "OPENSTORYLINE_STRUCTURED_OUTPUT_CAPABILITY_VERIFIED=false",
+            kamal_env,
+        )
         self.assertIn("OPENSTORYLINE_INCOMPLETE_UPLOAD_HOURS=24", kamal_env)
         self.assertIn("OPENSTORYLINE_INCOMPLETE_UPLOAD_HOURS=24", local_env)
         self.assertIn("OPENSTORYLINE_PEXELS_ENABLED=false", kamal_env)
@@ -230,6 +293,8 @@ class KamalConfigTests(unittest.TestCase):
             "OPENSTORYLINE_LIMITED_OUTPUT_PROMOTION_ENABLED=false",
             kamal_env,
         )
+        self.assertIn("OPENSTORYLINE_DELIVERY_POLICY=qa_enforced", kamal_env)
+        self.assertIn("OPENSTORYLINE_DELIVERY_POLICY=qa_enforced", local_env)
         self.assertIn("OPENSTORYLINE_RETRY_UX_ENABLED=false", kamal_env)
         self.assertIn(
             "OPENSTORYLINE_CREATIVE_CATALOG_PATH=/app/creative_catalog/manifest.json",
@@ -271,6 +336,21 @@ class KamalConfigTests(unittest.TestCase):
         self.assertIn("require_value OPENSTORYLINE_PEXELS_LICENSE_REVIEWED_AT", wrapper)
         self.assertIn("PexelsClient.from_config", wrapper)
         self.assertNotIn("api.pexels.com/v1/search", wrapper)
+
+    def test_ffmpega_release_gate_requires_the_private_pinned_service(self):
+        wrapper = (ROOT / "bin" / "kamal-mvp").read_text(encoding="utf-8")
+        service = (ROOT / "scripts" / "mvp-ffmpega-service.sh").read_text(
+            encoding="utf-8"
+        )
+
+        self.assertIn('require_exact_value FFMPEGA_URL "http://openstoryline-mvp-ffmpega:8188"', wrapper)
+        self.assertIn('run_ffmpega_release_gate "$release_command"', wrapper)
+        self.assertIn('"${1:-}" == "ffmpega"', wrapper)
+        self.assertIn("0cfe2db05df104f95c98cc45e11f129fa5ef5193", service)
+        self.assertIn("--security-opt no-new-privileges", service)
+        self.assertIn("--cap-drop ALL", service)
+        self.assertIn("--read-only", service)
+        self.assertNotIn("--publish", service)
 
     def test_postgres_accessory_is_private_persistent_and_health_checked(self):
         config = yaml.safe_load(render_sample())
@@ -385,6 +465,83 @@ class KamalConfigTests(unittest.TestCase):
         self.assertIn("app exec --primary --reuse", wrapper)
         self.assertIn('open_storyline.mvp.admin "$admin_command"', wrapper)
         self.assertIn('"${1:-}" == "workspace"', wrapper)
+
+    def test_delivery_policy_is_validated_before_release_commands(self):
+        wrapper = (ROOT / "bin" / "kamal-mvp").read_text(encoding="utf-8")
+        validation = wrapper.index('OPENSTORYLINE_DELIVERY_POLICY:-qa_enforced')
+        release_scan = wrapper.index('for arg in "$@"')
+
+        self.assertLess(validation, release_scan)
+        self.assertIn("qa_enforced|technical_pass_guaranteed", wrapper)
+
+    def test_agentic_rollout_validator_accepts_defaults_and_complete_rollout(self):
+        default = validate_rollout_flags()
+        complete = validate_rollout_flags(
+            OPENSTORYLINE_STRUCTURED_OUTPUT_MODE="json_schema",
+            OPENSTORYLINE_STRUCTURED_OUTPUT_CAPABILITY_VERIFIED="true",
+            OPENSTORYLINE_STRUCTURED_OUTPUT_BOUNDARIES=(
+                "shorts_selection.v1,visual_understanding.v1,edit_plan.v1,"
+                "edit_plan_repair.v1,semantic_qa.v1,"
+                "ffmpega_agentic_finishing.v1,ffmpega_deterministic_effects.v1"
+            ),
+            OPENSTORYLINE_LLM_DEFECT_REPAIR_MODE="enforce",
+            OPENSTORYLINE_AGENTIC_EDITING_MODE="render",
+            OPENSTORYLINE_SEMANTIC_QA_ENABLED="true",
+            OPENSTORYLINE_FFMPEGA_ENABLED="true",
+            OPENSTORYLINE_DELIVERY_POLICY="technical_pass_guaranteed",
+            OPENSTORYLINE_RETRY_UX_ENABLED="true",
+            OPENSTORYLINE_RENDER_PROMOTION_MODE="enforce",
+        )
+
+        self.assertEqual(default.returncode, 0, default.stderr)
+        self.assertEqual(complete.returncode, 0, complete.stderr)
+        self.assertIn("internally consistent", complete.stdout)
+
+    def test_agentic_rollout_validator_rejects_out_of_order_flags(self):
+        cases = (
+            (
+                {"OPENSTORYLINE_STRUCTURED_OUTPUT_BOUNDARIES": "shorts_selection.v1"},
+                "require OPENSTORYLINE_STRUCTURED_OUTPUT_MODE=json_schema",
+            ),
+            (
+                {
+                    "OPENSTORYLINE_STRUCTURED_OUTPUT_MODE": "json_schema",
+                    "OPENSTORYLINE_STRUCTURED_OUTPUT_CAPABILITY_VERIFIED": "true",
+                    "OPENSTORYLINE_STRUCTURED_OUTPUT_BOUNDARIES": (
+                        "shorts_selection.v1,semantic_qa.v1"
+                    ),
+                },
+                "requires the edit-plan strict schemas first",
+            ),
+            (
+                {
+                    "OPENSTORYLINE_STRUCTURED_OUTPUT_MODE": "json_schema",
+                    "OPENSTORYLINE_STRUCTURED_OUTPUT_CAPABILITY_VERIFIED": "true",
+                    "OPENSTORYLINE_STRUCTURED_OUTPUT_BOUNDARIES": (
+                        "shorts_selection.v1,visual_understanding.v1,"
+                        "edit_plan.v1,edit_plan_repair.v1"
+                    ),
+                    "OPENSTORYLINE_LLM_DEFECT_REPAIR_MODE": "report",
+                    "OPENSTORYLINE_AGENTIC_EDITING_MODE": "shadow",
+                },
+                "requires every strict-schema boundary first",
+            ),
+            (
+                {
+                    "OPENSTORYLINE_DELIVERY_POLICY": "technical_pass_guaranteed",
+                },
+                "requires strict schema and enforced repair first",
+            ),
+            (
+                {"OPENSTORYLINE_RETRY_UX_ENABLED": "true"},
+                "must be the final rollout flag",
+            ),
+        )
+        for overrides, message in cases:
+            with self.subTest(overrides=overrides):
+                result = validate_rollout_flags(**overrides)
+                self.assertNotEqual(result.returncode, 0)
+                self.assertIn(message, result.stderr)
 
 
 if __name__ == "__main__":

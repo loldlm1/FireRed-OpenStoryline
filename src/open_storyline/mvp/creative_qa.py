@@ -14,6 +14,7 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from open_storyline.mvp.frame_sampling import sample_frames
 from open_storyline.mvp.scene_boundaries import build_scene_boundaries
+from open_storyline.mvp.structured_outputs import SEMANTIC_QA_SCHEMA
 
 
 RENDER_QA_VERSION = "render_qa.v1"
@@ -385,8 +386,10 @@ def _measure_asset_visibility(
     command.extend([
         "-filter_complex",
         (
-            f"[0:v]crop={width}:{height}:{x}:{y},format=yuv420p[roi];"
-            f"[1:v]scale={width}:{height},format=yuv420p[asset];"
+            f"[0:v]crop={width}:{height}:{x}:{y},fps=1,settb=AVTB,setpts=PTS-STARTPTS,"
+            f"format=yuv420p[roi];"
+            f"[1:v]scale={width}:{height},fps=1,settb=AVTB,setpts=PTS-STARTPTS,"
+            f"format=yuv420p[asset];"
             "[roi][asset]ssim"
         ),
         "-frames:v",
@@ -1176,7 +1179,8 @@ def _semantic_prompt(frame_records: Sequence[dict[str, Any]]) -> str:
     return json.dumps({
         "task": (
             "Review visibility and relevance only. Do not propose executable edits, "
-            "authorize actions, or change the plan."
+            "authorize actions, or change the plan. Return exactly one observation for "
+            "every supplied frame_id."
         ),
         "frames_in_image_order": frame_records,
         "required_output": {
@@ -1207,7 +1211,11 @@ async def build_semantic_review(
     frame_records: list[dict[str, Any]] = []
     data_urls: list[str] = []
     try:
-        for item in selected:
+        remaining_frames = max_frames
+        for index, item in enumerate(selected):
+            remaining_inputs = len(selected) - index
+            frame_budget = max(1, remaining_frames // remaining_inputs)
+            remaining_frames -= frame_budget
             media = await asyncio.to_thread(_probe, item.video_path, timeout=60.0)
             scene_report = build_scene_boundaries(
                 [],
@@ -1222,24 +1230,25 @@ async def build_semantic_review(
                 scene_report=scene_report,
                 source_width=int(media["width"]),
                 source_height=int(media["height"]),
-                max_frames=1,
+                max_frames=frame_budget,
                 max_width=max_width,
                 max_height=max_height,
                 max_frame_bytes=max_frame_bytes,
                 timeout_per_frame=60.0,
             )
-            sampled = manifest.frames[0]
-            frame_id = f"clip-{item.clip_index:03d}-{sampled.id}"
-            frame_records.append({
-                "clip_index": item.clip_index,
-                "frame_id": frame_id,
-                "timestamp_ms": sampled.timestamp_ms,
-                "purpose": "verify planned focus visibility and frame relevance",
-            })
-            data_urls.append(sampled.data_url)
+            for sampled in manifest.frames:
+                frame_id = f"clip-{item.clip_index:03d}-{sampled.id}"
+                frame_records.append({
+                    "clip_index": item.clip_index,
+                    "frame_id": frame_id,
+                    "timestamp_ms": sampled.timestamp_ms,
+                    "purpose": "verify planned focus visibility and frame relevance",
+                })
+                data_urls.append(sampled.data_url)
         if not data_urls:
             raise CreativeQAError("SEMANTIC_QA_FRAMES_MISSING", "no review frames were available")
-        raw = await client.complete_json(
+        raw = await client.complete_structured(
+            schema_name=SEMANTIC_QA_SCHEMA,
             system_prompt=(
                 "You are a bounded, non-mutating video QA reviewer. Evaluate only the "
                 "ordered rendered frames against the supplied visibility task. Return one JSON object."
@@ -1249,13 +1258,25 @@ async def build_semantic_review(
         )
         validated = _SemanticResponse.model_validate(raw)
         allowed = {(item["clip_index"], item["frame_id"]) for item in frame_records}
-        if any((item.clip_index, item.frame_id) not in allowed for item in validated.observations):
-            raise CreativeQAError("SEMANTIC_QA_RESPONSE_INVALID", "semantic review referenced an unknown frame")
+        observed = [
+            (item.clip_index, item.frame_id) for item in validated.observations
+        ]
+        if len(observed) != len(set(observed)) or set(observed) != allowed:
+            raise CreativeQAError(
+                "SEMANTIC_QA_RESPONSE_INVALID",
+                "semantic review must reference every frame exactly once",
+            )
         attempts = [
             {
                 "number": int(getattr(item, "number", 0)),
                 "status_code": getattr(item, "status_code", None),
                 "reason": _clean_text(getattr(item, "reason", ""), limit=160),
+                "duration_ms": int(getattr(item, "duration_ms", 0) or 0),
+                "input_tokens": getattr(item, "input_tokens", None),
+                "output_tokens": getattr(item, "output_tokens", None),
+                "reasoning_tokens": getattr(item, "reasoning_tokens", None),
+                "total_tokens": getattr(item, "total_tokens", None),
+                "cost_usd": getattr(item, "cost_usd", None),
             }
             for item in getattr(client, "last_attempts", ())
         ][:6]
@@ -1278,6 +1299,12 @@ async def build_semantic_review(
                 "number": int(getattr(item, "number", 0)),
                 "status_code": getattr(item, "status_code", None),
                 "reason": _clean_text(getattr(item, "reason", ""), limit=160),
+                "duration_ms": int(getattr(item, "duration_ms", 0) or 0),
+                "input_tokens": getattr(item, "input_tokens", None),
+                "output_tokens": getattr(item, "output_tokens", None),
+                "reasoning_tokens": getattr(item, "reasoning_tokens", None),
+                "total_tokens": getattr(item, "total_tokens", None),
+                "cost_usd": getattr(item, "cost_usd", None),
             }
             for item in getattr(exc, "attempts", getattr(client, "last_attempts", ()))
         ][:6]

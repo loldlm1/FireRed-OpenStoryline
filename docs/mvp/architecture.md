@@ -113,7 +113,13 @@ isolated so upstream behavior can continue to be merged into this fork.
 - `OPENSTORYLINE_COMPLETION_POLICY` defaults to `strict`.
   `baseline_guaranteed` takes effect only when
   `OPENSTORYLINE_LIMITED_OUTPUT_PROMOTION_ENABLED=true`; otherwise strict
-  remains authoritative. `render_promotion.json` records both decisions for
+  remains authoritative as a compatibility path.
+- `OPENSTORYLINE_DELIVERY_POLICY` is the explicit delivery control and defaults
+  to `qa_enforced`. `technical_pass_guaranteed` publishes a technically valid
+  candidate with truthful creative limitations while preserving the separate
+  strict QA block verdict. Technical blockers remain unavailable.
+- `render_promotion.json`, `repair_report.json`, and `outcome_report.json`
+  preserve strict, technical, repair, fallback, and delivery evidence for
   canary comparison and rollback.
 - `OPENSTORYLINE_RETRY_UX_ENABLED` independently controls the browser actions;
   disabling it does not remove outcome, lineage, or audit evidence.
@@ -122,10 +128,23 @@ isolated so upstream behavior can continue to be merged into this fork.
   `OPENSTORYLINE_SEMANTIC_QA_MAX_FRAMES`, stores no frame bytes or raw provider
   body, cannot authorize actions or modify the edit plan, and degrades to an
   unavailable review note on provider failure.
+- Optional FFMPEGA finishing runs in a separate, non-root, model-free container
+  built from pinned upstream commit
+  `0cfe2db05df104f95c98cc45e11f129fa5ef5193`. The service exposes only the
+  required private prompt/history API on the Kamal network, validates the typed
+  deterministic allowlist again, prohibits raw FFmpeg/model/vision paths, and
+  can access only `KAMAL_OUTPUTS_DIR`. It is deployed and health-checked with
+  `./bin/kamal-mvp ffmpega deploy`; the web image remains unchanged and keeps
+  the native render when the optional finishing pass fails.
 - Cross-niche regression fixtures under `tests/fixtures/mvp_agentic/` contain
   only synthetic schema expectations. The private production session
   `Sesion prueba 1` is an operator-only regression gate and its media,
   transcript, prompts, frames, and reports must never be committed.
+- Strict schemas, repair, technical-pass delivery, and retry details follow the
+  independently reversible order in
+  [agentic-defect-repair-rollout.md](agentic-defect-repair-rollout.md). The
+  release wrapper rejects skipped or partially enabled stages before Kamal or a
+  live provider gate runs.
 
 ## Clip-local crop evidence
 

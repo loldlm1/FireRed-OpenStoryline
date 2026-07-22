@@ -89,28 +89,48 @@ class FakeSemanticClient:
         self.calls = 0
         self.last_attempts = ()
 
-    async def complete_json(self, **kwargs):
+    async def complete_structured(self, **kwargs):
         self.calls += 1
-        self.last_attempts = (NineRouterAttempt(1, 200, "ok"),)
+        self.last_attempts = (NineRouterAttempt(
+            1,
+            200,
+            "ok",
+            duration_ms=1250,
+            input_tokens=100,
+            output_tokens=20,
+            reasoning_tokens=10,
+            total_tokens=130,
+            cost_usd=0.01,
+        ),)
         if self.fail:
             raise NineRouterError(
                 "NINEROUTER_REQUEST_FAILED",
                 "synthetic provider failure",
                 attempts=[NineRouterAttempt(1, 503, "service unavailable")],
             )
-        record = json.loads(kwargs["user_prompt"])["frames_in_image_order"][0]
+        records = json.loads(kwargs["user_prompt"])["frames_in_image_order"]
         return {
             "status": "pass",
             "summary": "The planned focus is visible and relevant.",
-            "observations": [{
-                "clip_index": record["clip_index"],
-                "frame_id": record["frame_id"],
-                "planned_focus_visible": True,
-                "relevant": True,
-                "confidence": 0.9,
-                "note": "The intended subject is visible.",
-            }],
+            "observations": [
+                {
+                    "clip_index": record["clip_index"],
+                    "frame_id": record["frame_id"],
+                    "planned_focus_visible": True,
+                    "relevant": True,
+                    "confidence": 0.9,
+                    "note": "The intended subject is visible.",
+                }
+                for record in records
+            ],
         }
+
+
+class IncompleteSemanticClient(FakeSemanticClient):
+    async def complete_structured(self, **kwargs):
+        result = await super().complete_structured(**kwargs)
+        result["observations"] = result["observations"][:1]
+        return result
 
 
 class CreativeQATests(unittest.IsolatedAsyncioTestCase):
@@ -226,7 +246,17 @@ class CreativeQATests(unittest.IsolatedAsyncioTestCase):
             encoded_bytes=4,
             data_url="data:image/jpeg;base64,ZmFrZQ==",
         )
-        manifest = FrameManifest(2000, 180, 320, (frame,))
+        second_frame = SampledFrame(
+            id="frame-002",
+            timestamp_ms=1500,
+            scene_id="scene-001",
+            width=180,
+            height=320,
+            extraction_reason="uniform_coverage",
+            encoded_bytes=4,
+            data_url="data:image/jpeg;base64,ZmFrZTI=",
+        )
+        manifest = FrameManifest(2000, 180, 320, (frame, second_frame))
         source = QAInput(1, Path("short-01.mp4"), 2000)
         media = {"duration_ms": 2000, "width": 180, "height": 320}
 
@@ -235,18 +265,36 @@ class CreativeQATests(unittest.IsolatedAsyncioTestCase):
             patch("open_storyline.mvp.creative_qa._probe", return_value=media),
             patch("open_storyline.mvp.creative_qa.sample_frames", return_value=manifest),
         ):
-            report = await build_semantic_review([source], client=success, max_frames=1)
+            report = await build_semantic_review([source], client=success, max_frames=2)
         self.assertEqual(report["status"], "pass")
         self.assertTrue(report["non_mutating"])
         self.assertEqual(report["provider_calls"], 1)
+        self.assertEqual(report["frame_count"], 2)
+        self.assertEqual(len(report["observations"]), 2)
+        self.assertEqual(report["attempts"][0]["duration_ms"], 1250)
+        self.assertEqual(report["attempts"][0]["total_tokens"], 130)
+        self.assertEqual(report["attempts"][0]["cost_usd"], 0.01)
         self.assertNotIn("data:image", json.dumps(report))
+
+        incomplete = IncompleteSemanticClient()
+        with (
+            patch("open_storyline.mvp.creative_qa._probe", return_value=media),
+            patch("open_storyline.mvp.creative_qa.sample_frames", return_value=manifest),
+        ):
+            rejected = await build_semantic_review(
+                [source],
+                client=incomplete,
+                max_frames=2,
+            )
+        self.assertEqual(rejected["status"], "unavailable")
+        self.assertEqual(rejected["error_code"], "SEMANTIC_QA_RESPONSE_INVALID")
 
         failure = FakeSemanticClient(fail=True)
         with (
             patch("open_storyline.mvp.creative_qa._probe", return_value=media),
             patch("open_storyline.mvp.creative_qa.sample_frames", return_value=manifest),
         ):
-            unavailable = await build_semantic_review([source], client=failure, max_frames=1)
+            unavailable = await build_semantic_review([source], client=failure, max_frames=2)
         self.assertEqual(unavailable["status"], "unavailable")
         self.assertEqual(unavailable["error_code"], "NINEROUTER_REQUEST_FAILED")
         self.assertEqual(unavailable["attempts"][0]["reason"], "service unavailable")
@@ -310,7 +358,7 @@ class CreativeQATests(unittest.IsolatedAsyncioTestCase):
 
     def test_cross_niche_fixtures_are_private_free_schema_outcomes(self):
         fixture_paths = sorted(FIXTURES.glob("*.json"))
-        self.assertGreaterEqual(len(fixture_paths), 5)
+        self.assertGreaterEqual(len(fixture_paths), 8)
         identifiers = set()
         for path in fixture_paths:
             payload = json.loads(path.read_text(encoding="utf-8"))
@@ -324,6 +372,16 @@ class CreativeQATests(unittest.IsolatedAsyncioTestCase):
             self.assertNotIn("api_key", serialized)
             self.assertNotIn("/home/", serialized)
         self.assertEqual(len(identifiers), len(fixture_paths))
+        self.assertTrue({
+            "two-speaker-interview",
+            "product-presentation",
+            "single-speaker-tutorial",
+            "cooking-demonstration",
+            "trading-screen",
+            "multi-speaker-panel",
+            "sparse-visual-monologue",
+            "source-only-no-asset",
+        } <= identifiers)
         covered_metrics = {
             metric
             for path in fixture_paths
@@ -405,6 +463,59 @@ class CreativeQARenderTests(unittest.TestCase):
             "asset_overlay_not_visible",
             {item["code"] for item in reports[1]["findings"]},
         )
+
+    def test_asset_visibility_normalizes_mismatched_video_timebases_at_clip_start(self):
+        with TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            asset = root / "asset.mp4"
+            visible = root / "visible.mp4"
+            commands = [
+                [
+                    "ffmpeg", "-y", "-v", "error", "-f", "lavfi", "-i",
+                    "color=c=red:size=60x80:rate=30:duration=6",
+                    "-c:v", "libx264", "-preset", "ultrafast",
+                    "-pix_fmt", "yuv420p", str(asset),
+                ],
+                [
+                    "ffmpeg", "-y", "-v", "error", "-f", "lavfi", "-i",
+                    "color=c=blue:size=180x320:rate=60:duration=6",
+                    "-i", str(asset),
+                    "-filter_complex", "[0:v][1:v]overlay=60:120:enable='between(t,0,4)'",
+                    "-t", "6", "-c:v", "libx264", "-preset", "ultrafast",
+                    "-pix_fmt", "yuv420p", str(visible),
+                ],
+            ]
+            for command in commands:
+                completed = subprocess.run(
+                    command,
+                    capture_output=True,
+                    text=True,
+                    check=False,
+                    timeout=120,
+                )
+                self.assertEqual(completed.returncode, 0, completed.stderr)
+
+            rendered = execution(with_asset=True)
+            overlay = rendered["clips"][0]["segments"][0]["overlays"][0]
+            overlay.update({
+                "timeline_window": {"start_ms": 0, "end_ms": 4000},
+                "width_ratio": 1 / 3,
+                "position": "center",
+                "opacity": 1.0,
+            })
+            report = build_asset_visibility_report(
+                [QAInput(1, visible, 6000)],
+                render_execution=rendered,
+                resolved_assets={"asset-1": asset},
+                expected_width=180,
+                expected_height=320,
+                strict=True,
+                timeout=60,
+            )
+
+        self.assertEqual(report["status"], "pass")
+        self.assertEqual(report["observations"][0]["error_code"], None)
+        self.assertGreaterEqual(report["observations"][0]["ssim"], 0.6)
 
     def test_structural_qa_probes_real_synthetic_output(self):
         with TemporaryDirectory() as tmpdir:

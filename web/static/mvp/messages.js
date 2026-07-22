@@ -101,6 +101,29 @@ const STATE_LABELS = Object.freeze({
   deleted: 'Eliminado',
 });
 
+const REPAIR_DISPOSITION_LABELS = Object.freeze({
+  resolved: 'resuelto por validación determinista',
+  remaining: 'permanece',
+  new: 'nuevo después de la reparación',
+  fallback_applied: 'fallback ejecutado',
+  not_repairable: 'no reparable en esta etapa',
+});
+
+const QA_DECISION_LABELS = Object.freeze({
+  promote: 'aprobada',
+  block: 'bloqueada',
+  observe: 'observada con hallazgos',
+  unknown: 'no disponible',
+});
+
+const DELIVERY_DECISION_LABELS = Object.freeze({
+  publish_enhanced: 'publicada sin limitaciones',
+  publish_with_limitations: 'publicada con limitaciones',
+  withhold_strict: 'retenida por la política estricta',
+  withhold_technical: 'retenida por un bloqueo técnico',
+  unknown: 'no disponible',
+});
+
 export function activityMessage(event) {
   let message = ACTIVITY_MESSAGES[event?.message_key] || 'El proceso de edición avanzó a una nueva etapa.';
   if (Number.isInteger(event?.current) && Number.isInteger(event?.total)) {
@@ -115,7 +138,31 @@ export function activityMessage(event) {
 
 export function errorMessage(error, fallback = 'No pudimos completar la solicitud. Intenta de nuevo.') {
   const code = typeof error === 'string' ? error : error?.code;
+  const registryDescription = typeof error === 'object'
+    ? error?.presentation?.es?.description
+    : null;
+  if (registryDescription) return registryDescription;
   return ERROR_MESSAGES[code] || fallback;
+}
+
+export function defectTitle(defect) {
+  return defect?.presentation?.es?.title || 'Hallazgo verificable';
+}
+
+export function defectDescription(defect, fallback = '') {
+  return defect?.presentation?.es?.description || defect?.description || fallback;
+}
+
+export function repairDispositionLabel(value) {
+  return REPAIR_DISPOSITION_LABELS[value] || String(value || '').replaceAll('_', ' ');
+}
+
+export function qaDecisionLabel(value) {
+  return QA_DECISION_LABELS[value] || QA_DECISION_LABELS.unknown;
+}
+
+export function deliveryDecisionLabel(value) {
+  return DELIVERY_DECISION_LABELS[value] || DELIVERY_DECISION_LABELS.unknown;
 }
 
 export function stateLabel(state) {

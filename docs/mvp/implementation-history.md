@@ -8,6 +8,10 @@ It is not an active sprint plan. Current engineering work should start from
 
 Each implementation increment was validated before its short commit.
 
+The completed agentic defect-repair working plan was retired after increments
+59-66 were consolidated into this history and the
+[`Agentic defect-repair rollout`](agentic-defect-repair-rollout.md) runbook.
+
 | Increment | Scope | Required validation | Commit |
 | --- | --- | --- | --- |
 | 0 | Architecture, remote-only policy, key guide | Config examples parse; docs links checked | `docs: define MVP architecture` |
@@ -69,7 +73,14 @@ Each implementation increment was validated before its short commit.
 | 56 | Agentic reliability Phase 4: catalog-aware retries | Installed-capability-only planning, validated catalog IDs, compact prior-defect feedback, checkpoint lineage, and bounded style/filter contracts | `feat: integrate catalog-aware agent retries` |
 | 57 | Agentic reliability Phase 5: auditable outcomes and retry UX | Strict versus baseline-guaranteed promotion evidence, fail-closed technical classification, typed outcome/SLO summaries, same-version defect retries, improved-version prefill, and responsive Spanish comparison states | `feat: expose retryable video outcomes` |
 | 58 | Agentic reliability Phase 6: staged production rollout and catalog maintenance | 377 local tests with 74 expected PostgreSQL skips, 25 connected PostgreSQL tests, production backup/restore, healthy isolated flag canaries, same-version checkpoint reuse, strict/catalog/baseline outputs with deterministic structural approval, focused Chromium retry UX, and a documented open-license update process | `docs: complete agentic reliability rollout` |
+| 59 | Agentic defect repair Sprint 1: centralized defect registry | Versioned bilingual definitions, aliases, explicit exclusions, unknown fail-closed behavior, and registry-wide coverage checks | `feat: centralize agentic defect definitions` |
+| 60 | Agentic defect repair Sprint 2: strict schemas and effect contracts | Stable strict schemas across core and optional JSON boundaries, recursive extra-field rejection, nullable optionals, and effect-specific FFMPEGA parameters | `feat: enforce strict agentic and effect schemas` |
+| 61 | Agentic defect repair Sprint 3: stage-bounded policy | Objective evidence requirements, advisory isolation, per-stage semantic budgets, deterministic fallback mapping, and repair request privacy bounds | `feat: define stage-bounded defect repair policy` |
+| 62 | Agentic defect repair Sprint 4: bounded runtime repair | One visual and one plan repair maximum, deterministic revalidation, checkpoint reuse, original-code preservation, and no FFMPEGA semantic loop | `feat: run stage-bounded agentic repair` |
+| 63 | Agentic defect repair Sprint 5: technical-pass delivery and audit | Truthful limited publication, strict-versus-delivery separation, typed outcome metrics, bounded `audit defects`, and retry/details presentation | `feat: publish and audit technical-pass outcomes` |
+| 64 | Agentic defect repair Sprint 6: eval and rollout gates | Registry-wide synthetic evals, attributable SLO summaries, monotonic rollout validation, provider probes, rollback owners, and release documentation | `chore: gate agentic defect repair rollout` |
+| 65 | Agentic defect repair production stabilization and canary | Responses-compatible strict transport, exact-image deployment, healthy PostgreSQL and endpoints, two playable private-session outputs, truthful limited delivery, authenticated preview/download, and a one-call strict repair canary that resolved three crop-coverage defects with zero new defects; the 99% claim remains blocked by sample size | `fix: route strict schemas through responses` |
+| 66 | Agentic defect repair Sprint 7: final-image semantic and finishing proof | Fixed mismatched-timebase asset visibility, passed 455 local and 455 connected tests, deployed exact image `1e15456`, completed two consecutive same-session semantic/deterministic outputs plus a typed FFMPEGA sharpen canary, and retained explicit gates for the broad Wilson claim, authenticated production browser access, and quantified effect lift | `feat: prove quality-first agentic video editing` |
 
-The original pull request targeted `main` in
-`loldlm1/FireRed-OpenStoryline`. Merge and release state belongs in the hosting
-platform, not in this historical implementation checklist.
+Pull-request, merge, and release state belongs in the hosting platform, not in
+this historical implementation record.

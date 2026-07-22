@@ -1,0 +1,50 @@
+FROM python:3.11-slim@sha256:db3ff2e1800a8581e2c48a27c3995339d47bdf046da21c7627accd3d51053a93 AS source
+
+ARG FFMPEGA_SOURCE_COMMIT=0cfe2db05df104f95c98cc45e11f129fa5ef5193
+
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends ca-certificates git \
+    && rm -rf /var/lib/apt/lists/* \
+    && git clone --filter=blob:none --no-checkout \
+        https://github.com/AEmotionStudio/ComfyUI-FFMPEGA.git /opt/ffmpega \
+    && git -C /opt/ffmpega checkout --detach "$FFMPEGA_SOURCE_COMMIT" \
+    && test "$(git -C /opt/ffmpega rev-parse HEAD)" = "$FFMPEGA_SOURCE_COMMIT" \
+    && rm -rf /opt/ffmpega/.git
+
+FROM python:3.11-slim@sha256:db3ff2e1800a8581e2c48a27c3995339d47bdf046da21c7627accd3d51053a93
+
+ARG FFMPEGA_SOURCE_COMMIT=0cfe2db05df104f95c98cc45e11f129fa5ef5193
+
+LABEL org.opencontainers.image.source="https://github.com/AEmotionStudio/ComfyUI-FFMPEGA" \
+      org.opencontainers.image.revision="$FFMPEGA_SOURCE_COMMIT" \
+      org.opencontainers.image.licenses="GPL-3.0"
+
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1 \
+    PYTHONPATH=/app:/opt \
+    FFMPEGA_PORT=8188 \
+    FFMPEGA_EXECUTION_TIMEOUT_SECONDS=1800 \
+    FFMPEGA_QUEUE_SIZE=4
+
+WORKDIR /app
+
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends ffmpeg \
+    && rm -rf /var/lib/apt/lists/* \
+    && pip install --no-cache-dir pydantic==2.13.4 pyyaml==6.0.2 \
+    && groupadd --gid 65532 openstoryline \
+    && useradd --uid 65532 --gid 65532 --no-create-home --shell /usr/sbin/nologin openstoryline
+
+COPY --from=source /opt/ffmpega /opt/ffmpega
+RUN mkdir -p /app/open_storyline/mvp \
+    && touch /app/open_storyline/__init__.py /app/open_storyline/mvp/__init__.py
+COPY src/open_storyline/mvp/ffmpega_contracts.py /app/open_storyline/mvp/ffmpega_contracts.py
+COPY src/open_storyline/mvp/ffmpega_service.py /app/open_storyline/mvp/ffmpega_service.py
+
+EXPOSE 8188
+HEALTHCHECK --interval=10s --timeout=5s --start-period=10s --retries=3 \
+    CMD python -c "import json,urllib.request; data=json.load(urllib.request.urlopen('http://127.0.0.1:8188/health', timeout=3)); raise SystemExit(0 if data.get('status') == 'ok' and data.get('worker_alive') else 1)"
+
+USER 65532:65532
+
+CMD ["python", "-m", "open_storyline.mvp.ffmpega_service"]

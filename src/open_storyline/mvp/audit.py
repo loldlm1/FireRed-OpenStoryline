@@ -26,7 +26,13 @@ from open_storyline.mvp.models import (
     SessionInputVideo,
     VideoJob,
 )
-from open_storyline.mvp.outcomes import build_outcome_slo_summary
+from open_storyline.mvp.defects import RepairStrategy, defect_public_metadata
+from open_storyline.mvp.outcomes import (
+    build_outcome_slo_summary,
+    outcome_summary,
+    repair_defect_lifecycle,
+)
+from open_storyline.mvp.repair import RepairContractError, validate_repair_report
 from open_storyline.mvp.security import (
     sanitize_audit_document,
     sanitize_for_persistence,
@@ -35,6 +41,20 @@ from open_storyline.mvp.security import (
 
 
 AUDIT_PARSER_VERSION = "1"
+AUDIT_DEFECT_DISPOSITIONS = frozenset({
+    "fallback_applied",
+    "new",
+    "not_repairable",
+    "remaining",
+    "resolved",
+})
+AUDIT_DEFECT_SOURCES = frozenset({
+    "fallback_ledger.json",
+    "outcome_report.json",
+    "render_promotion.json",
+    "repair_report.json",
+})
+AUDIT_FILTER_TOKEN = re.compile(r"^[A-Za-z0-9._:-]{1,120}$")
 SRT_TIME = re.compile(
     r"^(\d{2}):(\d{2}):(\d{2})[,.](\d{3})\s+-->\s+"
     r"(\d{2}):(\d{2}):(\d{2})[,.](\d{3})$"
@@ -204,6 +224,193 @@ def parse_since(value: str | None) -> datetime | None:
     return parsed.astimezone(UTC)
 
 
+def _defect_filter(name: str, value: str | None, *, allowed: set[str] | frozenset[str] | None = None) -> str | None:
+    if value is None:
+        return None
+    normalized = value.strip().lower() if name != "code" else value.strip().upper()
+    if not AUDIT_FILTER_TOKEN.fullmatch(normalized) or (
+        allowed is not None and normalized not in allowed
+    ):
+        raise JobStoreError("AUDIT_FILTER_INVALID", f"{name} filter is invalid")
+    return normalized
+
+
+def _audit_token(value: Any, *, limit: int = 120, fallback: str = "") -> str:
+    candidate = str(value or "")[:limit]
+    return candidate if AUDIT_FILTER_TOKEN.fullmatch(candidate) else fallback
+
+
+def _defect_records_from_evidence(
+    *,
+    job_id: str,
+    attempt_number: int | None,
+    created_at: datetime,
+    completed_at: datetime | None,
+    outcome: Any,
+    repair_report: Any = None,
+    promotion_report: Any = None,
+    fallback_ledger: Any = None,
+) -> list[dict[str, Any]]:
+    compact = outcome_summary(outcome) or {}
+    repair = compact.get("repair") if isinstance(compact.get("repair"), dict) else {}
+    defects = [
+        item for item in (repair.get("defects") or [])[:64]
+        if isinstance(item, dict)
+    ]
+    if not defects and isinstance(repair_report, dict):
+        defects = repair_defect_lifecycle(repair_report)
+    repair_document = repair_report if isinstance(repair_report, dict) else {}
+    promotion = promotion_report if isinstance(promotion_report, dict) else {}
+    policy_decisions = (
+        promotion.get("policy_decisions")
+        if isinstance(promotion.get("policy_decisions"), dict)
+        else {}
+    )
+    strict = compact.get("strict_qa") if isinstance(compact.get("strict_qa"), dict) else {}
+    delivery = compact.get("delivery") if isinstance(compact.get("delivery"), dict) else {}
+    technical_status = _audit_token(
+        compact.get("technical_status")
+        or promotion.get("technical_status")
+        or "unknown",
+        limit=40,
+        fallback="unknown",
+    )
+    strict_decision = _audit_token(
+        strict.get("decision")
+        or promotion.get("strict_decision")
+        or policy_decisions.get("strict")
+        or "unknown",
+        limit=40,
+        fallback="unknown",
+    )
+    delivery_decision = _audit_token(
+        delivery.get("decision")
+        or promotion.get("delivery_decision")
+        or "unknown",
+        limit=40,
+        fallback="unknown",
+    )
+    registry_version = _audit_token(
+        compact.get("registry_version")
+        or repair_document.get("registry_version")
+        or "unknown",
+        limit=80,
+        fallback="unknown",
+    )
+    timestamp = _iso(completed_at or created_at)
+    records: dict[tuple[str, str, str], dict[str, Any]] = {}
+
+    def add(
+        *,
+        code: Any,
+        stage: Any,
+        disposition: str,
+        strategy: Any = None,
+        repair_attempted: bool = False,
+        repair_state: Any = None,
+        checkpoint_reused: bool = False,
+        fallback_requested: Any = None,
+        fallback_executed: Any = None,
+    ) -> None:
+        presentation = defect_public_metadata(code)
+        raw_code = presentation["raw_code"]
+        stage_name = _audit_token(stage, limit=64, fallback="unknown")
+        key = (raw_code, stage_name, disposition)
+        records[key] = sanitize_for_persistence({
+            "job_id": job_id,
+            "attempt_id": job_id,
+            "attempt_number": attempt_number,
+            "registry_version": registry_version,
+            "code": raw_code,
+            "canonical_code": presentation["canonical_code"],
+            "registered": presentation["registered"],
+            "stage": stage_name,
+            "strategy": _audit_token(
+                strategy or presentation["repair_strategy"],
+                limit=80,
+                fallback="terminal",
+            ),
+            "disposition": disposition,
+            "repair_attempted": repair_attempted,
+            "repair_state": _audit_token(
+                repair_state,
+                limit=40,
+                fallback="unknown",
+            ),
+            "checkpoint_reused": checkpoint_reused,
+            "fallback_applied": disposition == "fallback_applied",
+            "fallback_requested": _audit_token(fallback_requested),
+            "fallback_executed": _audit_token(fallback_executed),
+            "technical_status": technical_status,
+            "strict_decision": strict_decision,
+            "delivery_decision": delivery_decision,
+            "created_at": _iso(created_at),
+            "completed_at": _iso(completed_at),
+            "timestamp": timestamp,
+        })
+
+    for defect in defects:
+        stages = [
+            item for item in (defect.get("stage_statuses") or [])[:4]
+            if isinstance(item, dict)
+        ] or [{"stage": "repair", "status": "unknown", "checkpoint_reused": False}]
+        dispositions = [
+            item for item in defect.get("dispositions") or ()
+            if item in AUDIT_DEFECT_DISPOSITIONS
+        ] or ["remaining"]
+        fallbacks = [
+            item for item in (defect.get("fallbacks") or [])[:8]
+            if isinstance(item, dict)
+        ]
+        for stage in stages:
+            for disposition in dispositions:
+                fallback = fallbacks[0] if disposition == "fallback_applied" and fallbacks else {}
+                add(
+                    code=defect.get("code"),
+                    stage=stage.get("stage"),
+                    disposition=disposition,
+                    strategy=defect.get("strategy"),
+                    repair_attempted=defect.get("repair_attempted") is True,
+                    repair_state=stage.get("status"),
+                    checkpoint_reused=stage.get("checkpoint_reused") is True,
+                    fallback_requested=fallback.get("requested"),
+                    fallback_executed=fallback.get("executed"),
+                )
+
+    for field in ("limitations", "fatal_errors"):
+        for finding in (compact.get(field) or [])[:24]:
+            if not isinstance(finding, dict):
+                continue
+            add(
+                code=finding.get("code"),
+                stage=finding.get("stage") or "qa",
+                disposition="remaining",
+                fallback_requested=finding.get("requested"),
+                fallback_executed=finding.get("executed"),
+            )
+            if finding.get("executed"):
+                add(
+                    code=finding.get("code"),
+                    stage=finding.get("stage") or "compile",
+                    disposition="fallback_applied",
+                    fallback_requested=finding.get("requested"),
+                    fallback_executed=finding.get("executed"),
+                )
+
+    ledger = fallback_ledger if isinstance(fallback_ledger, dict) else {}
+    for fallback in (ledger.get("entries") or [])[:64]:
+        if not isinstance(fallback, dict):
+            continue
+        add(
+            code=fallback.get("code"),
+            stage="compile",
+            disposition="fallback_applied",
+            fallback_requested=fallback.get("requested"),
+            fallback_executed=fallback.get("executed"),
+        )
+    return [records[key] for key in sorted(records)]
+
+
 def _probe_video(path: Path) -> dict[str, Any]:
     try:
         completed = subprocess.run(
@@ -354,6 +561,8 @@ class AuditService:
                             parsed_data = sanitize_audit_document(
                                 _parse_json_document(decoded)
                             )
+                            if source_name == "repair_report.json":
+                                parsed_data = validate_repair_report(parsed_data)
                             raw_text = json.dumps(
                                 parsed_data,
                                 ensure_ascii=False,
@@ -361,6 +570,10 @@ class AuditService:
                                 allow_nan=False,
                             )
                             parse_status = "parsed"
+                        except RepairContractError:
+                            raw_text = ""
+                            parsed_data = None
+                            parse_error_code = "REPAIR_REPORT_INVALID"
                         except (TypeError, ValueError, json.JSONDecodeError):
                             raw_text = sanitize_text(
                                 decoded,
@@ -650,6 +863,130 @@ class AuditService:
             "rows_scanned": len(selected),
             "since": _iso(since),
             "truncated": len(rows) > int(limit),
+        }
+
+    async def defect_records(
+        self,
+        *,
+        since: datetime | None = None,
+        code: str | None = None,
+        strategy: str | None = None,
+        disposition: str | None = None,
+        stage: str | None = None,
+        limit: int = 100,
+    ) -> dict[str, Any]:
+        if not 1 <= int(limit) <= 500:
+            raise JobStoreError(
+                "PAGE_LIMIT_INVALID",
+                "defect record limit must be between 1 and 500",
+            )
+        code_filter = _defect_filter("code", code)
+        strategy_filter = _defect_filter(
+            "strategy",
+            strategy,
+            allowed=frozenset(item.value for item in RepairStrategy),
+        )
+        disposition_filter = _defect_filter(
+            "disposition",
+            disposition,
+            allowed=AUDIT_DEFECT_DISPOSITIONS,
+        )
+        stage_filter = _defect_filter("stage", stage)
+        scan_limit = min(5000, max(250, int(limit) * 20))
+        query = (
+            select(VideoJob)
+            .where(
+                VideoJob.state.in_(("completed", "failed")),
+                VideoJob.deleted_at.is_(None),
+            )
+            .order_by(VideoJob.created_at.desc(), VideoJob.id.desc())
+            .limit(scan_limit + 1)
+        )
+        if since is not None:
+            query = query.where(VideoJob.created_at >= since)
+        try:
+            async with self.database.sessions() as session:
+                rows = list((await session.execute(query)).scalars())
+                selected = rows[:scan_limit]
+                job_ids = [row.id for row in selected]
+                document_rows = []
+                if job_ids:
+                    document_rows = list((await session.execute(
+                        select(AuditDocument)
+                        .where(
+                            AuditDocument.job_id.in_(job_ids),
+                            AuditDocument.source_name.in_(AUDIT_DEFECT_SOURCES),
+                            AuditDocument.parse_status == "parsed",
+                        )
+                        .order_by(
+                            AuditDocument.created_at.desc(),
+                            AuditDocument.id.desc(),
+                        )
+                    )).scalars())
+        except SQLAlchemyError:
+            raise JobStoreError(
+                "DATABASE_UNAVAILABLE",
+                "defect audit queries are unavailable",
+            ) from None
+
+        documents: dict[str, dict[str, Any]] = {}
+        for document in document_rows:
+            by_name = documents.setdefault(document.job_id, {})
+            if document.source_name not in by_name and isinstance(
+                document.parsed_data,
+                dict,
+            ):
+                by_name[document.source_name] = document.parsed_data
+
+        items: list[dict[str, Any]] = []
+        records_scanned = 0
+        has_more_records = False
+        for row in selected:
+            job_documents = documents.get(row.id, {})
+            result_data = row.result_data if isinstance(row.result_data, dict) else {}
+            outcome = result_data.get("outcome") or job_documents.get(
+                "outcome_report.json"
+            )
+            records = _defect_records_from_evidence(
+                job_id=row.id,
+                attempt_number=row.attempt_number,
+                created_at=row.created_at,
+                completed_at=row.completed_at,
+                outcome=outcome,
+                repair_report=job_documents.get("repair_report.json"),
+                promotion_report=job_documents.get("render_promotion.json"),
+                fallback_ledger=job_documents.get("fallback_ledger.json"),
+            )
+            for record in records:
+                records_scanned += 1
+                if code_filter and code_filter not in {
+                    record["code"],
+                    record["canonical_code"],
+                }:
+                    continue
+                if strategy_filter and record["strategy"] != strategy_filter:
+                    continue
+                if disposition_filter and record["disposition"] != disposition_filter:
+                    continue
+                if stage_filter and record["stage"].lower() != stage_filter:
+                    continue
+                if len(items) >= int(limit):
+                    has_more_records = True
+                    break
+                items.append(record)
+            if has_more_records:
+                break
+        return {
+            "kind": "defect_records",
+            "items": items,
+            "rows_scanned": len(selected),
+            "records_scanned": records_scanned,
+            "since": _iso(since),
+            "truncated": has_more_records or len(rows) > scan_limit,
+            "normalization_note": (
+                "These bounded records are projected from versioned JSON evidence; "
+                "normalize or backfill only after query volume proves it necessary."
+            ),
         }
 
     async def show_job(self, job_id: str, *, limit: int = 200) -> dict[str, Any]:

@@ -27,8 +27,16 @@ class FakeVisionClient:
         self.user_prompt = ""
         self.images = ()
 
-    async def complete_json(self, *, system_prompt, user_prompt, image_data_urls=()):
+    async def complete_structured(
+        self,
+        *,
+        schema_name,
+        system_prompt,
+        user_prompt,
+        image_data_urls=(),
+    ):
         self.user_prompt = user_prompt
+        self.schema_name = schema_name
         self.images = tuple(image_data_urls)
         frame = json.loads(user_prompt)["attached_images_in_exact_order"][0]
         return {
@@ -66,11 +74,19 @@ class RepairingVisionClient(FakeVisionClient):
         self.calls = 0
         self.user_prompts = []
 
-    async def complete_json(self, *, system_prompt, user_prompt, image_data_urls=()):
+    async def complete_structured(
+        self,
+        *,
+        schema_name,
+        system_prompt,
+        user_prompt,
+        image_data_urls=(),
+    ):
         self.calls += 1
         self.last_attempts = (NineRouterAttempt(1, 200, "ok"),)
         self.user_prompts.append(json.loads(user_prompt))
-        response = await super().complete_json(
+        response = await super().complete_structured(
+            schema_name=schema_name,
             system_prompt=system_prompt,
             user_prompt=user_prompt,
             image_data_urls=image_data_urls,
@@ -153,7 +169,8 @@ class VisualUnderstandingTests(unittest.IsolatedAsyncioTestCase):
         client = RepairingVisionClient()
         manifest = self._manifest()
 
-        understanding = await VisualUnderstandingPlanner(client).plan(
+        planner = VisualUnderstandingPlanner(client)
+        understanding = await planner.plan(
             frame_manifest=manifest,
             scene_report=self.scenes,
             editing_prompt="Create a portrait edit.",
@@ -167,6 +184,45 @@ class VisualUnderstandingTests(unittest.IsolatedAsyncioTestCase):
             "VISUAL_TRACK_ROLE_INVALID",
         )
         self.assertEqual(understanding.tracks[0].role, "speaker")
+        self.assertEqual(understanding.tracks[0].region_ids, ("region-1",))
+        self.assertEqual(
+            planner.last_attempt_categories,
+            ("initial_generation", "legacy_repair"),
+        )
+
+    async def test_planner_delegates_to_registry_repair_once(self):
+        client = RepairingVisionClient()
+        manifest = self._manifest()
+        repair_calls = []
+
+        async def repair_handler(*, invalid_response, error, **_kwargs):
+            repair_calls.append(error.code)
+            client.last_attempts = (NineRouterAttempt(1, 200, "repair_ok"),)
+            repaired = dict(invalid_response)
+            repaired["regions"] = repaired["regions"][:1]
+            repaired["tracks"] = [
+                {**repaired["tracks"][0], "region_ids": ["region-1"]}
+            ]
+            return repaired
+
+        planner = VisualUnderstandingPlanner(
+            client,
+            registry_repair_handler=repair_handler,
+            legacy_repair_enabled=False,
+        )
+        understanding = await planner.plan(
+            frame_manifest=manifest,
+            scene_report=self.scenes,
+            editing_prompt="Create a portrait edit.",
+            transcript_text="A short transcript.",
+        )
+
+        self.assertEqual(repair_calls, ["VISUAL_TRACK_ROLE_INVALID"])
+        self.assertEqual(client.calls, 1)
+        self.assertEqual(
+            planner.last_attempt_categories,
+            ("initial_generation", "visual_repair"),
+        )
         self.assertEqual(understanding.tracks[0].region_ids, ("region-1",))
 
     def test_clip_repair_sampling_covers_each_blocked_window(self):
@@ -216,6 +272,7 @@ class VisualUnderstandingTests(unittest.IsolatedAsyncioTestCase):
         )
 
         payload = json.loads(client.user_prompt)
+        self.assertEqual(client.schema_name, "visual_understanding.v1")
         self.assertEqual(
             [item["frame_id"] for item in payload["attached_images_in_exact_order"]],
             [frame.id for frame in manifest.frames],

@@ -31,6 +31,7 @@ from open_storyline.mvp.edit_plan import (
 from open_storyline.mvp.creative_intent import build_creative_intent
 from open_storyline.mvp.shorts import ShortCandidate, ShortsPlan, build_shorts_plan_artifact
 from open_storyline.mvp.scene_boundaries import build_scene_boundaries
+from open_storyline.mvp.structured_outputs import EDIT_PLAN_SCHEMA, structured_output
 
 
 class FakeRegion:
@@ -61,7 +62,7 @@ class FakeEditClient:
         self.calls = []
         self.last_attempts = ()
 
-    async def complete_json(self, **kwargs):
+    async def complete_structured(self, **kwargs):
         self.call = kwargs
         self.calls.append(kwargs)
         if isinstance(self.response, list):
@@ -612,8 +613,13 @@ class AgenticEditPlannerTests(unittest.IsolatedAsyncioTestCase):
                     payload["exact_field_contract"]["ClipEditPlan"],
                 )
                 self.assertNotIn("response_schema", client.call)
+                self.assertEqual(client.call["schema_name"], "edit_plan.v1")
                 self.assertEqual(client.call["reasoning_effort"], "medium")
                 template = payload["valid_output_template"]
+                self.assertEqual(
+                    structured_output(EDIT_PLAN_SCHEMA).validate(template),
+                    template,
+                )
                 self.assertEqual(template["clips"][0]["source_window"]["end_ms"], 20_000)
                 self.assertEqual(
                     template["clips"][0]["segments"][0]["layout"]["focal_target"]["region_id"],
@@ -813,6 +819,7 @@ class AgenticEditPlannerTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("do not collapse", repair_payload["repair_task"])
         self.assertNotIn("output_contract", repair_payload)
         self.assertNotIn("response_schema", client.calls[1])
+        self.assertEqual(client.calls[1]["schema_name"], "edit_plan_repair.v1")
         self.assertEqual(client.calls[1]["reasoning_effort"], "medium")
         self.assertEqual(plan.clips[0].segments[0].layout.mode, "crop")
 

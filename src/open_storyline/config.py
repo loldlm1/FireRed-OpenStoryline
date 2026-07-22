@@ -201,6 +201,9 @@ class AgenticEditingConfig(ConfigBaseModel):
     creative_qa_strict: bool = True
     render_promotion_mode: Literal["off", "report", "enforce"] = "report"
     completion_policy: Literal["strict", "baseline_guaranteed"] = "strict"
+    delivery_policy: Literal[
+        "qa_enforced", "technical_pass_guaranteed"
+    ] = "qa_enforced"
     semantic_qa_enabled: bool = False
     semantic_qa_max_frames: int = Field(default=4, ge=1, le=8)
     scene_threshold: float = Field(default=0.35, gt=0, lt=1)

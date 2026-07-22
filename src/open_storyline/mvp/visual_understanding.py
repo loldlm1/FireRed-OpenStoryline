@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import replace
-from typing import Any, Literal
+from typing import Any, Awaitable, Callable, Literal
 import json
 import re
 
@@ -14,6 +14,7 @@ from open_storyline.mvp.prompts import (
     VISUAL_UNDERSTANDING_SYSTEM_PROMPT,
 )
 from open_storyline.mvp.scene_boundaries import SceneBoundaryReport
+from open_storyline.mvp.structured_outputs import VISUAL_UNDERSTANDING_SCHEMA
 
 
 VISUAL_UNDERSTANDING_VERSION = "visual_understanding.v1"
@@ -611,8 +612,17 @@ def validate_visual_understanding(
 
 
 class VisualUnderstandingPlanner:
-    def __init__(self, client: NineRouterClient) -> None:
+    def __init__(
+        self,
+        client: NineRouterClient,
+        *,
+        registry_repair_handler: Callable[..., Awaitable[dict[str, Any]]] | None = None,
+        legacy_repair_enabled: bool = True,
+    ) -> None:
         self.client = client
+        self.registry_repair_handler = registry_repair_handler
+        self.legacy_repair_enabled = bool(legacy_repair_enabled)
+        self.last_attempt_categories: tuple[str, ...] = ()
 
     async def plan(
         self,
@@ -675,12 +685,16 @@ class VisualUnderstandingPlanner:
                 "warnings": ["bounded warning text"],
             },
         }
-        response = await self.client.complete_json(
+        response = await self.client.complete_structured(
+            schema_name=VISUAL_UNDERSTANDING_SCHEMA,
             system_prompt=VISUAL_UNDERSTANDING_SYSTEM_PROMPT,
             user_prompt=json.dumps(user_payload, ensure_ascii=False),
             image_data_urls=frame_manifest.image_data_urls,
         )
         first_attempts = tuple(getattr(self.client, "last_attempts", ()))
+        self.last_attempt_categories = tuple(
+            "initial_generation" for _attempt in first_attempts
+        )
         try:
             return validate_visual_understanding(
                 response,
@@ -689,23 +703,35 @@ class VisualUnderstandingPlanner:
                 model=self.client.model,
             )
         except VisualUnderstandingError as exc:
-            repair_payload = {
-                **user_payload,
-                "repair_feedback": {
-                    "error_code": exc.code,
-                    "instruction": (
-                        "Return a complete replacement object that satisfies every "
-                        "listed constraint. Each track may reference only regions that "
-                        "all share exactly the track role; split mixed-role tracks or "
-                        "omit them without relabeling valid region observations."
-                    ),
-                },
-            }
-            repaired = await self.client.complete_json(
-                system_prompt=VISUAL_UNDERSTANDING_SYSTEM_PROMPT,
-                user_prompt=json.dumps(repair_payload, ensure_ascii=False),
-                image_data_urls=frame_manifest.image_data_urls,
-            )
+            if self.registry_repair_handler is not None:
+                repaired = await self.registry_repair_handler(
+                    invalid_response=response,
+                    error=exc,
+                    user_payload=user_payload,
+                    frame_manifest=frame_manifest,
+                    scene_report=scene_report,
+                )
+            elif not self.legacy_repair_enabled:
+                raise
+            else:
+                repair_payload = {
+                    **user_payload,
+                    "repair_feedback": {
+                        "error_code": exc.code,
+                        "instruction": (
+                            "Return a complete replacement object that satisfies every "
+                            "listed constraint. Each track may reference only regions that "
+                            "all share exactly the track role; split mixed-role tracks or "
+                            "omit them without relabeling valid region observations."
+                        ),
+                    },
+                }
+                repaired = await self.client.complete_structured(
+                    schema_name=VISUAL_UNDERSTANDING_SCHEMA,
+                    system_prompt=VISUAL_UNDERSTANDING_SYSTEM_PROMPT,
+                    user_prompt=json.dumps(repair_payload, ensure_ascii=False),
+                    image_data_urls=frame_manifest.image_data_urls,
+                )
             second_attempts = tuple(getattr(self.client, "last_attempts", ()))
             if first_attempts or second_attempts:
                 self.client.last_attempts = tuple(
@@ -715,6 +741,15 @@ class VisualUnderstandingPlanner:
                         start=1,
                     )
                 )
+                repair_category = (
+                    "visual_repair"
+                    if self.registry_repair_handler is not None
+                    else "legacy_repair"
+                )
+                self.last_attempt_categories = tuple((
+                    *("initial_generation" for _attempt in first_attempts),
+                    *(repair_category for _attempt in second_attempts),
+                ))
             return validate_visual_understanding(
                 repaired,
                 frame_manifest=frame_manifest,

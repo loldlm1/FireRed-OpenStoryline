@@ -18,9 +18,13 @@ from unittest.mock import patch
 from sqlalchemy import func, select, text, update
 from sqlalchemy.engine import make_url
 
-from open_storyline.mvp.audit import AuditService
+from open_storyline.mvp.audit import (
+    AuditService,
+    _defect_filter,
+    _defect_records_from_evidence,
+)
 from open_storyline.mvp.database import Database, normalize_database_url
-from open_storyline.mvp.jobs import JobManager, JobStore
+from open_storyline.mvp.jobs import JobManager, JobStore, JobStoreError
 from open_storyline.mvp.models import (
     AuditDocument,
     AuditReview,
@@ -32,6 +36,45 @@ from open_storyline.mvp.outcomes import build_completed_outcome_report
 
 
 ROOT = Path(__file__).resolve().parents[1]
+
+
+class DefectAuditProjectionTests(unittest.TestCase):
+    def test_projection_is_bounded_version_compatible_and_private(self):
+        private_marker = "private prompt transcript provider body /private/video.mp4"
+        records = _defect_records_from_evidence(
+            job_id="a" * 32,
+            attempt_number=2,
+            created_at=datetime(2026, 7, 21, tzinfo=UTC),
+            completed_at=datetime(2026, 7, 21, 0, 1, tzinfo=UTC),
+            outcome={
+                "version": "outcome_report.v1",
+                "grade": "with_limitations",
+                "outputs": [{"video": "short-01.mp4"}],
+                "limitations": [{
+                    "code": "HISTORICAL_UNKNOWN_CODE",
+                    "stage": "qa",
+                    "requested": private_marker,
+                    "description": private_marker,
+                    "presentation": {"es": {"title": private_marker}},
+                }],
+                "fatal_errors": [],
+                "retry": {},
+            },
+        )
+
+        self.assertEqual(len(records), 1)
+        self.assertEqual(records[0]["code"], "HISTORICAL_UNKNOWN_CODE")
+        self.assertEqual(records[0]["canonical_code"], "UNKNOWN_DEFECT")
+        self.assertEqual(records[0]["strategy"], "terminal")
+        self.assertEqual(records[0]["disposition"], "remaining")
+        self.assertEqual(records[0]["fallback_requested"], "")
+        self.assertNotIn(private_marker, json.dumps(records))
+
+    def test_projection_filters_fail_closed(self):
+        self.assertEqual(_defect_filter("code", "audio_missing"), "AUDIO_MISSING")
+        with self.assertRaises(JobStoreError) as caught:
+            _defect_filter("stage", "../../private/path")
+        self.assertEqual(caught.exception.code, "AUDIT_FILTER_INVALID")
 
 
 def _integration_url() -> str:
@@ -93,6 +136,75 @@ class AuditPostgresTestCase(unittest.IsolatedAsyncioTestCase):
 
 @unittest.skipUnless(os.getenv("TEST_DATABASE_URL"), "TEST_DATABASE_URL is not configured")
 class AuditDocumentTests(AuditPostgresTestCase):
+    async def test_defect_records_filter_repair_fallback_and_delivery_evidence(self):
+        job = await self.create_job()
+        outcome = build_completed_outcome_report(
+            outputs=[{"video": "short-01.mp4", "subtitles": None}],
+            promotion_report={
+                "technical_blocker_codes": [],
+                "creative_limitation_codes": ["ACTIVE_PICTURE_TOO_SMALL"],
+                "strict_decision": "block",
+                "delivery_policy": "technical_pass_guaranteed",
+                "delivery_decision": "publish_with_limitations",
+            },
+            repair_report={
+                "version": "repair_report.v1",
+                "registry_version": "defect_registry.v1",
+                "mode": "enforce",
+                "stages": [{
+                    "stage": "plan_repair",
+                    "status": "failed",
+                    "dispositions": [{
+                        "code": "ACTIVE_PICTURE_TOO_SMALL",
+                        "eligible": True,
+                    }],
+                    "attempts": [{"category": "plan_repair"}],
+                    "checkpoint_reused": False,
+                }],
+                "fallbacks": [{
+                    "code": "ACTIVE_PICTURE_TOO_SMALL",
+                    "requested": "crop",
+                    "executed": "fit",
+                }],
+                "summary": {
+                    "resolved_codes": [],
+                    "remaining_codes": ["ACTIVE_PICTURE_TOO_SMALL"],
+                    "introduced_codes": [],
+                    "fallback_applied_codes": ["ACTIVE_PICTURE_TOO_SMALL"],
+                    "not_repairable_codes": [],
+                },
+            },
+        )
+        async with self.database.sessions() as session:
+            async with session.begin():
+                await session.execute(
+                    update(VideoJob)
+                    .where(VideoJob.id == job["id"])
+                    .values(
+                        state="completed",
+                        progress=Decimal("1"),
+                        stage="completed",
+                        result_data={"outcome": outcome},
+                        completed_at=datetime.now(UTC),
+                    )
+                )
+
+        report = await self.audit.defect_records(
+            code="ACTIVE_PICTURE_TOO_SMALL",
+            disposition="fallback_applied",
+            strategy="conditional_llm_or_fallback",
+            stage="plan_repair",
+            limit=10,
+        )
+
+        self.assertEqual(report["kind"], "defect_records")
+        self.assertEqual(len(report["items"]), 1)
+        self.assertTrue(report["items"][0]["repair_attempted"])
+        self.assertEqual(
+            report["items"][0]["delivery_decision"],
+            "publish_with_limitations",
+        )
+
     async def test_outcome_slo_summary_is_bounded_and_tracks_retry_success(self):
         editing_session = await self.store.create_session(
             "Outcome audit",
@@ -118,6 +230,56 @@ class AuditDocumentTests(AuditPostgresTestCase):
                 "creative_limitation_codes": ["CAPTION_WIDTH_EXCEEDED"],
             },
             reused_stages=("transcript",),
+            repair_report={
+                "version": "repair_report.v1",
+                "registry_version": "defect_registry.v1",
+                "mode": "enforce",
+                "stages": [{
+                    "stage": "plan_repair",
+                    "status": "repaired",
+                    "request": {
+                        "response_schema_sha256": "a" * 64,
+                        "repair_prompt_sha256": "b" * 64,
+                    },
+                    "dispositions": [{
+                        "code": "EDIT_PLAN_INVALID",
+                        "eligible": True,
+                    }],
+                    "resolution": {
+                        "original_codes": ["EDIT_PLAN_INVALID"],
+                        "resolved_codes": ["EDIT_PLAN_INVALID"],
+                        "remaining_codes": [],
+                        "introduced_codes": [],
+                    },
+                    "attempts": [{
+                        "category": "plan_repair",
+                        "number": 1,
+                        "status_code": 200,
+                        "reason": "ok",
+                        "duration_ms": 250,
+                    }],
+                    "checkpoint_reused": False,
+                }],
+                "predictive_findings": [],
+                "fallbacks": [],
+                "summary": {
+                    "resolved_codes": ["EDIT_PLAN_INVALID"],
+                    "remaining_codes": [],
+                    "introduced_codes": [],
+                    "fallback_applied_codes": [],
+                    "not_repairable_codes": [],
+                },
+            },
+            rollout_attribution={
+                "model": "cx/gpt-5.6-sol",
+                "reasoning_effort": "medium",
+                "structured_output_mode": "json_schema",
+                "structured_output_boundaries": ["edit_plan_repair.v1"],
+                "repair_mode": "enforce",
+                "delivery_policy": "qa_enforced",
+                "catalog_version": "2026.07.1",
+                "renderer_profile": "high",
+            },
         )
         async with self.database.sessions() as session:
             async with session.begin():
@@ -168,6 +330,10 @@ class AuditDocumentTests(AuditPostgresTestCase):
         self.assertEqual(summary["retry"]["attempts"], 1)
         self.assertEqual(summary["retry"]["playable_successes"], 1)
         self.assertEqual(summary["checkpoints"]["reused_stage_count"], 1)
+        self.assertEqual(summary["repair"]["provider_calls"], 1)
+        self.assertEqual(summary["repair"]["strict_schema"]["validity_rate"], 1.0)
+        self.assertEqual(summary["attribution"][0]["model"], "cx/gpt-5.6-sol")
+        self.assertTrue(summary["rollout_review"]["operator_approval_required"])
         self.assertFalse(summary["truncated"])
 
     async def test_version_attempt_source_and_human_favorite_are_attributable(self):
@@ -304,6 +470,22 @@ class AuditDocumentTests(AuditPostgresTestCase):
         self.assertEqual(documents[invalid.name]["parse_error_code"], "JSON_INVALID")
         self.assertEqual(result["parse_error_code"], "DOCUMENT_TOO_LARGE")
         self.assertEqual(result["raw_text"] if "raw_text" in result else "", "")
+
+    async def test_malformed_repair_report_fails_closed_without_private_text(self):
+        job = await self.create_job()
+        private_marker = "private prompt transcript provider body"
+        repair_report = self.store.output_dir(job["id"]) / "repair_report.json"
+        repair_report.write_text(json.dumps({
+            "version": "repair_report.v1",
+            "provider_body": private_marker,
+        }), encoding="utf-8")
+        await self.store.register_artifact(job["id"], repair_report, kind="repair_report")
+
+        documents = await self.audit.documents(job["id"])
+        stored = next(item for item in documents if item["source_name"] == repair_report.name)
+        self.assertEqual(stored["parse_error_code"], "REPAIR_REPORT_INVALID")
+        self.assertEqual(stored["raw_text"], "")
+        self.assertNotIn(private_marker, json.dumps(stored))
 
     async def test_binary_artifacts_are_never_ingested(self):
         job = await self.create_job()
@@ -539,6 +721,7 @@ class AuditCLITests(AuditPostgresTestCase):
             ["show", job["id"], "--limit", "1", "--format", "json"],
             ["events", job["id"], "--limit", "10", "--format", "json"],
             ["verify", job["id"], "--format", "json"],
+            ["defects", "--since", "24h", "--limit", "10", "--format", "json"],
             ["backfill", "--dry-run", "--limit", "10", "--format", "json"],
         ):
             completed = await asyncio.to_thread(

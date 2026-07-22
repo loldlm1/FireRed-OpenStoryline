@@ -2,15 +2,22 @@ from __future__ import annotations
 
 from collections import Counter
 from datetime import datetime
-from math import sqrt
+from math import isfinite, sqrt
 from statistics import median
 from typing import Any, Iterable, Sequence
 import os
+import re
 
+from open_storyline.mvp.defects import (
+    DEFECT_REGISTRY_SHA256,
+    DEFECT_REGISTRY_VERSION,
+    defect_public_metadata,
+)
 from open_storyline.mvp.fallbacks import FallbackEntry
 
 
-OUTCOME_REPORT_VERSION = "outcome_report.v1"
+OUTCOME_REPORT_VERSION = "outcome_report.v2"
+OUTCOME_REPORT_VERSIONS = frozenset({"outcome_report.v1", OUTCOME_REPORT_VERSION})
 OUTCOME_GRADES = frozenset({
     "enhanced",
     "with_limitations",
@@ -20,6 +27,14 @@ OUTCOME_GRADES = frozenset({
 QUALITY_FEEDBACK_ERROR_CODES = frozenset({
     "EDIT_PLAN_VISUAL_COVERAGE_INSUFFICIENT",
 })
+ROLLOUT_REVIEW_THRESHOLDS = {
+    "max_repair_provider_latency_p95_ms": 180_000,
+    "max_repair_cost_per_trigger_usd": 0.25,
+    "max_new_defect_rate": 0.0,
+    "min_playable_output_rate": 0.99,
+}
+_ATTRIBUTION_TOKEN = re.compile(r"^[A-Za-z0-9._:/+-]{1,160}$")
+_HASH = re.compile(r"^[a-f0-9]{64}$")
 
 
 def retry_ux_enabled() -> bool:
@@ -38,15 +53,431 @@ def _tokens(values: Iterable[Any]) -> list[str]:
 
 
 def _limitation(code: str) -> dict[str, Any]:
+    presentation = defect_public_metadata(code)
     return {
         "code": code,
         "stage": "qa",
         "severity": "limitation",
-        "description": f"Strict creative QA reported {code}.",
+        "description": presentation["en"]["description"],
         "evidence_code": code,
-        "retryable": True,
-        "recommended_retry_action": "retry_defects",
+        "retryable": presentation["retryable"],
+        "recommended_retry_action": presentation["retry_action"],
+        "presentation": presentation,
     }
+
+
+def _metric_int(value: Any, maximum: int = 100_000_000) -> int:
+    try:
+        parsed = int(value)
+    except (TypeError, ValueError, OverflowError):
+        return 0
+    return max(0, min(parsed, maximum))
+
+
+def _metric_float(value: Any, maximum: float = 1_000_000.0) -> float:
+    try:
+        parsed = float(value)
+    except (TypeError, ValueError, OverflowError):
+        return 0.0
+    if not isfinite(parsed) or parsed < 0:
+        return 0.0
+    return round(min(parsed, maximum), 8)
+
+
+def _repair_rollout_metrics(
+    repair: dict[str, Any],
+    *,
+    attribution: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    stages = [
+        item for item in (repair.get("stages") or [])[:2]
+        if isinstance(item, dict)
+    ]
+    attempts = [
+        attempt
+        for stage in stages
+        for attempt in (stage.get("attempts") or [])[:16]
+        if isinstance(attempt, dict)
+    ]
+    semantic_stages = [
+        stage for stage in stages
+        if stage.get("attempts") and stage.get("checkpoint_reused") is not True
+    ]
+    rollout = attribution if isinstance(attribution, dict) else {}
+    strict_boundaries = set(rollout.get("structured_output_boundaries") or ())
+    strict_schema_by_stage = {
+        "visual_understanding": "visual_understanding.v1",
+        "plan_repair": "edit_plan_repair.v1",
+    }
+    strict_stages = [
+        stage
+        for stage in semantic_stages
+        if rollout.get("structured_output_mode") == "json_schema"
+        and strict_schema_by_stage.get(str(stage.get("stage") or ""))
+        in strict_boundaries
+    ]
+    predictions = [
+        item for item in (repair.get("predictive_findings") or [])[:32]
+        if isinstance(item, dict)
+    ]
+    summary = repair.get("summary") if isinstance(repair.get("summary"), dict) else {}
+    fallbacks = [
+        item for item in (repair.get("fallbacks") or [])[:64]
+        if isinstance(item, dict)
+    ]
+    semantic_valid = sum(stage.get("status") == "repaired" for stage in semantic_stages)
+    strict_valid = sum(
+        any(str(attempt.get("reason") or "") == "ok" for attempt in stage.get("attempts") or ())
+        for stage in strict_stages
+    )
+    by_original_code: dict[str, Counter[str]] = {}
+    for stage in semantic_stages:
+        resolution = (
+            stage.get("resolution")
+            if isinstance(stage.get("resolution"), dict)
+            else {}
+        )
+        original_codes = _codes(resolution.get("original_codes") or ())
+        if not original_codes:
+            original_codes = _codes(
+                item.get("code")
+                for item in (stage.get("dispositions") or [])[:32]
+                if isinstance(item, dict) and item.get("eligible") is True
+            )
+        for code in original_codes:
+            counts = by_original_code.setdefault(code, Counter())
+            counts["attempts"] += 1
+            counts["successes"] += int(stage.get("status") == "repaired")
+
+    predictive_objective = sum(item.get("objective") is True for item in predictions)
+    predictive_advisory = sum(item.get("objective") is not True for item in predictions)
+    return {
+        "triggered": bool(stages),
+        "semantic_calls": len(semantic_stages),
+        "transport_attempts": len(attempts),
+        "strict_schema_attempts": len(strict_stages),
+        "strict_schema_valid": strict_valid,
+        "semantic_valid": semantic_valid,
+        "successful_repairs": sum(stage.get("status") == "repaired" for stage in semantic_stages),
+        "visual_calls": sum(
+            stage.get("stage") == "visual_understanding" for stage in semantic_stages
+        ),
+        "visual_successes": sum(
+            stage.get("stage") == "visual_understanding"
+            and stage.get("status") == "repaired"
+            for stage in semantic_stages
+        ),
+        "plan_calls": sum(stage.get("stage") == "plan_repair" for stage in semantic_stages),
+        "plan_successes": sum(
+            stage.get("stage") == "plan_repair" and stage.get("status") == "repaired"
+            for stage in semantic_stages
+        ),
+        "predictive_objective_findings": predictive_objective,
+        "predictive_advisory_findings": predictive_advisory,
+        "predictive_advisory_attached": int(
+            predictive_objective > 0 and predictive_advisory > 0
+        ),
+        "fallback_count": len(fallbacks),
+        "ffmpega_omission_count": sum(
+            str(item.get("code") or "") == "EFFECT_OMITTED"
+            or "ffmpega" in str(item.get("requested") or "").lower()
+            for item in fallbacks
+        ),
+        "new_defect_count": len(_codes(summary.get("introduced_codes") or ())),
+        "checkpoint_reuse_count": sum(
+            stage.get("checkpoint_reused") is True for stage in stages
+        ),
+        "input_tokens": sum(_metric_int(item.get("input_tokens")) for item in attempts),
+        "output_tokens": sum(_metric_int(item.get("output_tokens")) for item in attempts),
+        "reasoning_tokens": sum(_metric_int(item.get("reasoning_tokens")) for item in attempts),
+        "total_tokens": sum(_metric_int(item.get("total_tokens")) for item in attempts),
+        "cost_usd": round(sum(_metric_float(item.get("cost_usd")) for item in attempts), 8),
+        "provider_latency_ms": sum(_metric_int(item.get("duration_ms"), 3_600_000) for item in attempts),
+        "by_original_code": [
+            {
+                "code": code,
+                "attempts": counts["attempts"],
+                "successes": counts["successes"],
+            }
+            for code, counts in sorted(by_original_code.items())
+        ][:64],
+    }
+
+
+def _safe_attribution_token(value: Any, *, fallback: str = "unknown") -> str:
+    candidate = str(value or "")[:160]
+    return candidate if _ATTRIBUTION_TOKEN.fullmatch(candidate) else fallback
+
+
+def _rollout_attribution(
+    value: dict[str, Any] | None,
+    *,
+    repair: dict[str, Any],
+) -> dict[str, Any]:
+    source = value if isinstance(value, dict) else {}
+    schema_hashes = sorted(
+        {
+            str(item)
+            for item in source.get("schema_hashes") or ()
+            if _HASH.fullmatch(str(item))
+        }
+        | {
+            str((stage.get("request") or {}).get("response_schema_sha256") or "")
+            for stage in (repair.get("stages") or [])[:2]
+            if isinstance(stage, dict)
+            and isinstance(stage.get("request"), dict)
+            and _HASH.fullmatch(
+                str((stage.get("request") or {}).get("response_schema_sha256") or "")
+            )
+        }
+    )
+    prompt_hashes = sorted(
+        {
+            str(item)
+            for item in source.get("prompt_hashes") or ()
+            if _HASH.fullmatch(str(item))
+        }
+        | {
+            str((stage.get("request") or {}).get("repair_prompt_sha256") or "")
+            for stage in (repair.get("stages") or [])[:2]
+            if isinstance(stage, dict)
+            and isinstance(stage.get("request"), dict)
+            and _HASH.fullmatch(
+                str((stage.get("request") or {}).get("repair_prompt_sha256") or "")
+            )
+        }
+    )
+    boundaries = source.get("structured_output_boundaries")
+    return {
+        "model": _safe_attribution_token(source.get("model")),
+        "reasoning_effort": _safe_attribution_token(source.get("reasoning_effort")),
+        "structured_output_mode": _safe_attribution_token(
+            source.get("structured_output_mode")
+        ),
+        "structured_output_boundaries": sorted({
+            token
+            for item in (boundaries if isinstance(boundaries, (list, tuple, set)) else ())
+            if (token := _safe_attribution_token(item, fallback=""))
+        })[:16],
+        "repair_mode": _safe_attribution_token(
+            source.get("repair_mode") or repair.get("mode") or "off"
+        ),
+        "delivery_policy": _safe_attribution_token(source.get("delivery_policy")),
+        "catalog_version": _safe_attribution_token(source.get("catalog_version")),
+        "renderer_profile": _safe_attribution_token(source.get("renderer_profile")),
+        "registry_version": _safe_attribution_token(
+            repair.get("registry_version") or DEFECT_REGISTRY_VERSION
+        ),
+        "schema_hashes": schema_hashes,
+        "prompt_hashes": prompt_hashes,
+    }
+
+
+def _compact_repair_metrics(value: Any) -> dict[str, Any]:
+    source = value if isinstance(value, dict) else {}
+    return {
+        "triggered": source.get("triggered") is True,
+        "semantic_calls": _metric_int(source.get("semantic_calls"), 2),
+        "transport_attempts": _metric_int(source.get("transport_attempts"), 32),
+        "strict_schema_attempts": _metric_int(source.get("strict_schema_attempts"), 2),
+        "strict_schema_valid": _metric_int(source.get("strict_schema_valid"), 2),
+        "semantic_valid": _metric_int(source.get("semantic_valid"), 2),
+        "successful_repairs": _metric_int(source.get("successful_repairs"), 2),
+        "visual_calls": _metric_int(source.get("visual_calls"), 1),
+        "visual_successes": _metric_int(source.get("visual_successes"), 1),
+        "plan_calls": _metric_int(source.get("plan_calls"), 1),
+        "plan_successes": _metric_int(source.get("plan_successes"), 1),
+        "predictive_objective_findings": _metric_int(
+            source.get("predictive_objective_findings"), 32
+        ),
+        "predictive_advisory_findings": _metric_int(
+            source.get("predictive_advisory_findings"), 32
+        ),
+        "predictive_advisory_attached": _metric_int(
+            source.get("predictive_advisory_attached"), 1
+        ),
+        "fallback_count": _metric_int(source.get("fallback_count"), 64),
+        "ffmpega_omission_count": _metric_int(
+            source.get("ffmpega_omission_count"), 64
+        ),
+        "new_defect_count": _metric_int(source.get("new_defect_count"), 32),
+        "checkpoint_reuse_count": _metric_int(
+            source.get("checkpoint_reuse_count"), 2
+        ),
+        "input_tokens": _metric_int(source.get("input_tokens")),
+        "output_tokens": _metric_int(source.get("output_tokens")),
+        "reasoning_tokens": _metric_int(source.get("reasoning_tokens")),
+        "total_tokens": _metric_int(source.get("total_tokens")),
+        "cost_usd": _metric_float(source.get("cost_usd")),
+        "provider_latency_ms": _metric_int(
+            source.get("provider_latency_ms"), 7_200_000
+        ),
+        "by_original_code": [
+            {
+                "code": defect_public_metadata(item.get("code"))["raw_code"],
+                "attempts": _metric_int(item.get("attempts"), 2),
+                "successes": _metric_int(item.get("successes"), 2),
+            }
+            for item in (source.get("by_original_code") or [])[:64]
+            if isinstance(item, dict) and item.get("code")
+        ],
+    }
+
+
+def _semantic_qa_summary(value: Any) -> dict[str, Any]:
+    source = value if isinstance(value, dict) else {}
+    status = str(source.get("status") or "unavailable")[:40]
+    if status not in {"disabled", "pass", "review", "unavailable"}:
+        status = "unavailable"
+    attempts = [
+        item for item in (source.get("attempts") or [])[:6]
+        if isinstance(item, dict)
+    ]
+    observations = [
+        item for item in (source.get("observations") or [])[:8]
+        if isinstance(item, dict)
+    ]
+    compact_metrics = (
+        source.get("metrics") if isinstance(source.get("metrics"), dict) else None
+    )
+    metrics = (
+        {
+            "attempts": _metric_int(compact_metrics.get("attempts"), 6),
+            "provider_latency_ms": _metric_int(
+                compact_metrics.get("provider_latency_ms"),
+                3_600_000,
+            ),
+            "input_tokens": _metric_int(compact_metrics.get("input_tokens")),
+            "output_tokens": _metric_int(compact_metrics.get("output_tokens")),
+            "reasoning_tokens": _metric_int(
+                compact_metrics.get("reasoning_tokens")
+            ),
+            "total_tokens": _metric_int(compact_metrics.get("total_tokens")),
+            "cost_usd": _metric_float(compact_metrics.get("cost_usd")),
+        }
+        if compact_metrics is not None
+        else {
+            "attempts": len(attempts),
+            "provider_latency_ms": sum(
+                _metric_int(item.get("duration_ms"), 3_600_000)
+                for item in attempts
+            ),
+            "input_tokens": sum(
+                _metric_int(item.get("input_tokens")) for item in attempts
+            ),
+            "output_tokens": sum(
+                _metric_int(item.get("output_tokens")) for item in attempts
+            ),
+            "reasoning_tokens": sum(
+                _metric_int(item.get("reasoning_tokens")) for item in attempts
+            ),
+            "total_tokens": sum(
+                _metric_int(item.get("total_tokens")) for item in attempts
+            ),
+            "cost_usd": round(
+                sum(_metric_float(item.get("cost_usd")) for item in attempts),
+                8,
+            ),
+        }
+    )
+    return {
+        "status": status,
+        "schema_valid": status in {"pass", "review"},
+        "provider_calls": _metric_int(source.get("provider_calls"), 1),
+        "frame_count": _metric_int(source.get("frame_count"), 8),
+        "observation_count": (
+            _metric_int(source.get("observation_count"), 8)
+            if source.get("observation_count") is not None
+            else len(observations)
+        ),
+        "error_code": str(source.get("error_code") or "")[:80],
+        "metrics": metrics,
+    }
+
+
+def repair_defect_lifecycle(repair: dict[str, Any]) -> list[dict[str, Any]]:
+    records: dict[str, dict[str, Any]] = {}
+
+    def record(code: Any) -> dict[str, Any]:
+        presentation = defect_public_metadata(code)
+        canonical = presentation["canonical_code"]
+        return records.setdefault(canonical, {
+            "code": canonical,
+            "strategy": presentation["repair_strategy"],
+            "eligible": False,
+            "repair_attempted": False,
+            "dispositions": set(),
+            "stage_statuses": [],
+            "fallbacks": [],
+            "presentation": presentation,
+        })
+
+    summary = repair.get("summary") if isinstance(repair.get("summary"), dict) else {}
+    for key, disposition in (
+        ("resolved_codes", "resolved"),
+        ("remaining_codes", "remaining"),
+        ("introduced_codes", "new"),
+        ("fallback_applied_codes", "fallback_applied"),
+        ("not_repairable_codes", "not_repairable"),
+    ):
+        for code in summary.get(key) or ():
+            record(code)["dispositions"].add(disposition)
+
+    for stage in (repair.get("stages") or [])[:2]:
+        if not isinstance(stage, dict):
+            continue
+        stage_name = str(stage.get("stage") or "")[:40]
+        status = str(stage.get("status") or "")[:40]
+        attempts = [
+            item for item in (stage.get("attempts") or [])[:16]
+            if isinstance(item, dict)
+        ]
+        checkpoint_reused = stage.get("checkpoint_reused") is True
+        for disposition in (stage.get("dispositions") or [])[:32]:
+            if not isinstance(disposition, dict):
+                continue
+            item = record(disposition.get("code"))
+            eligible = disposition.get("eligible") is True
+            item["eligible"] = item["eligible"] or eligible
+            item["repair_attempted"] = item["repair_attempted"] or bool(
+                eligible
+                and (
+                    attempts
+                    or status in {"repaired", "rejected", "failed"}
+                    or checkpoint_reused
+                )
+            )
+            if not eligible:
+                item["dispositions"].add("not_repairable")
+            stage_status = {
+                "stage": stage_name,
+                "status": status,
+                "checkpoint_reused": checkpoint_reused,
+            }
+            if stage_status not in item["stage_statuses"]:
+                item["stage_statuses"].append(stage_status)
+
+    for fallback in (repair.get("fallbacks") or [])[:64]:
+        if not isinstance(fallback, dict):
+            continue
+        item = record(fallback.get("code"))
+        item["dispositions"].add("fallback_applied")
+        fallback_state = {
+            "requested": str(fallback.get("requested") or "")[:120],
+            "executed": str(fallback.get("executed") or "")[:120],
+        }
+        if fallback_state not in item["fallbacks"]:
+            item["fallbacks"].append(fallback_state)
+
+    return [
+        {
+            **item,
+            "dispositions": sorted(item["dispositions"]),
+            "stage_statuses": item["stage_statuses"][:4],
+            "fallbacks": item["fallbacks"][:8],
+        }
+        for _code, item in sorted(records.items())
+    ][:64]
 
 
 def build_completed_outcome_report(
@@ -59,6 +490,9 @@ def build_completed_outcome_report(
     reused_stages: Iterable[str] = (),
     recomputed_stages: Iterable[str] = (),
     prior_limitation_codes: Iterable[str] = (),
+    repair_report: dict[str, Any] | None = None,
+    rollout_attribution: dict[str, Any] | None = None,
+    semantic_review: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     fallbacks = tuple(fallback_entries)
     promotion = promotion_report if isinstance(promotion_report, dict) else {}
@@ -78,6 +512,7 @@ def build_completed_outcome_report(
             "description": entry.reason,
             "retryable": entry.retryable,
             "recommended_retry_action": entry.retry_action,
+            "presentation": defect_public_metadata(entry.code),
         }
         for entry in fallbacks
     ]
@@ -88,6 +523,7 @@ def build_completed_outcome_report(
             "stage": "qa",
             "retryable": True,
             "recommended_retry_action": "retry_defects",
+            "presentation": defect_public_metadata(code),
         }
         for code in technical_codes
     ]
@@ -102,8 +538,36 @@ def build_completed_outcome_report(
         str(item["code"]) for item in [*limitations, *fatal_errors]
     }
     prior_codes = {str(value) for value in prior_limitation_codes if value}
+    repair = repair_report if isinstance(repair_report, dict) else {}
+    repair_summary = (
+        repair.get("summary") if isinstance(repair.get("summary"), dict) else {}
+    )
+    repair_defects = repair_defect_lifecycle(repair)
+    attribution = _rollout_attribution(rollout_attribution, repair=repair)
+    repair_metrics = _repair_rollout_metrics(repair, attribution=attribution)
+    delivery_policy = str(
+        promotion.get("delivery_policy")
+        or (
+            "technical_pass_guaranteed"
+            if promotion.get("effective_policy") == "baseline_guaranteed"
+            else "qa_enforced"
+        )
+    )
+    delivery_decision = str(
+        promotion.get("delivery_decision")
+        or (
+            "publish_with_limitations"
+            if creative_codes and not technical_codes
+            else "publish_enhanced"
+            if not technical_codes
+            else "withhold_technical"
+        )
+    )
     return {
         "version": OUTCOME_REPORT_VERSION,
+        "registry_version": DEFECT_REGISTRY_VERSION,
+        "registry_sha256": DEFECT_REGISTRY_SHA256,
+        "attribution": attribution,
         "grade": grade,
         "technical_status": "blocked" if technical_codes else "pass",
         "outputs": [
@@ -118,10 +582,54 @@ def build_completed_outcome_report(
         "promotion": {
             "decision": promotion.get("promotion_decision"),
             "effective_policy": promotion.get("effective_policy"),
-            "strict_decision": (promotion.get("policy_decisions") or {}).get("strict"),
+            "strict_decision": (
+                promotion.get("strict_decision")
+                or (promotion.get("policy_decisions") or {}).get("strict")
+            ),
             "baseline_guaranteed_decision": (
                 promotion.get("policy_decisions") or {}
             ).get("baseline_guaranteed"),
+        },
+        "strict_qa": {
+            "decision": (
+                promotion.get("strict_decision")
+                or (promotion.get("policy_decisions") or {}).get("strict")
+            ),
+            "blocker_codes": _codes(promotion.get("blocker_codes") or ()),
+        },
+        "semantic_qa": _semantic_qa_summary(semantic_review),
+        "delivery": {
+            "policy": delivery_policy,
+            "decision": delivery_decision,
+            "download_available": bool(outputs)
+            and promotion.get("download_available") is not False,
+        },
+        "repair": {
+            "report_version": str(repair.get("version") or "")[:80],
+            "registry_version": str(
+                repair.get("registry_version") or DEFECT_REGISTRY_VERSION
+            )[:80],
+            "mode": str(repair.get("mode") or "off")[:20],
+            "stages": [
+                {
+                    "stage": str(item.get("stage") or "")[:40],
+                    "status": str(item.get("status") or "")[:40],
+                    "checkpoint_reused": item.get("checkpoint_reused") is True,
+                }
+                for item in (repair.get("stages") or [])[:2]
+                if isinstance(item, dict)
+            ],
+            "resolved_codes": _codes(repair_summary.get("resolved_codes") or ()),
+            "remaining_codes": _codes(repair_summary.get("remaining_codes") or ()),
+            "introduced_codes": _codes(repair_summary.get("introduced_codes") or ()),
+            "fallback_applied_codes": _codes(
+                repair_summary.get("fallback_applied_codes") or ()
+            ),
+            "not_repairable_codes": _codes(
+                repair_summary.get("not_repairable_codes") or ()
+            ),
+            "defects": repair_defects,
+            "metrics": repair_metrics,
         },
         "retry": {
             "supported": bool(limitations or fatal_errors),
@@ -168,6 +676,9 @@ def build_failed_outcome_report(
     )
     return {
         "version": OUTCOME_REPORT_VERSION,
+        "registry_version": DEFECT_REGISTRY_VERSION,
+        "registry_sha256": DEFECT_REGISTRY_SHA256,
+        "attribution": _rollout_attribution(None, repair={}),
         "grade": "retryable_failure" if retryable else "terminal_failure",
         "technical_status": "blocked" if failure_codes else "pass",
         "outputs": [],
@@ -178,6 +689,7 @@ def build_failed_outcome_report(
                 "stage": str(stage or "unknown")[:64],
                 "retryable": retryable,
                 "recommended_retry_action": "retry_defects" if retryable else "none",
+                "presentation": defect_public_metadata(item),
             }
             for item in failure_codes
         ],
@@ -192,6 +704,44 @@ def build_failed_outcome_report(
             "effective_policy": None,
             "strict_decision": "block",
             "baseline_guaranteed_decision": "block",
+        },
+        "strict_qa": {
+            "decision": "block",
+            "blocker_codes": current_codes,
+        },
+        "delivery": {
+            "policy": "qa_enforced",
+            "decision": "withhold_technical" if failure_codes else "withhold_strict",
+            "download_available": False,
+        },
+        "repair": {
+            "report_version": "",
+            "registry_version": DEFECT_REGISTRY_VERSION,
+            "mode": "off",
+            "stages": [],
+            "resolved_codes": [],
+            "remaining_codes": current_codes,
+            "introduced_codes": current_codes,
+            "fallback_applied_codes": [],
+            "not_repairable_codes": current_codes,
+            "defects": [
+                {
+                    "code": item,
+                    "strategy": defect_public_metadata(item)["repair_strategy"],
+                    "eligible": False,
+                    "repair_attempted": False,
+                    "dispositions": ["not_repairable", "remaining"],
+                    "stage_statuses": [{
+                        "stage": str(stage or "unknown")[:40],
+                        "status": "failed",
+                        "checkpoint_reused": False,
+                    }],
+                    "fallbacks": [],
+                    "presentation": defect_public_metadata(item),
+                }
+                for item in current_codes[:64]
+            ],
+            "metrics": _repair_rollout_metrics({}),
         },
         "retry": {
             "supported": retryable,
@@ -225,6 +775,7 @@ def outcome_summary(value: Any) -> dict[str, Any] | None:
             "recommended_retry_action": str(
                 item.get("recommended_retry_action") or ""
             )[:40],
+            "presentation": defect_public_metadata(item.get("code")),
         }
         for item in (value.get("limitations") or [])[:24]
         if isinstance(item, dict) and item.get("code")
@@ -234,6 +785,7 @@ def outcome_summary(value: Any) -> dict[str, Any] | None:
             "code": str(item.get("code") or "")[:80],
             "stage": str(item.get("stage") or "")[:64],
             "retryable": bool(item.get("retryable")),
+            "presentation": defect_public_metadata(item.get("code")),
         }
         for item in (value.get("fatal_errors") or [])[:24]
         if isinstance(item, dict) and item.get("code")
@@ -242,8 +794,21 @@ def outcome_summary(value: Any) -> dict[str, Any] | None:
     promotion = (
         value.get("promotion") if isinstance(value.get("promotion"), dict) else {}
     )
+    repair = value.get("repair") if isinstance(value.get("repair"), dict) else {}
+    delivery = value.get("delivery") if isinstance(value.get("delivery"), dict) else {}
+    strict_qa = value.get("strict_qa") if isinstance(value.get("strict_qa"), dict) else {}
+    semantic_qa = (
+        value.get("semantic_qa")
+        if isinstance(value.get("semantic_qa"), dict)
+        else {}
+    )
+    attribution = (
+        value.get("attribution") if isinstance(value.get("attribution"), dict) else {}
+    )
     return {
         "version": str(value.get("version") or "")[:80],
+        "registry_version": str(value.get("registry_version") or "")[:80],
+        "attribution": _rollout_attribution(attribution, repair=repair),
         "grade": grade,
         "technical_status": str(value.get("technical_status") or "")[:40],
         "output_count": len(value.get("outputs") or []),
@@ -254,6 +819,77 @@ def outcome_summary(value: Any) -> dict[str, Any] | None:
         "promotion": {
             "decision": str(promotion.get("decision") or "")[:40],
             "effective_policy": str(promotion.get("effective_policy") or "")[:40],
+        },
+        "strict_qa": {
+            "decision": str(
+                strict_qa.get("decision")
+                or promotion.get("strict_decision")
+                or ""
+            )[:40],
+            "blocker_codes": _codes(strict_qa.get("blocker_codes") or ()),
+        },
+        "semantic_qa": _semantic_qa_summary(semantic_qa),
+        "delivery": {
+            "policy": str(delivery.get("policy") or "")[:40],
+            "decision": str(delivery.get("decision") or "")[:40],
+            "download_available": delivery.get("download_available") is True,
+        },
+        "repair": {
+            "report_version": str(repair.get("report_version") or "")[:80],
+            "registry_version": str(repair.get("registry_version") or "")[:80],
+            "mode": str(repair.get("mode") or "")[:20],
+            "stages": [
+                {
+                    "stage": str(item.get("stage") or "")[:40],
+                    "status": str(item.get("status") or "")[:40],
+                    "checkpoint_reused": item.get("checkpoint_reused") is True,
+                }
+                for item in (repair.get("stages") or [])[:2]
+                if isinstance(item, dict)
+            ],
+            "resolved_codes": _codes(repair.get("resolved_codes") or ()),
+            "remaining_codes": _codes(repair.get("remaining_codes") or ()),
+            "introduced_codes": _codes(repair.get("introduced_codes") or ()),
+            "fallback_applied_codes": _codes(
+                repair.get("fallback_applied_codes") or ()
+            ),
+            "not_repairable_codes": _codes(
+                repair.get("not_repairable_codes") or ()
+            ),
+            "defects": [
+                {
+                    "code": defect_public_metadata(item.get("code"))["raw_code"],
+                    "strategy": defect_public_metadata(item.get("code"))[
+                        "repair_strategy"
+                    ],
+                    "eligible": item.get("eligible") is True,
+                    "repair_attempted": item.get("repair_attempted") is True,
+                    "dispositions": _tokens(item.get("dispositions") or ()),
+                    "stage_statuses": [
+                        {
+                            "stage": str(stage.get("stage") or "")[:40],
+                            "status": str(stage.get("status") or "")[:40],
+                            "checkpoint_reused": (
+                                stage.get("checkpoint_reused") is True
+                            ),
+                        }
+                        for stage in (item.get("stage_statuses") or [])[:4]
+                        if isinstance(stage, dict)
+                    ],
+                    "fallbacks": [
+                        {
+                            "requested": str(fallback.get("requested") or "")[:120],
+                            "executed": str(fallback.get("executed") or "")[:120],
+                        }
+                        for fallback in (item.get("fallbacks") or [])[:8]
+                        if isinstance(fallback, dict)
+                    ],
+                    "presentation": defect_public_metadata(item.get("code")),
+                }
+                for item in (repair.get("defects") or [])[:64]
+                if isinstance(item, dict) and item.get("code")
+            ],
+            "metrics": _compact_repair_metrics(repair.get("metrics")),
         },
         "retry": {
             "supported": bool(retry.get("supported")),
@@ -321,6 +957,15 @@ def build_outcome_slo_summary(rows: Sequence[dict[str, Any]]) -> dict[str, Any]:
     classified = 0
     playable = 0
     unclassified = 0
+    repair_totals: Counter[str] = Counter()
+    repair_triggered = 0
+    repair_fallback_jobs = 0
+    repair_provider_latency_ms: list[int] = []
+    repair_by_code: dict[str, Counter[str]] = {}
+    predictive_attachment_opportunities = 0
+    technical_pass_candidates = 0
+    technical_pass_published = 0
+    attribution_counts: Counter[tuple[Any, ...]] = Counter()
     for row in rows:
         summary = outcome_summary(row.get("outcome"))
         if summary is None:
@@ -336,6 +981,66 @@ def build_outcome_slo_summary(rows: Sequence[dict[str, Any]]) -> dict[str, Any]:
         )
         playable += int(is_playable)
         limitations.update(summary["limitation_codes"])
+        repair_metrics = summary["repair"]["metrics"]
+        for name in (
+            "semantic_calls",
+            "transport_attempts",
+            "strict_schema_attempts",
+            "strict_schema_valid",
+            "semantic_valid",
+            "successful_repairs",
+            "visual_calls",
+            "visual_successes",
+            "plan_calls",
+            "plan_successes",
+            "predictive_objective_findings",
+            "predictive_advisory_findings",
+            "predictive_advisory_attached",
+            "fallback_count",
+            "ffmpega_omission_count",
+            "new_defect_count",
+            "checkpoint_reuse_count",
+            "input_tokens",
+            "output_tokens",
+            "reasoning_tokens",
+            "total_tokens",
+        ):
+            repair_totals[name] += int(repair_metrics[name])
+        repair_totals["cost_micro_usd"] += int(
+            round(float(repair_metrics["cost_usd"]) * 1_000_000)
+        )
+        if repair_metrics["triggered"]:
+            repair_triggered += 1
+        if repair_metrics["semantic_calls"]:
+            repair_provider_latency_ms.append(
+                int(repair_metrics["provider_latency_ms"])
+            )
+        repair_fallback_jobs += int(repair_metrics["fallback_count"] > 0)
+        predictive_attachment_opportunities += int(
+            repair_metrics["predictive_objective_findings"] > 0
+        )
+        for item in repair_metrics["by_original_code"]:
+            counts = repair_by_code.setdefault(item["code"], Counter())
+            counts["attempts"] += item["attempts"]
+            counts["successes"] += item["successes"]
+        delivery = summary["delivery"]
+        if delivery["policy"] == "technical_pass_guaranteed":
+            technical_pass_candidates += 1
+            technical_pass_published += int(delivery["download_available"])
+        attribution = summary["attribution"]
+        attribution_counts[(
+            attribution["model"],
+            attribution["reasoning_effort"],
+            attribution["structured_output_mode"],
+            tuple(attribution["structured_output_boundaries"]),
+            attribution["repair_mode"],
+            attribution["delivery_policy"],
+            attribution["catalog_version"],
+            attribution["renderer_profile"],
+            attribution["registry_version"],
+            tuple(attribution["schema_hashes"]),
+            tuple(attribution["prompt_hashes"]),
+        )] += 1
         retry = summary["retry"]
         reused_stages += len(retry["reused_stage_names"])
         recomputed_stages += len(retry["recomputed_stage_names"])
@@ -352,6 +1057,53 @@ def build_outcome_slo_summary(rows: Sequence[dict[str, Any]]) -> dict[str, Any]:
             durations.append(int((completed - started).total_seconds() * 1000))
     rate = playable / classified if classified else None
     confidence = _wilson_interval(playable, classified)
+    repair_cost_usd = repair_totals["cost_micro_usd"] / 1_000_000
+    repair_cost_per_trigger = (
+        repair_cost_usd / repair_triggered if repair_triggered else None
+    )
+    repair_latency_p95 = _percentile(repair_provider_latency_ms, 0.95)
+    new_defect_rate = (
+        repair_totals["new_defect_count"] / repair_totals["semantic_calls"]
+        if repair_totals["semantic_calls"]
+        else None
+    )
+    review_signals = {
+        "repair_provider_latency_p95_ms": repair_latency_p95,
+        "repair_cost_per_trigger_usd": (
+            round(repair_cost_per_trigger, 8)
+            if repair_cost_per_trigger is not None
+            else None
+        ),
+        "new_defect_rate": (
+            round(new_defect_rate, 6) if new_defect_rate is not None else None
+        ),
+        "playable_output_rate": round(rate, 6) if rate is not None else None,
+    }
+    review_checks = {
+        "repair_latency_within_threshold": (
+            repair_latency_p95 is not None
+            and repair_latency_p95
+            <= ROLLOUT_REVIEW_THRESHOLDS["max_repair_provider_latency_p95_ms"]
+        ),
+        "repair_cost_within_threshold": (
+            repair_cost_per_trigger is not None
+            and repair_cost_per_trigger
+            <= ROLLOUT_REVIEW_THRESHOLDS["max_repair_cost_per_trigger_usd"]
+        ),
+        "no_new_defect_regression": (
+            new_defect_rate is not None
+            and new_defect_rate
+            <= ROLLOUT_REVIEW_THRESHOLDS["max_new_defect_rate"]
+        ),
+        "playable_output_rate_within_threshold": (
+            rate is not None
+            and rate >= ROLLOUT_REVIEW_THRESHOLDS["min_playable_output_rate"]
+        ),
+    }
+
+    def metric_rate(successes: int, total: int) -> float | None:
+        return round(successes / total, 6) if total else None
+
     return {
         "version": "outcome_slo_summary.v1",
         "target": 0.99,
@@ -365,6 +1117,11 @@ def build_outcome_slo_summary(rows: Sequence[dict[str, Any]]) -> dict[str, Any]:
             and confidence["low"] is not None
             and confidence["low"] >= 0.99
         ),
+        "claim_gate": {
+            "evidence_only": True,
+            "enables_rollout": False,
+            "minimum_sample_size": 100,
+        },
         "outcomes": dict(sorted(grades.items())),
         "outcome_rates": {
             grade: round(count / classified, 6) if classified else None
@@ -398,6 +1155,137 @@ def build_outcome_slo_summary(rows: Sequence[dict[str, Any]]) -> dict[str, Any]:
         "checkpoints": {
             "reused_stage_count": reused_stages,
             "recomputed_stage_count": recomputed_stages,
+        },
+        "repair": {
+            "triggered_attempts": repair_triggered,
+            "trigger_rate": metric_rate(repair_triggered, classified),
+            "provider_calls": repair_totals["semantic_calls"],
+            "transport_attempts": repair_totals["transport_attempts"],
+            "strict_schema": {
+                "attempts": repair_totals["strict_schema_attempts"],
+                "valid": repair_totals["strict_schema_valid"],
+                "validity_rate": metric_rate(
+                    repair_totals["strict_schema_valid"],
+                    repair_totals["strict_schema_attempts"],
+                ),
+            },
+            "semantic_validity": {
+                "valid": repair_totals["semantic_valid"],
+                "rate": metric_rate(
+                    repair_totals["semantic_valid"],
+                    repair_totals["semantic_calls"],
+                ),
+            },
+            "success": {
+                "total": repair_totals["successful_repairs"],
+                "rate": metric_rate(
+                    repair_totals["successful_repairs"],
+                    repair_totals["semantic_calls"],
+                ),
+                "visual": {
+                    "attempts": repair_totals["visual_calls"],
+                    "successes": repair_totals["visual_successes"],
+                    "rate": metric_rate(
+                        repair_totals["visual_successes"],
+                        repair_totals["visual_calls"],
+                    ),
+                },
+                "plan": {
+                    "attempts": repair_totals["plan_calls"],
+                    "successes": repair_totals["plan_successes"],
+                    "rate": metric_rate(
+                        repair_totals["plan_successes"],
+                        repair_totals["plan_calls"],
+                    ),
+                },
+                "by_original_code": [
+                    {
+                        "code": code,
+                        "attempts": counts["attempts"],
+                        "successes": counts["successes"],
+                        "rate": metric_rate(counts["successes"], counts["attempts"]),
+                    }
+                    for code, counts in sorted(repair_by_code.items())
+                ],
+            },
+            "predictive": {
+                "objective_findings": repair_totals[
+                    "predictive_objective_findings"
+                ],
+                "advisory_findings": repair_totals[
+                    "predictive_advisory_findings"
+                ],
+                "advisory_attachment_rate": metric_rate(
+                    repair_totals["predictive_advisory_attached"],
+                    predictive_attachment_opportunities,
+                ),
+            },
+            "fallbacks": {
+                "count": repair_totals["fallback_count"],
+                "job_rate": metric_rate(repair_fallback_jobs, classified),
+                "ffmpega_omission_count": repair_totals["ffmpega_omission_count"],
+                "ffmpega_omission_rate": metric_rate(
+                    repair_totals["ffmpega_omission_count"],
+                    classified,
+                ),
+            },
+            "new_defect_count": repair_totals["new_defect_count"],
+            "new_defect_rate": review_signals["new_defect_rate"],
+            "checkpoint_reuse_count": repair_totals["checkpoint_reuse_count"],
+            "checkpoint_reuse_rate": metric_rate(
+                repair_totals["checkpoint_reuse_count"],
+                repair_totals["semantic_calls"]
+                + repair_totals["checkpoint_reuse_count"],
+            ),
+            "tokens": {
+                "input": repair_totals["input_tokens"],
+                "output": repair_totals["output_tokens"],
+                "reasoning": repair_totals["reasoning_tokens"],
+                "total": repair_totals["total_tokens"],
+            },
+            "cost_usd": round(repair_cost_usd, 8),
+            "cost_per_trigger_usd": review_signals[
+                "repair_cost_per_trigger_usd"
+            ],
+            "provider_latency_ms": {
+                "p95": repair_latency_p95,
+                "total": sum(repair_provider_latency_ms),
+            },
+        },
+        "delivery": {
+            "technical_pass_candidates": technical_pass_candidates,
+            "technical_pass_published": technical_pass_published,
+            "technical_pass_publication_rate": metric_rate(
+                technical_pass_published,
+                technical_pass_candidates,
+            ),
+        },
+        "attribution": [
+            {
+                "model": key[0],
+                "reasoning_effort": key[1],
+                "structured_output_mode": key[2],
+                "structured_output_boundaries": list(key[3]),
+                "repair_mode": key[4],
+                "delivery_policy": key[5],
+                "catalog_version": key[6],
+                "renderer_profile": key[7],
+                "registry_version": key[8],
+                "schema_hashes": list(key[9]),
+                "prompt_hashes": list(key[10]),
+                "sample_size": count,
+            }
+            for key, count in sorted(
+                attribution_counts.items(),
+                key=lambda item: (-item[1], item[0]),
+            )[:20]
+        ],
+        "rollout_review": {
+            "thresholds": dict(ROLLOUT_REVIEW_THRESHOLDS),
+            "signals": review_signals,
+            "checks": review_checks,
+            "operator_approval_required": True,
+            "automatic_enablement": False,
         },
         "time_to_playable_ms": {
             "median": int(median(durations)) if durations else None,

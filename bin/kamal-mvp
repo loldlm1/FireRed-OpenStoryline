@@ -26,6 +26,149 @@ require_exact_value() {
     || fail "$name must be $expected for the approved no-fallback release"
 }
 
+require_boolean_flag() {
+  local name="$1"
+  local value="${!name:-false}"
+  case "${value,,}" in
+    true|false)
+      ;;
+    *)
+      fail "$name must be true or false"
+      ;;
+  esac
+}
+
+validate_agentic_rollout_flags() {
+  local mode="${OPENSTORYLINE_STRUCTURED_OUTPUT_MODE:-json_object}"
+  local boundaries="${OPENSTORYLINE_STRUCTURED_OUTPUT_BOUNDARIES:-}"
+  local capability_verified="${OPENSTORYLINE_STRUCTURED_OUTPUT_CAPABILITY_VERIFIED:-false}"
+  local repair_mode="${OPENSTORYLINE_LLM_DEFECT_REPAIR_MODE:-off}"
+  local semantic_qa="${OPENSTORYLINE_SEMANTIC_QA_ENABLED:-false}"
+  local ffmpega="${OPENSTORYLINE_FFMPEGA_ENABLED:-false}"
+  local delivery="${OPENSTORYLINE_DELIVERY_POLICY:-qa_enforced}"
+  local retry_ux="${OPENSTORYLINE_RETRY_UX_ENABLED:-false}"
+  local promotion_mode="${OPENSTORYLINE_RENDER_PROMOTION_MODE:-report}"
+  local creative_qa="${OPENSTORYLINE_CREATIVE_QA_ENABLED:-true}"
+  local creative_qa_strict="${OPENSTORYLINE_CREATIVE_QA_STRICT:-true}"
+  local agentic_mode="${OPENSTORYLINE_AGENTIC_EDITING_MODE:-off}"
+  local compact_boundaries="${boundaries//[[:space:]]/}"
+  local stage=0
+  local item
+  local -a items=()
+  declare -A enabled=()
+
+  require_boolean_flag OPENSTORYLINE_STRUCTURED_OUTPUT_CAPABILITY_VERIFIED
+  require_boolean_flag OPENSTORYLINE_SEMANTIC_QA_ENABLED
+  require_boolean_flag OPENSTORYLINE_FFMPEGA_ENABLED
+  require_boolean_flag OPENSTORYLINE_RETRY_UX_ENABLED
+  require_boolean_flag OPENSTORYLINE_CREATIVE_QA_ENABLED
+  require_boolean_flag OPENSTORYLINE_CREATIVE_QA_STRICT
+  case "$repair_mode" in
+    off|report|enforce) ;;
+    *) fail "OPENSTORYLINE_LLM_DEFECT_REPAIR_MODE must be off, report, or enforce" ;;
+  esac
+  case "$promotion_mode" in
+    off|report|enforce) ;;
+    *) fail "OPENSTORYLINE_RENDER_PROMOTION_MODE must be off, report, or enforce" ;;
+  esac
+  case "$agentic_mode" in
+    off|shadow|render) ;;
+    *) fail "OPENSTORYLINE_AGENTIC_EDITING_MODE must be off, shadow, or render" ;;
+  esac
+
+  if [[ "$mode" == "json_object" ]]; then
+    [[ -z "$compact_boundaries" ]] \
+      || fail "strict boundaries require OPENSTORYLINE_STRUCTURED_OUTPUT_MODE=json_schema"
+    [[ "$repair_mode" == "off" ]] \
+      || fail "repair rollout requires all strict-schema boundaries first"
+    [[ "${semantic_qa,,}" == "false" && "${ffmpega,,}" == "false" ]] \
+      || fail "semantic QA and FFMPEGA require their strict-schema boundaries first"
+    [[ "$delivery" == "qa_enforced" ]] \
+      || fail "technical-pass delivery requires strict schema and enforced repair first"
+    [[ "${retry_ux,,}" == "false" ]] \
+      || fail "retry/details UI must be the final rollout flag"
+    return
+  fi
+  [[ "$mode" == "json_schema" ]] \
+    || fail "OPENSTORYLINE_STRUCTURED_OUTPUT_MODE must be json_object or json_schema"
+  [[ "${capability_verified,,}" == "true" ]] \
+    || fail "json_schema rollout requires a successful strict-schema probe"
+  [[ -n "$compact_boundaries" ]] \
+    || fail "json_schema rollout must start with shorts_selection.v1"
+
+  IFS=',' read -r -a items <<< "$compact_boundaries"
+  for item in "${items[@]}"; do
+    case "$item" in
+      shorts_selection.v1|visual_understanding.v1|edit_plan.v1|edit_plan_repair.v1|semantic_qa.v1|ffmpega_agentic_finishing.v1|ffmpega_deterministic_effects.v1)
+        enabled["$item"]=1
+        ;;
+      *)
+        fail "unknown structured-output rollout boundary: $item"
+        ;;
+    esac
+  done
+
+  [[ -n "${enabled[shorts_selection.v1]:-}" ]] \
+    || fail "strict-schema rollout must enable shorts_selection.v1 first"
+  stage=1
+  if [[ -n "${enabled[visual_understanding.v1]:-}" ]]; then
+    stage=2
+  fi
+  if [[ -n "${enabled[edit_plan.v1]:-}" || -n "${enabled[edit_plan_repair.v1]:-}" ]]; then
+    [[ "$stage" -ge 2 ]] \
+      || fail "edit-plan strict schemas require visual_understanding.v1 first"
+    [[ -n "${enabled[edit_plan.v1]:-}" && -n "${enabled[edit_plan_repair.v1]:-}" ]] \
+      || fail "edit_plan.v1 and edit_plan_repair.v1 must roll out together"
+    stage=3
+  fi
+  if [[ -n "${enabled[semantic_qa.v1]:-}" ]]; then
+    [[ "$stage" -ge 3 ]] \
+      || fail "semantic_qa.v1 requires the edit-plan strict schemas first"
+    stage=4
+  fi
+  if [[ -n "${enabled[ffmpega_agentic_finishing.v1]:-}" || -n "${enabled[ffmpega_deterministic_effects.v1]:-}" ]]; then
+    [[ "$stage" -ge 4 ]] \
+      || fail "FFMPEGA strict schemas require semantic_qa.v1 first"
+    [[ -n "${enabled[ffmpega_agentic_finishing.v1]:-}" && -n "${enabled[ffmpega_deterministic_effects.v1]:-}" ]] \
+      || fail "both FFMPEGA strict schemas must roll out together"
+    stage=5
+  fi
+  if [[ -z "${enabled[visual_understanding.v1]:-}" && "$stage" -gt 1 ]] \
+    || [[ -z "${enabled[edit_plan.v1]:-}" && "$stage" -gt 2 ]] \
+    || [[ -z "${enabled[semantic_qa.v1]:-}" && "$stage" -gt 3 ]]; then
+    fail "strict-schema boundaries must be a complete rollout prefix"
+  fi
+
+  if [[ "$repair_mode" != "off" ]]; then
+    [[ "$stage" -eq 5 ]] \
+      || fail "repair report/enforce requires every strict-schema boundary first"
+    [[ "$agentic_mode" != "off" ]] \
+      || fail "repair report/enforce requires agentic editing shadow or render mode"
+  fi
+  if [[ "$repair_mode" == "enforce" ]]; then
+    [[ "$agentic_mode" == "render" ]] \
+      || fail "enforced repair requires OPENSTORYLINE_AGENTIC_EDITING_MODE=render"
+  fi
+  if [[ "${semantic_qa,,}" == "true" ]]; then
+    [[ "$stage" -ge 4 ]] || fail "semantic QA requires semantic_qa.v1"
+  fi
+  if [[ "${ffmpega,,}" == "true" ]]; then
+    [[ "$stage" -eq 5 ]] || fail "FFMPEGA requires both strict FFMPEGA schemas"
+  fi
+  if [[ "$delivery" == "technical_pass_guaranteed" ]]; then
+    [[ "$repair_mode" == "enforce" ]] \
+      || fail "technical-pass delivery requires enforced LLM repair"
+    [[ "$promotion_mode" == "enforce" ]] \
+      || fail "technical-pass delivery requires enforced deterministic QA"
+    [[ "${creative_qa,,}" == "true" && "${creative_qa_strict,,}" == "true" ]] \
+      || fail "technical-pass delivery requires strict creative QA evidence"
+  fi
+  if [[ "${retry_ux,,}" == "true" ]]; then
+    [[ "$delivery" == "technical_pass_guaranteed" ]] \
+      || fail "retry/details UI must be enabled after technical-pass delivery"
+  fi
+}
+
 resolve_python() {
   local candidate="${PYTHON_BIN:-$ROOT_DIR/.venv/bin/python}"
   if [[ -x "$candidate" ]]; then
@@ -42,17 +185,32 @@ run_ninerouter_release_gate() {
   local command_name="$1"
   local timeout="${NINEROUTER_QA_TIMEOUT:-240}"
   local python_bin
+  local -a schema_probe_args=()
   python_bin="$(resolve_python)"
 
   [[ "$timeout" =~ ^[1-9][0-9]*$ ]] \
     || fail "NINEROUTER_QA_TIMEOUT must be a positive integer"
   require_exact_value OPENSTORYLINE_LLM_MODEL "cx/gpt-5.6-sol"
   require_exact_value OPENSTORYLINE_IMAGE_MODELS "cx/gpt-5.5-image"
+  case "${OPENSTORYLINE_STRUCTURED_OUTPUT_MODE:-json_object}" in
+    json_object)
+      ;;
+    json_schema)
+      require_exact_value OPENSTORYLINE_STRUCTURED_OUTPUT_CAPABILITY_VERIFIED "true"
+      [[ -n "${OPENSTORYLINE_STRUCTURED_OUTPUT_BOUNDARIES:-}" ]] \
+        || fail "OPENSTORYLINE_STRUCTURED_OUTPUT_BOUNDARIES is required in json_schema mode"
+      schema_probe_args+=(--strict-schema)
+      ;;
+    *)
+      fail "OPENSTORYLINE_STRUCTURED_OUTPUT_MODE must be json_object or json_schema"
+      ;;
+  esac
 
   printf 'Running mandatory redacted 9Router release gate before kamal %s...\n' "$command_name"
   "$python_bin" "$ROOT_DIR/scripts/qa_ninerouter.py" \
     --strict-models \
     --live-inference \
+    "${schema_probe_args[@]}" \
     --timeout "$timeout" \
     || fail "9Router release gate failed; kamal $command_name was not started"
 }
@@ -77,6 +235,28 @@ run_mistral_release_gate() {
     --timeout "$timeout" \
     --each-key \
     || fail "direct-Mistral STT gate failed; kamal $command_name was not started"
+}
+
+run_ffmpega_release_gate() {
+  local command_name="$1"
+  local enabled="${OPENSTORYLINE_FFMPEGA_ENABLED:-false}"
+  case "${enabled,,}" in
+    false|0|no|off)
+      return
+      ;;
+    true|1|yes|on)
+      ;;
+    *)
+      fail "OPENSTORYLINE_FFMPEGA_ENABLED must be true or false"
+      ;;
+  esac
+
+  require_exact_value FFMPEGA_URL "http://openstoryline-mvp-ffmpega:8188"
+  require_exact_value \
+    FFMPEGA_REMOTE_OUTPUT_ROOT \
+    "${KAMAL_OUTPUTS_DIR:-/var/lib/openstoryline/outputs}"
+  printf 'Checking the pinned deterministic FFMPEGA service before kamal %s...\n' "$command_name"
+  "$ROOT_DIR/scripts/mvp-ffmpega-service.sh" readiness
 }
 
 validate_pexels_release_config() {
@@ -285,10 +465,21 @@ elif [[ "${OPENSTORYLINE_POSTGRES_ADMIN_MODE:-kamal}" != "local" ]]; then
   fail "copy .env.kamal.example to .env.kamal and edit it first"
 fi
 
+if [[ "${1:-}" == "rollout" && "${2:-}" == "validate" && $# -eq 2 ]]; then
+  validate_agentic_rollout_flags
+  printf 'Agentic rollout flags are ordered and internally consistent.\n'
+  exit 0
+fi
+
 if [[ "${1:-}" == "db" ]]; then
   shift
   run_database_command "${1:-}"
   exit 0
+fi
+
+if [[ "${1:-}" == "ffmpega" ]]; then
+  shift
+  exec "$ROOT_DIR/scripts/mvp-ffmpega-service.sh" "$@"
 fi
 
 if [[ "${1:-}" == "audit" || "${1:-}" == "retention" || "${1:-}" == "workspace" ]]; then
@@ -320,6 +511,14 @@ require_value OPENSTORYLINE_PUBLIC_ORIGIN
 [[ "${KAMAL_SSH_PORT:-22}" =~ ^[0-9]+$ ]] || fail "KAMAL_SSH_PORT must be numeric"
 [[ "${KAMAL_HTTP_PORT:-80}" =~ ^[0-9]+$ ]] || fail "KAMAL_HTTP_PORT must be numeric"
 [[ "${KAMAL_HTTPS_PORT:-443}" =~ ^[0-9]+$ ]] || fail "KAMAL_HTTPS_PORT must be numeric"
+case "${OPENSTORYLINE_DELIVERY_POLICY:-qa_enforced}" in
+  qa_enforced|technical_pass_guaranteed)
+    ;;
+  *)
+    fail "OPENSTORYLINE_DELIVERY_POLICY must be qa_enforced or technical_pass_guaranteed"
+    ;;
+esac
+validate_agentic_rollout_flags
 
 if [[ -n "${KAMAL_DOMAIN:-}" ]]; then
   [[ "${KAMAL_HTTP_PORT:-80}" == 80 && "${KAMAL_HTTPS_PORT:-443}" == 443 ]] \
@@ -357,6 +556,7 @@ if [[ -n "$release_command" ]]; then
   validate_pexels_release_config "$release_command"
   run_ninerouter_release_gate "$release_command"
   run_mistral_release_gate "$release_command"
+  run_ffmpega_release_gate "$release_command"
 fi
 
 ensure_secrets_file

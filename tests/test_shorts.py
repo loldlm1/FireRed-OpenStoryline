@@ -92,7 +92,7 @@ class FakeClient:
         self.response = response
         self.call = None
 
-    async def complete_json(self, **kwargs):
+    async def complete_structured(self, **kwargs):
         self.call = kwargs
         return self.response
 
@@ -118,6 +118,7 @@ class ShortsPlannerTests(unittest.IsolatedAsyncioTestCase):
         )
 
         payload = json.loads(client.call["user_prompt"])
+        self.assertEqual(client.call["schema_name"], "shorts_selection.v1")
         self.assertIn("practical advice", payload["editing_prompt"])
         self.assertIn("Hola mundo", payload["transcript"])
         self.assertEqual(len(client.call["image_data_urls"]), 1)

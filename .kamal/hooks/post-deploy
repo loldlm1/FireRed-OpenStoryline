@@ -37,3 +37,6 @@ check_endpoint() {
 printf 'Verifying FireRed database readiness and public liveness...\n'
 check_endpoint "/up"
 check_endpoint "/health"
+if [[ "${OPENSTORYLINE_FFMPEGA_ENABLED:-false}" == "true" ]]; then
+  "$ROOT_DIR/scripts/mvp-ffmpega-service.sh" readiness
+fi

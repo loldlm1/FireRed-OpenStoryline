@@ -16,8 +16,10 @@ from open_storyline.mvp.audit import AuditService, parse_since
 from open_storyline.mvp.database import Database, DatabaseConfigurationError
 from open_storyline.mvp.jobs import JobStore, JobStoreError
 from open_storyline.mvp.models import EditingSession, PromptVersion, VideoJob
+from open_storyline.mvp.prompt_versions import PromptVersionService
 from open_storyline.mvp.retention import RetentionService, RetentionSettings
 from open_storyline.mvp.security import sanitize_for_persistence
+from open_storyline.mvp.session_media import SessionMediaStore
 
 
 WORKSPACE_BACKFILL_ADVISORY_LOCK = 7_303_110_792_764
@@ -37,7 +39,23 @@ def _format_value(value: Any, output_format: str) -> None:
     if isinstance(value, dict) and isinstance(value.get("items"), list):
         items = value["items"]
         if not items:
-            print("No matching jobs.")
+            print(
+                "No matching defect records."
+                if value.get("kind") == "defect_records"
+                else "No matching jobs."
+            )
+            return
+        if value.get("kind") == "defect_records":
+            print("JOB_ID                           CODE                           STAGE                  DISPOSITION")
+            for item in items:
+                print(
+                    f"{item['job_id']:<32} "
+                    f"{str(item.get('code') or '-'):<30} "
+                    f"{str(item.get('stage') or '-'):<22} "
+                    f"{str(item.get('disposition') or '-')}"
+                )
+            if value.get("truncated"):
+                print("Results truncated; narrow the filters or increase --limit.")
             return
         print("JOB_ID                           STATE      STAGE                 VERDICT       MEDIA")
         for item in items:
@@ -148,6 +166,15 @@ async def _audit_command(
     if arguments.audit_command == "outcomes":
         return await audit.outcome_slo_summary(
             since=parse_since(arguments.since),
+            limit=arguments.limit,
+        )
+    if arguments.audit_command == "defects":
+        return await audit.defect_records(
+            since=parse_since(arguments.since),
+            code=arguments.code,
+            strategy=arguments.strategy,
+            disposition=arguments.disposition,
+            stage=arguments.stage,
             limit=arguments.limit,
         )
     if arguments.audit_command == "events":
@@ -366,6 +393,94 @@ async def _workspace_command(
             limit=arguments.limit,
             batch_size=arguments.batch_size,
         )
+    if arguments.workspace_command in {"rerun-latest", "rerun-version"}:
+        if not 30 <= int(arguments.timeout_seconds) <= 7200:
+            raise JobStoreError(
+                "WORKSPACE_RERUN_INVALID", "timeout must be between 30 and 7200 seconds"
+            )
+        store, _audit, _retention = _build_services(database)
+        session = await store.get_session(arguments.session_id)
+        if session["workflow_version"] != 2:
+            raise JobStoreError(
+                "SESSION_WORKFLOW_LEGACY",
+                "only reusable sessions support immutable prompt reruns",
+            )
+        async with database.sessions() as db_session:
+            prompt_query = select(PromptVersion.id).where(
+                PromptVersion.editing_session_id == arguments.session_id
+            )
+            if arguments.workspace_command == "rerun-version":
+                prompt_query = prompt_query.where(
+                    PromptVersion.id == arguments.prompt_version_id
+                )
+            else:
+                prompt_query = prompt_query.order_by(
+                    PromptVersion.version_number.desc(), PromptVersion.id.desc()
+                ).limit(1)
+            prompt_version_id = await db_session.scalar(prompt_query)
+        if prompt_version_id is None:
+            raise JobStoreError(
+                "PROMPT_VERSION_NOT_FOUND",
+                (
+                    "the prompt version is unavailable for this session"
+                    if arguments.workspace_command == "rerun-version"
+                    else "the session has no prompt versions"
+                ),
+            )
+        media_root = _default_root().parent / "mvp_sessions"
+        prompt_versions = PromptVersionService(
+            store,
+            SessionMediaStore(media_root, database),
+        )
+        run = await prompt_versions.rerun(str(prompt_version_id))
+        if arguments.wait:
+            deadline = asyncio.get_running_loop().time() + int(arguments.timeout_seconds)
+            while asyncio.get_running_loop().time() < deadline:
+                run = await store.load(run["id"])
+                if run.get("state") in {"completed", "failed"}:
+                    break
+                await asyncio.sleep(2)
+            else:
+                raise JobStoreError(
+                    "PROMPT_RUN_TIMEOUT", "the queued prompt run did not finish in time"
+                )
+        outcome = run.get("outcome") if isinstance(run.get("outcome"), dict) else {}
+        semantic = (
+            outcome.get("semantic_qa")
+            if isinstance(outcome.get("semantic_qa"), dict)
+            else {}
+        )
+        delivery = (
+            outcome.get("delivery")
+            if isinstance(outcome.get("delivery"), dict)
+            else {}
+        )
+        limitations = [
+            item for item in (outcome.get("limitations") or [])
+            if isinstance(item, dict) and item.get("code")
+        ]
+        return {
+            "ok": True,
+            "editing_session_id": arguments.session_id,
+            "prompt_version_id": str(prompt_version_id),
+            "job_id": run["id"],
+            "attempt_number": run.get("attempt_number"),
+            "state": run.get("state"),
+            "stage": run.get("stage"),
+            "technical_status": outcome.get("technical_status"),
+            "semantic_status": (
+                outcome.get("semantic_status") or semantic.get("status")
+            ),
+            "semantic_provider_calls": semantic.get("provider_calls"),
+            "semantic_frame_count": semantic.get("frame_count"),
+            "delivery_decision": (
+                outcome.get("delivery_decision") or delivery.get("decision")
+            ),
+            "limitation_codes": (
+                outcome.get("limitation_codes")
+                or [str(item["code"]) for item in limitations]
+            ),
+        }
     raise JobStoreError("WORKSPACE_COMMAND_INVALID", "workspace command is invalid")
 
 
@@ -450,6 +565,18 @@ def main() -> int:
     outcomes.add_argument("--limit", type=int, default=5000)
     _add_format(outcomes, default="json")
 
+    defects = audit_commands.add_parser(
+        "defects",
+        help="query bounded defect, repair, fallback, and delivery records",
+    )
+    defects.add_argument("--since")
+    defects.add_argument("--code")
+    defects.add_argument("--strategy")
+    defects.add_argument("--disposition")
+    defects.add_argument("--stage")
+    defects.add_argument("--limit", type=int, default=100)
+    defects.add_argument("--format", choices=("table", "json"), default="table")
+
     verify = audit_commands.add_parser("verify")
     verify.add_argument("job_id")
     _add_format(verify, default="json")
@@ -513,6 +640,23 @@ def main() -> int:
     prompt_backfill_mode.add_argument("--apply", action="store_true")
     prompt_backfill.add_argument("--limit", type=int, default=1000)
     prompt_backfill.add_argument("--batch-size", type=int, default=100)
+
+    rerun_latest = workspace_commands.add_parser(
+        "rerun-latest",
+        help="queue the newest immutable prompt version without exposing its text",
+    )
+    rerun_latest.add_argument("session_id")
+    rerun_latest.add_argument("--wait", action="store_true")
+    rerun_latest.add_argument("--timeout-seconds", type=int, default=3600)
+
+    rerun_version = workspace_commands.add_parser(
+        "rerun-version",
+        help="queue a specific immutable prompt version without exposing its text",
+    )
+    rerun_version.add_argument("session_id")
+    rerun_version.add_argument("prompt_version_id")
+    rerun_version.add_argument("--wait", action="store_true")
+    rerun_version.add_argument("--timeout-seconds", type=int, default=3600)
 
     return asyncio.run(_run(parser.parse_args()))
 

@@ -3,7 +3,9 @@ import unittest
 
 from open_storyline.mvp.observability import (
     QUALITY_FEEDBACK_VERSION,
+    REPAIR_OBSERVABILITY_VERSION,
     compact_prior_attempt_quality_feedback,
+    compact_repair_observability,
 )
 
 
@@ -120,6 +122,58 @@ class PriorAttemptQualityFeedbackTests(unittest.TestCase):
         self.assertIn("frame_quality_qa.v1", feedback["evidence_versions"])
         self.assertIn("outcome_report.v1", feedback["evidence_versions"])
         self.assertNotIn(private_marker, json.dumps(feedback))
+
+    def test_repair_observability_allowlists_only_redacted_metadata(self):
+        private_marker = "private prompt transcript and /private/source.mp4"
+        compact = compact_repair_observability({
+            "version": "repair_report.v1",
+            "request_version": "repair_batch_request.v1",
+            "stage": "plan_repair",
+            "mode": "report",
+            "semantic_attempt": 1,
+            "response_schema": "edit_plan_repair.v1",
+            "repair_prompt_version": "mvp-defect-repair.v1",
+            "repair_prompt_sha256": "a" * 64,
+            "response_schema_sha256": "f" * 64,
+            "request_fingerprint": "b" * 64,
+            "editing_prompt_sha256": "c" * 64,
+            "transcript_sha256": "d" * 64,
+            "candidate_sha256": "e" * 64,
+            "editing_prompt_bytes": 100,
+            "transcript_bytes": 200,
+            "affected_clip_ids": [1],
+            "objective_codes": ["EDIT_PLAN_INVALID"],
+            "advisory_codes": ["PREDICTIVE_RHYTHM_RISK"],
+            "evidence_types": ["edit_plan"],
+            "evidence_ids": ["evidence-1"],
+            "evidence_count": 1,
+            "would_call": True,
+            "call_allowed": False,
+            "editing_prompt": private_marker,
+            "transcript_excerpts": [private_marker],
+            "provider_body": private_marker,
+        })
+
+        self.assertEqual(compact["version"], REPAIR_OBSERVABILITY_VERSION)
+        self.assertEqual(compact["objective_codes"], ["EDIT_PLAN_INVALID"])
+        self.assertEqual(compact["response_schema_sha256"], "f" * 64)
+        self.assertEqual(compact["evidence_ids"], ["evidence-1"])
+        self.assertTrue(compact["would_call"])
+        self.assertFalse(compact["call_allowed"])
+        self.assertNotIn(private_marker, json.dumps(compact))
+
+        malformed = compact_repair_observability({
+            "affected_clip_ids": private_marker,
+            "objective_codes": ["UNKNOWN_PRIVATE_CODE"],
+            "evidence_types": private_marker,
+            "would_call": "true",
+            "call_allowed": 1,
+        })
+        self.assertEqual(malformed["affected_clip_ids"], [])
+        self.assertEqual(malformed["objective_codes"], [])
+        self.assertEqual(malformed["evidence_types"], [])
+        self.assertFalse(malformed["would_call"])
+        self.assertFalse(malformed["call_allowed"])
 
     def test_malformed_documents_fail_closed_without_private_text(self):
         private_marker = "private transcript and /private/source.mp4"

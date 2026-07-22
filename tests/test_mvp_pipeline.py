@@ -3,6 +3,7 @@ from tempfile import TemporaryDirectory
 from types import SimpleNamespace
 import base64
 import json
+import os
 import unittest
 from unittest.mock import patch
 
@@ -21,6 +22,8 @@ from open_storyline.mvp.edit_plan import (
 )
 from open_storyline.mvp.frame_sampling import FrameManifest, SampledFrame
 from open_storyline.mvp.creative_qa import CreativeQAArtifacts
+from open_storyline.mvp.ffmpega import FFMPEGAError
+from open_storyline.mvp.ninerouter import NineRouterAttempt
 from open_storyline.mvp.pipeline import MVPJobProcessor
 from open_storyline.mvp.promotion import RenderPromotionError
 from open_storyline.mvp.render import AgenticRenderResult, MediaInfo, RenderError, RenderedShort
@@ -352,6 +355,95 @@ class FakeRemoteClient:
     last_attempts = ()
 
 
+class FakeFailingEffectsPlanner:
+    def __init__(self, _client):
+        pass
+
+    async def plan(self, *_args, **_kwargs):
+        raise FFMPEGAError("FFMPEGA_PLAN_INVALID", "synthetic optional failure")
+
+
+class FakePredictiveRepairEditPlanner:
+    def __init__(self, client):
+        self.client = client
+        self.deferred_defects = ()
+
+    async def plan(self, *, shorts_plan, source_duration_ms, defer_registry_repair, **_kwargs):
+        self.client.last_attempts = ()
+        if not defer_registry_repair:
+            raise AssertionError("registry repair was not enabled")
+        clip = shorts_plan.clips[0]
+        return EditPlan(
+            planner_version="agentic-editor.v2",
+            source_duration_ms=source_duration_ms,
+            requested_capabilities=(
+                "source_cutaway",
+                "text_emphasis",
+                "hard_cut",
+                "subtitles",
+            ),
+            clips=(ClipEditPlan(
+                clip_index=1,
+                source_window=TimeWindow(start_ms=clip.start_ms, end_ms=clip.end_ms),
+                output_name="short-01.mp4",
+                segments=(EditSegment(
+                    id="segment-1",
+                    source_window=TimeWindow(start_ms=clip.start_ms, end_ms=clip.end_ms),
+                    timeline_window=TimeWindow(start_ms=0, end_ms=clip.duration_ms),
+                    layout=LayoutSpec(mode="source"),
+                    overlays=(OverlaySpec(
+                        id="emphasis-1",
+                        kind="text",
+                        timeline_window=TimeWindow(start_ms=0, end_ms=2_000),
+                        text="Key point",
+                        opacity=0.1,
+                        width_ratio=0.9,
+                        margin_ratio=0.1,
+                        position="top",
+                    ),),
+                    reason="Keep the source and emphasize the key point.",
+                ),),
+            ),),
+        )
+
+
+class FakePlanRepairClient:
+    model = "cx/gpt-5.6-sol"
+    reasoning_effort = "medium"
+
+    def __init__(self):
+        self.calls = []
+        self.last_attempts = ()
+        self.invalid = False
+
+    async def complete_structured(self, **kwargs):
+        self.calls.append(kwargs)
+        self.last_attempts = (NineRouterAttempt(
+            1,
+            200,
+            "ok",
+            duration_ms=321,
+            input_tokens=100,
+            output_tokens=20,
+            total_tokens=120,
+        ),)
+        if self.invalid:
+            return {"requested_capabilities": [], "clips": []}
+        payload = json.loads(kwargs["user_prompt"])
+        candidate = payload["candidate_clips"][0]
+        candidate["segments"][0]["overlays"][0]["opacity"] = 0.8
+        candidate["segments"][0]["overlays"][0]["width_ratio"] = 0.5
+        return {
+            "requested_capabilities": [
+                "source_cutaway",
+                "text_emphasis",
+                "hard_cut",
+                "subtitles",
+            ],
+            "clips": [candidate],
+        }
+
+
 async def fake_creative_qa_artifacts(*, output_dir, **_kwargs):
     root = Path(output_dir)
     render_path = root / "render_qa.json"
@@ -474,6 +566,8 @@ def config(mode: str, *, generated_assets: bool = False, pexels_assets: bool = F
             creative_qa_enabled=False,
             creative_qa_strict=True,
             render_promotion_mode="report",
+            completion_policy="strict",
+            delivery_policy="qa_enforced",
             semantic_qa_enabled=False,
             semantic_qa_max_frames=4,
             scene_threshold=0.35,
@@ -508,6 +602,118 @@ def config(mode: str, *, generated_assets: bool = False, pexels_assets: bool = F
 
 
 class MVPAgenticPipelineTests(unittest.IsolatedAsyncioTestCase):
+    async def test_enforced_plan_repair_is_batched_and_checkpointed_once(self):
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            store = FakeStore(
+                root,
+                server_request={
+                    "max_clips": 1,
+                    "edit_mode": "agentic",
+                    "asset_policy": "off",
+                },
+            )
+            checkpoints = FakeCheckpointStore()
+            remote = FakePlanRepairClient()
+            processor = object.__new__(MVPJobProcessor)
+            processor.config = config("render")
+            processor.config.agentic_editing.render_promotion_mode = "off"
+            processor.stt = FakeSTT()
+            scene_report = build_scene_boundaries(
+                [], source_duration_ms=30_000, threshold=0.35
+            )
+            frame_manifest = FrameManifest(
+                source_duration_ms=30_000,
+                source_width=1920,
+                source_height=1080,
+                frames=(SampledFrame(
+                    id="frame-001",
+                    timestamp_ms=250,
+                    scene_id="scene-001",
+                    width=512,
+                    height=288,
+                    extraction_reason="scene_opening",
+                    encoded_bytes=4,
+                    data_url="data:image/jpeg;base64,ZmFrZQ==",
+                ),),
+            )
+
+            with (
+                patch.dict(
+                    os.environ,
+                    {"OPENSTORYLINE_LLM_DEFECT_REPAIR_MODE": "enforce"},
+                ),
+                patch("open_storyline.mvp.pipeline.CheckpointStore", return_value=checkpoints),
+                patch("open_storyline.mvp.pipeline.probe_media", return_value=MediaInfo(30_000, 1920, 1080, True)),
+                patch("open_storyline.mvp.pipeline.extract_audio_for_stt", side_effect=lambda _source, target: target),
+                patch("open_storyline.mvp.pipeline.detect_scene_boundaries", return_value=scene_report),
+                patch("open_storyline.mvp.pipeline.sample_frames", return_value=frame_manifest),
+                patch("open_storyline.mvp.pipeline.VisualUnderstandingPlanner", FakeVisualPlanner),
+                patch("open_storyline.mvp.pipeline.AgenticEditPlanner", FakePredictiveRepairEditPlanner),
+                patch("open_storyline.mvp.pipeline.NineRouterClient.from_config", return_value=remote),
+                patch("open_storyline.mvp.pipeline.ShortsPlanner", FakePlanner),
+                patch("open_storyline.mvp.pipeline.AgenticShortRenderer", FakeAgenticRenderer),
+                patch(
+                    "open_storyline.mvp.pipeline.build_frame_quality_report",
+                    return_value={
+                        "version": "frame_quality_qa.v1",
+                        "status": "pass",
+                        "findings": [],
+                    },
+                ),
+            ):
+                first = await processor("4" * 32, store)
+                first_manifest = json.loads(
+                    (root / "output" / "manifest.json").read_text(encoding="utf-8")
+                )
+                first_edit_plan = json.loads(
+                    (root / "output" / "edit_plan.json").read_text(encoding="utf-8")
+                )
+                second = await processor("4" * 32, store)
+                calls_after_reuse = len(remote.calls)
+                for key, payload in checkpoints.jobs.items():
+                    if key[1] == "plan_repair":
+                        payload["edit_plan"] = {"requested_capabilities": [], "clips": []}
+                remote.invalid = True
+                third = await processor("4" * 32, store)
+                third_manifest = json.loads(
+                    (root / "output" / "manifest.json").read_text(encoding="utf-8")
+                )
+
+            self.assertEqual(calls_after_reuse, 1)
+            self.assertEqual(len(remote.calls), 2)
+            self.assertEqual(remote.calls[0]["schema_name"], "edit_plan_repair.v1")
+            request = json.loads(remote.calls[0]["user_prompt"])
+            self.assertEqual(request["affected_clip_ids"], [1])
+            self.assertEqual(
+                {
+                    "PREDICTIVE_OVERLAY_GEOMETRY_INVALID",
+                    "PREDICTIVE_OVERLAY_OPACITY_LOW",
+                },
+                {item["code"] for item in request["defects"]},
+            )
+            self.assertEqual(
+                first_manifest["agentic"]["edit_planner"]["attempts"][-1]["category"],
+                "plan_repair",
+            )
+            self.assertEqual(
+                first_edit_plan["clips"][0]["segments"][0]["overlays"][0]["opacity"],
+                0.8,
+            )
+            self.assertIn("plan_repair", second["checkpoints"]["reused_stages"])
+            self.assertIn("plan_repair", third["checkpoints"]["recomputed_stages"])
+            self.assertEqual(first["clip_count"], second["clip_count"])
+            third_repair_attempts = [
+                item
+                for item in third_manifest["agentic"]["edit_planner"]["attempts"]
+                if item.get("category") == "plan_repair"
+            ]
+            self.assertEqual(len(third_repair_attempts), 1)
+            repair_metrics = third["outcome"]["repair"]["metrics"]
+            self.assertEqual(repair_metrics["transport_attempts"], 1)
+            self.assertEqual(repair_metrics["provider_latency_ms"], 321)
+            self.assertEqual(repair_metrics["input_tokens"], 100)
+
     async def test_retry_reuses_expensive_analysis_checkpoints(self):
         class CountingPlanner(FakePlanner):
             calls = 0
@@ -1013,6 +1219,129 @@ class MVPAgenticPipelineTests(unittest.IsolatedAsyncioTestCase):
             )
             self.assertEqual(promotion["decision"], "block")
             self.assertEqual(promotion["candidate_cleanup"]["video_candidates_removed"], 1)
+
+    async def test_technical_pass_delivery_publishes_creative_only_strict_block(self):
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            store = FakeStore(
+                root,
+                server_request={"max_clips": 1, "edit_mode": "agentic", "asset_policy": "off"},
+            )
+            processor = object.__new__(MVPJobProcessor)
+            processor.config = config("render")
+            processor.config.agentic_editing.creative_qa_enabled = True
+            processor.config.agentic_editing.render_promotion_mode = "enforce"
+            processor.config.agentic_editing.delivery_policy = "technical_pass_guaranteed"
+            processor.stt = FakeSTT()
+            scene_report = build_scene_boundaries(
+                [], source_duration_ms=30_000, threshold=0.35
+            )
+            frame_manifest = FrameManifest(
+                source_duration_ms=30_000,
+                source_width=1920,
+                source_height=1080,
+                frames=(SampledFrame(
+                    id="frame-001",
+                    timestamp_ms=250,
+                    scene_id="scene-001",
+                    width=512,
+                    height=288,
+                    extraction_reason="scene_opening",
+                    encoded_bytes=4,
+                    data_url="data:image/jpeg;base64,ZmFrZQ==",
+                ),),
+            )
+
+            with (
+                patch("open_storyline.mvp.pipeline.probe_media", return_value=MediaInfo(30_000, 1920, 1080, True)),
+                patch("open_storyline.mvp.pipeline.extract_audio_for_stt", side_effect=lambda _source, target: target),
+                patch("open_storyline.mvp.pipeline.detect_scene_boundaries", return_value=scene_report),
+                patch("open_storyline.mvp.pipeline.sample_frames", return_value=frame_manifest),
+                patch("open_storyline.mvp.pipeline.VisualUnderstandingPlanner", FakeVisualPlanner),
+                patch("open_storyline.mvp.pipeline.AgenticEditPlanner", FakeEditPlanner),
+                patch("open_storyline.mvp.pipeline.NineRouterClient.from_config", return_value=FakeRemoteClient()),
+                patch("open_storyline.mvp.pipeline.ShortsPlanner", FakePlanner),
+                patch("open_storyline.mvp.pipeline.AgenticShortRenderer", FakeAgenticRenderer),
+                patch(
+                    "open_storyline.mvp.pipeline.generate_creative_qa_artifacts",
+                    side_effect=fake_creative_qa_artifacts,
+                ),
+                patch(
+                    "open_storyline.mvp.pipeline.build_frame_quality_report",
+                    return_value={
+                        "version": "frame_quality_qa.v1",
+                        "status": "blocker",
+                        "findings": [{
+                            "code": "ACTIVE_PICTURE_TOO_SMALL",
+                            "severity": "blocker",
+                        }],
+                    },
+                ),
+            ):
+                result = await processor("1" * 32, store)
+
+            registered = {name for name, _kind in store.registered}
+            self.assertIn("short-01.mp4", registered)
+            self.assertEqual(result["outcome"]["strict_qa"]["decision"], "block")
+            self.assertEqual(
+                result["outcome"]["delivery"]["decision"],
+                "publish_with_limitations",
+            )
+            self.assertTrue(result["outcome"]["delivery"]["download_available"])
+
+    async def test_optional_ffmpega_failure_keeps_native_candidate_without_baseline_flag(self):
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            store = FakeStore(
+                root,
+                server_request={"max_clips": 1, "edit_mode": "agentic", "asset_policy": "off"},
+            )
+            processor = object.__new__(MVPJobProcessor)
+            processor.config = config("render")
+            processor.config.ffmpega.enabled = True
+            processor.config.agentic_editing.render_promotion_mode = "off"
+            processor.stt = FakeSTT()
+            scene_report = build_scene_boundaries(
+                [], source_duration_ms=30_000, threshold=0.35
+            )
+            frame_manifest = FrameManifest(
+                source_duration_ms=30_000,
+                source_width=1920,
+                source_height=1080,
+                frames=(SampledFrame(
+                    id="frame-001",
+                    timestamp_ms=250,
+                    scene_id="scene-001",
+                    width=512,
+                    height=288,
+                    extraction_reason="scene_opening",
+                    encoded_bytes=4,
+                    data_url="data:image/jpeg;base64,ZmFrZQ==",
+                ),),
+            )
+
+            with (
+                patch("open_storyline.mvp.pipeline.probe_media", return_value=MediaInfo(30_000, 1920, 1080, True)),
+                patch("open_storyline.mvp.pipeline.extract_audio_for_stt", side_effect=lambda _source, target: target),
+                patch("open_storyline.mvp.pipeline.detect_scene_boundaries", return_value=scene_report),
+                patch("open_storyline.mvp.pipeline.sample_frames", return_value=frame_manifest),
+                patch("open_storyline.mvp.pipeline.VisualUnderstandingPlanner", FakeVisualPlanner),
+                patch("open_storyline.mvp.pipeline.AgenticEditPlanner", FakeEditPlanner),
+                patch("open_storyline.mvp.pipeline.NineRouterClient.from_config", return_value=FakeRemoteClient()),
+                patch("open_storyline.mvp.pipeline.ShortsPlanner", FakePlanner),
+                patch("open_storyline.mvp.pipeline.AgenticShortRenderer", FakeAgenticRenderer),
+                patch("open_storyline.mvp.pipeline.EffectsPlanner", FakeFailingEffectsPlanner),
+            ):
+                result = await processor("2" * 32, store)
+
+            registered = {name for name, _kind in store.registered}
+            self.assertIn("short-01.mp4", registered)
+            self.assertIn("repair_report.json", registered)
+            self.assertFalse(processor.config.agentic_editing.baseline_fallbacks_enabled)
+            limitations = result["outcome"]["limitations"]
+            effect = next(item for item in limitations if item["code"] == "EFFECT_OMITTED")
+            self.assertEqual(effect["requested"], "ffmpega_effect_plan")
+            self.assertEqual(effect["executed"], "native_ffmpeg_render")
 
     async def test_render_mode_generates_only_requested_assets_and_inserts_them(self):
         with TemporaryDirectory() as directory:
