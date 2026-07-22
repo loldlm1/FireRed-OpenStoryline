@@ -212,6 +212,52 @@ class RepairEligibilityTests(unittest.TestCase):
 
 
 class RepairContractPrivacyTests(unittest.TestCase):
+    def test_schema_shaped_invalid_candidate_fits_bounded_repair_context(self):
+        request, _dispositions = build_repair_batch(
+            stage=RepairStage.PLAN_REPAIR,
+            mode=RepairMode.ENFORCE,
+            findings=(finding_for("EDIT_PLAN_INVALID"),),
+            budget=RepairBudget(),
+            candidate_clips={1: {
+                "segments": [],
+                "invalid_candidate": {
+                    "clips": [{
+                        "segments": [{
+                            "overlays": [{
+                                "timeline_window": {
+                                    "start_ms": 0,
+                                    "end_ms": 1_000,
+                                },
+                            }],
+                        }],
+                    }],
+                },
+            }},
+            available_capabilities=("crop",),
+            catalog_context={},
+            immutable_constraints={"preserve_source_windows": True},
+            editing_prompt="Repair the objective plan defect.",
+        )
+        self.assertEqual(request.candidate_clips[0]["clip_index"], 1)
+
+    def test_excessively_nested_candidate_still_fails_closed(self):
+        nested = {"value": True}
+        for _ in range(13):
+            nested = {"nested": nested}
+        with self.assertRaises(RepairContractError) as caught:
+            build_repair_batch(
+                stage=RepairStage.PLAN_REPAIR,
+                mode=RepairMode.ENFORCE,
+                findings=(finding_for("EDIT_PLAN_INVALID"),),
+                budget=RepairBudget(),
+                candidate_clips={1: nested},
+                available_capabilities=("crop",),
+                catalog_context={},
+                immutable_constraints={"preserve_source_windows": True},
+                editing_prompt="Repair the objective plan defect.",
+            )
+        self.assertEqual(caught.exception.code, "REPAIR_CONTEXT_INVALID")
+
     def test_transient_prompt_transcript_and_candidate_text_never_enter_reports(self):
         private_prompt = "private editing instruction marker"
         private_transcript = "private transcript marker"

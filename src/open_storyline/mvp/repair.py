@@ -38,6 +38,7 @@ MAX_REPAIR_TRANSCRIPT_BYTES = 16_000
 MAX_REPAIR_CANDIDATE_BYTES = 192_000
 MAX_REPAIR_REQUEST_BYTES = 256_000
 MAX_REPAIR_REPORT_BYTES = 256_000
+MAX_REPAIR_CONTEXT_DEPTH = 12
 
 _SAFE_TOKEN = re.compile(r"^[A-Za-z0-9._:-]{1,120}$")
 _SAFE_FIELD = re.compile(r"^[a-z][a-z0-9_]{0,79}$")
@@ -1267,7 +1268,9 @@ def _compact_catalog_context(value: Mapping[str, Any]) -> dict[str, Any]:
 
 def _bounded_context(value: Mapping[str, Any], *, label: str) -> dict[str, Any]:
     def clean(item: Any, depth: int = 0) -> Any:
-        if depth > 8:
+        # A candidate wraps the strict edit-plan response, whose overlay windows
+        # legitimately reach nine levels while still fitting the byte budget.
+        if depth > MAX_REPAIR_CONTEXT_DEPTH:
             raise RepairContractError("REPAIR_CONTEXT_INVALID", f"{label} is too deeply nested")
         if item is None or isinstance(item, (bool, int)):
             return item
