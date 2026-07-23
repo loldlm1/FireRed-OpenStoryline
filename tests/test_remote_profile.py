@@ -64,7 +64,6 @@ class RemoteProfileTests(unittest.TestCase):
                 "!src/open_storyline/mvp/**",
                 "!web/",
                 "!web/mvp.html",
-                "!web/mvp-legacy.html",
                 "!web/static/",
                 "!web/static/mvp/",
                 "!web/static/mvp/**",
@@ -103,7 +102,8 @@ class RemoteProfileTests(unittest.TestCase):
     def test_remote_container_packages_only_the_scoped_workspace_assets(self):
         dockerfile = (ROOT / "Dockerfile.remote").read_text(encoding="utf-8")
 
-        self.assertIn("COPY web/mvp.html web/mvp-legacy.html ./web/", dockerfile)
+        self.assertIn("COPY web/mvp.html ./web/", dockerfile)
+        self.assertNotIn("mvp-legacy.html", dockerfile)
         self.assertIn("COPY web/static/mvp/ ./web/static/mvp/", dockerfile)
         self.assertNotIn("COPY web/ ./web/", dockerfile)
         self.assertNotIn("src/open_storyline/config.py", dockerfile)

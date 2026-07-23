@@ -368,7 +368,7 @@ class PasswordAndSessionTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("retry-after", limited.headers)
         self.assertEqual(correct_but_locked.status_code, 429)
 
-    async def test_authenticated_reads_and_job_creation_have_no_quota(self):
+    async def test_authenticated_reads_and_session_creation_have_no_quota(self):
         app = self._app()
         transport = httpx.ASGITransport(app=app, client=("192.0.2.4", 443))
         async with httpx.AsyncClient(
@@ -376,27 +376,25 @@ class PasswordAndSessionTests(unittest.IsolatedAsyncioTestCase):
         ) as client:
             self.assertEqual((await self._login(client)).status_code, 200)
             csrf_token = client.cookies.get(CSRF_COOKIE)
-            editing_session = await self.store.create_session("quota regression")
             reads = [
                 await client.get(f"/api/mvp/jobs/{index:032x}")
                 for index in range(8)
             ]
-            jobs = [
+            sessions = [
                 await client.post(
-                    f"/api/mvp/sessions/{editing_session['id']}/jobs",
+                    "/api/mvp/sessions",
                     headers={
                         "Origin": "https://test",
                         "X-CSRF-Token": csrf_token,
                     },
-                    data={"prompt": f"test prompt {index}", "max_clips": "1"},
-                    files={"file": ("source.mp4", b"synthetic", "video/mp4")},
+                    json={"title": f"quota regression {index}"},
                 )
                 for index in range(6)
             ]
 
         self.assertTrue(all(response.status_code == 404 for response in reads))
-        self.assertTrue(all(response.status_code == 202 for response in jobs))
-        for response in [*reads, *jobs]:
+        self.assertTrue(all(response.status_code == 201 for response in sessions))
+        for response in [*reads, *sessions]:
             self.assertNotIn("retry-after", response.headers)
             self.assertFalse(
                 any(name.lower().startswith("x-ratelimit") for name in response.headers)

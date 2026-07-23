@@ -424,7 +424,12 @@ class RetentionService:
                 ) from None
         return {"deleted_files": deleted_files, "bytes": deleted_bytes}
 
-    async def delete_session(self, session_id: str) -> dict[str, Any]:
+    async def delete_session(
+        self,
+        session_id: str,
+        *,
+        require_workflow_version: int | None = None,
+    ) -> dict[str, Any]:
         if not JOB_ID_PATTERN.fullmatch(str(session_id or "")):
             raise JobStoreError("SESSION_ID_INVALID", "invalid session id")
         async with self.cleanup_lock() as acquired:
@@ -441,6 +446,14 @@ class RetentionService:
                         )
                         if owner is None:
                             raise JobStoreError("SESSION_NOT_FOUND", "session not found")
+                        if (
+                            require_workflow_version is not None
+                            and owner.workflow_version != int(require_workflow_version)
+                        ):
+                            raise JobStoreError(
+                                "SESSION_WORKFLOW_LEGACY",
+                                "historical sessions are read-only audit records",
+                            )
                         jobs = list(
                             (
                                 await session.execute(

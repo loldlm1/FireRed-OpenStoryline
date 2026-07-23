@@ -13,7 +13,6 @@ import {
   renderComparison,
   renderConnection,
   renderJob,
-  renderLegacyHistory,
   renderSessions,
   renderSource,
   renderVersionHistory,
@@ -35,7 +34,6 @@ const state = {
   currentSession: null,
   source: { state: 'missing' },
   versions: [],
-  legacyJobs: [],
   nextVersionCursor: null,
   detailsByVersion: new Map(),
   expandedRunIds: new Set(),
@@ -84,15 +82,12 @@ function latestRun(versions) {
 }
 
 function updateSessionDeleteAvailability() {
-  const legacyActive = state.legacyJobs.find((run) => ['queued', 'running'].includes(run.state));
   elements.sessionDelete.disabled = !state.currentSession
-    || Boolean(activeRun(state.versions))
-    || Boolean(legacyActive);
+    || Boolean(activeRun(state.versions));
 }
 
 function resetHistoryState() {
   state.versions = [];
-  state.legacyJobs = [];
   state.nextVersionCursor = null;
   state.detailsByVersion = new Map();
   state.expandedRunIds = new Set();
@@ -142,7 +137,7 @@ function historyCallbacks() {
 }
 
 function renderHistory() {
-  if (state.currentSession?.workflow_version !== 2) return;
+  if (!state.currentSession) return;
   cleanupMedia(elements.recentJobs);
   renderVersionHistory({
     versions: state.versions,
@@ -194,13 +189,8 @@ function mergeDetailedRun(job) {
 function refreshSessionViews() {
   renderSessions(state.sessions, state.currentSession?.id || '', selectSession);
   renderWorkspace(state.currentSession, { favoriteLabel: favoriteLabel() });
-  if (state.currentSession?.workflow_version === 1) {
-    renderSource({ state: 'missing' });
-    renderLegacyHistory(state.legacyJobs);
-  } else {
-    renderSource(state.source, { activeUpload: Boolean(state.upload?.running) });
-    renderHistory();
-  }
+  renderSource(state.source, { activeUpload: Boolean(state.upload?.running) });
+  renderHistory();
   updateSessionDeleteAvailability();
 }
 
@@ -252,14 +242,6 @@ async function selectSession(sessionId) {
     state.currentSession = session;
     state.currentJob = null;
     setSessionUrl(session.id);
-    if (session.workflow_version === 1) {
-      state.source = { state: 'missing' };
-      state.legacyJobs = session.jobs || [];
-      refreshSessionViews();
-      resetActivity();
-      window.requestAnimationFrame(() => elements.legacyCreateSession.focus());
-      return;
-    }
     const [source, versions] = await Promise.all([
       apiJson(`/api/mvp/sessions/${sessionId}/input-video`),
       apiJson(`/api/mvp/sessions/${sessionId}/prompt-versions?limit=20`),
@@ -282,7 +264,7 @@ async function selectSession(sessionId) {
 }
 
 async function reloadVersions() {
-  if (!state.currentSession || state.currentSession.workflow_version !== 2) return;
+  if (!state.currentSession) return;
   const sessionId = state.currentSession.id;
   const epoch = state.sessionEpoch;
   const page = await apiJson(
@@ -507,7 +489,6 @@ function createImprovedVersion(version, run) {
   elements.promptCount.textContent = `${elements.prompt.value.length.toLocaleString('es')} / 12.000`;
   const settings = version.settings || {};
   elements.maxClips.value = String(settings.max_clips || 8);
-  elements.editMode.value = settings.edit_mode || 'agentic';
   elements.assetPolicy.value = settings.asset_policy || 'auto';
   elements.maxGeneratedAssets.value = String(settings.max_generated_assets_per_clip ?? 2);
   elements.stockPolicy.value = settings.stock_policy || 'off';
@@ -641,37 +622,29 @@ async function discardIncompleteUpload() {
 }
 
 function syncAdvancedSettings() {
-  const agentic = elements.editMode.value === 'agentic';
-  elements.assetPolicy.disabled = !agentic;
-  elements.stockPolicy.disabled = !agentic;
-  elements.maxGeneratedAssets.disabled = !agentic || elements.assetPolicy.value === 'off';
-  elements.maxStockAssets.disabled = !agentic || elements.stockPolicy.value === 'off';
-  if (!agentic) {
-    elements.maxGeneratedAssets.value = '0';
-    elements.maxStockAssets.value = '0';
-  } else if (elements.assetPolicy.value === 'auto' && elements.maxGeneratedAssets.value === '0') {
+  elements.maxGeneratedAssets.disabled = elements.assetPolicy.value === 'off';
+  elements.maxStockAssets.disabled = elements.stockPolicy.value === 'off';
+  if (elements.assetPolicy.value === 'auto' && elements.maxGeneratedAssets.value === '0') {
     elements.maxGeneratedAssets.value = '2';
   }
-  if (agentic && elements.assetPolicy.value === 'required' && elements.maxGeneratedAssets.value === '0') {
+  if (elements.assetPolicy.value === 'required' && elements.maxGeneratedAssets.value === '0') {
     elements.maxGeneratedAssets.value = '1';
   }
-  if (agentic && elements.stockPolicy.value === 'required' && elements.maxStockAssets.value === '0') {
+  if (elements.stockPolicy.value === 'required' && elements.maxStockAssets.value === '0') {
     elements.maxStockAssets.value = '1';
   }
 }
 
 function promptPayload() {
-  const agentic = elements.editMode.value === 'agentic';
   return {
     prompt: elements.prompt.value,
     max_clips: Number(elements.maxClips.value),
-    edit_mode: elements.editMode.value,
-    asset_policy: agentic ? elements.assetPolicy.value : 'off',
-    max_generated_assets_per_clip: agentic && elements.assetPolicy.value !== 'off'
+    asset_policy: elements.assetPolicy.value,
+    max_generated_assets_per_clip: elements.assetPolicy.value !== 'off'
       ? Number(elements.maxGeneratedAssets.value)
       : 0,
-    stock_policy: agentic ? elements.stockPolicy.value : 'off',
-    max_stock_assets_per_clip: agentic && elements.stockPolicy.value !== 'off'
+    stock_policy: elements.stockPolicy.value,
+    max_stock_assets_per_clip: elements.stockPolicy.value !== 'off'
       ? Number(elements.maxStockAssets.value)
       : 0,
     stock_asset_kind: 'video',
@@ -724,7 +697,6 @@ function openSessionDialog() {
 
 elements.sessionNew.addEventListener('click', openSessionDialog);
 elements.emptyCreateSession.addEventListener('click', openSessionDialog);
-elements.legacyCreateSession.addEventListener('click', openSessionDialog);
 
 for (const closeButton of document.querySelectorAll('[data-close-dialog]')) {
   closeButton.addEventListener('click', () => closeDialog(byDialogId(closeButton.dataset.closeDialog)));
@@ -810,7 +782,6 @@ elements.prompt.addEventListener('input', () => {
   elements.promptCount.textContent = `${elements.prompt.value.length.toLocaleString('es')} / 12.000`;
 });
 
-elements.editMode.addEventListener('change', syncAdvancedSettings);
 elements.assetPolicy.addEventListener('change', syncAdvancedSettings);
 elements.stockPolicy.addEventListener('change', () => {
   if (elements.stockPolicy.value === 'auto' && elements.maxStockAssets.value === '0') {

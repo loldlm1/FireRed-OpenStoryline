@@ -22,8 +22,8 @@ from open_storyline.mvp.edit_plan import (
     resolve_agentic_server_mode,
     validate_edit_plan,
     validate_generated_asset_limit,
+    validate_asset_policy,
     validate_catalog_plan_context,
-    validate_job_controls,
     validate_stock_asset_limit,
     validate_stock_policy,
     _normalize_edit_plan_response,
@@ -536,10 +536,10 @@ class EditPlanContractTests(unittest.TestCase):
                 timeline_window=TimeWindow(start_ms=0, end_ms=1_000),
             )
 
-    def test_validates_job_controls_and_server_mode(self):
-        self.assertEqual(validate_job_controls("agentic", "auto"), ("agentic", "auto"))
+    def test_validates_asset_policy_and_server_mode(self):
+        self.assertEqual(validate_asset_policy("auto"), "auto")
         with self.assertRaises(EditPlanError):
-            validate_job_controls("cinematic", "auto")
+            validate_asset_policy("cinematic")
 
         config = type("Config", (), {"mode": "off"})()
         with patch.dict(os.environ, {"OPENSTORYLINE_AGENTIC_EDITING_MODE": "shadow"}):

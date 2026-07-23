@@ -99,14 +99,6 @@
             </div>
           </section>
 
-          <section id="legacy-workspace" class="panel legacy-workspace" hidden aria-labelledby="legacy-title">
-            <p class="step-label">Sesión anterior</p>
-            <h2 id="legacy-title">Este historial pertenece al flujo de carga por ejecución.</h2>
-            <p>Puedes consultar sus instrucciones y resultados en modo lectura. Para reutilizar un video, comparar versiones o crear otro corte sin volver a subirlo, abre una sesión nueva.</p>
-            <button id="legacy-create-session" class="button button-primary" type="button">Crear una sesión reutilizable</button>
-            <div id="legacy-history" class="version-history legacy-history"></div>
-          </section>
-
           <div id="modern-workspace" class="work-grid">
             <div class="work-primary">
               <section id="source-card" class="panel source-card" aria-labelledby="source-title">
@@ -196,13 +188,6 @@
                       <div class="field">
                         <label for="max-clips">Máximo de clips</label>
                         <input id="max-clips" name="max_clips" type="number" min="1" max="50" value="8">
-                      </div>
-                      <div class="field">
-                        <label for="edit-mode">Modo de edición</label>
-                        <select id="edit-mode" name="edit_mode">
-                          <option value="agentic" selected>Agéntico — dirección completa</option>
-                          <option value="legacy">Esencial — selección de clips</option>
-                        </select>
                       </div>
                       <fieldset class="field fieldset-wide">
                         <legend>Imágenes generadas</legend>

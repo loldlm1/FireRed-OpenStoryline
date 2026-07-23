@@ -1,10 +1,8 @@
 from __future__ import annotations
 
 from contextlib import asynccontextmanager
-from dataclasses import dataclass
 from pathlib import Path
 import hmac
-import os
 import sys
 import time
 
@@ -51,7 +49,6 @@ from open_storyline.mvp.session_media import SessionMediaStore
 from open_storyline.mvp.settings import default_mvp_config_path, load_mvp_settings
 
 
-SESSION_WORKSPACE_MODES = frozenset({"legacy", "enabled"})
 WORKSPACE_CONTENT_SECURITY_POLICY = "; ".join(
     (
         "default-src 'self'",
@@ -72,27 +69,7 @@ WORKSPACE_CONTENT_SECURITY_POLICY = "; ".join(
 )
 
 
-class SessionWorkspaceConfigurationError(RuntimeError):
-    pass
-
-
-@dataclass(frozen=True)
-class SessionWorkspaceSettings:
-    mode: str
-
-    @classmethod
-    def from_env(cls) -> "SessionWorkspaceSettings":
-        mode = os.getenv("OPENSTORYLINE_SESSION_WORKSPACE_MODE", "legacy").strip()
-        if len(mode) > 16 or mode not in SESSION_WORKSPACE_MODES:
-            raise SessionWorkspaceConfigurationError(
-                "OPENSTORYLINE_SESSION_WORKSPACE_MODE must be legacy or enabled"
-            )
-        return cls(mode=mode)
-
-
 def create_app() -> FastAPI:
-    workspace_settings = SessionWorkspaceSettings.from_env()
-
     @asynccontextmanager
     async def lifespan(app: FastAPI):
         config = load_mvp_settings(default_mvp_config_path())
@@ -173,7 +150,6 @@ def create_app() -> FastAPI:
     app.state.prompt_versions = None
     app.state.activity = None
     app.state.creative_catalog = None
-    app.state.session_workspace_mode = workspace_settings.mode
 
     @app.middleware("http")
     async def request_observability(request: Request, call_next):
@@ -272,12 +248,7 @@ def create_app() -> FastAPI:
 
     @app.get("/", include_in_schema=False)
     async def index():
-        page = (
-            "mvp.html"
-            if app.state.session_workspace_mode == "enabled"
-            else "mvp-legacy.html"
-        )
-        return FileResponse(ROOT_DIR / "web" / page)
+        return FileResponse(ROOT_DIR / "web" / "mvp.html")
 
     @app.get("/health")
     async def health():
@@ -304,7 +275,6 @@ def create_app() -> FastAPI:
         lambda: app.state.mvp_manager,
         lambda: app.state.retention_service,
         lambda: app.state.session_media,
-        lambda: app.state.session_workspace_mode,
         lambda: app.state.prompt_versions,
         lambda: app.state.activity,
     ))

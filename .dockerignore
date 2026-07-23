@@ -22,7 +22,6 @@
 !src/open_storyline/mvp/**
 !web/
 !web/mvp.html
-!web/mvp-legacy.html
 !web/static/
 !web/static/mvp/
 !web/static/mvp/**

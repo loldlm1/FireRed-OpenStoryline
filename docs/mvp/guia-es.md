@@ -308,10 +308,12 @@ pendientes o activos para proteger la capacidad del VPS. Es backpressure
 operacional, no una cuota por usuario ni una ventana RPM/RPD. Un exceso devuelve
 `JOB_QUEUE_FULL`; espera a que termine un trabajo antes de reintentar.
 
-Los trabajos nuevos se crean en
-`POST /api/mvp/sessions/{session_id}/jobs`. El antiguo
-`POST /api/mvp/jobs` devuelve `SESSION_REQUIRED` de forma intencional. Las rutas
-de consulta, artefactos y ZIP continúan usando el identificador del trabajo.
+El flujo nuevo crea una sesión con `POST /api/mvp/sessions`, carga su fuente
+inmutable mediante las rutas `input-video/uploads` y crea cada ejecución con
+`POST /api/mvp/sessions/{session_id}/prompt-versions`. Las rutas antiguas
+`POST /api/mvp/sessions/{session_id}/jobs` y `POST /api/mvp/jobs` ya no crean
+trabajos. Las rutas de consulta, artefactos y ZIP continúan usando el
+identificador del trabajo.
 
 Para rotar la contraseña, genera un hash nuevo, reemplaza
 `OPENSTORYLINE_WEB_PASSWORD_HASH` en el archivo ignorado y despliega/reinicia.
@@ -448,15 +450,11 @@ la UX de reintento en un reinicio separado. Este orden mantiene un kill switch
 independiente para catálogo, promoción, checkpoints y UI.
 
 Sin autorización para desplegar o llamar proveedores, todos los flags permanecen
-apagados. El rollback normal no requiere restaurar PostgreSQL: vuelve la UI a
-legacy, fija `OPENSTORYLINE_AGENTIC_EDITING_MODE=off`, desactiva assets/QA
-semántica, catálogo, promoción limitada, UX de reintento y lectura de
-checkpoints; luego usa `OPENSTORYLINE_DELIVERY_POLICY=qa_enforced`,
-`OPENSTORYLINE_COMPLETION_POLICY=strict`,
-`OPENSTORYLINE_RENDER_PROMOTION_MODE=off` y el perfil `legacy`, y
-ejecuta `./bin/kamal-mvp rollback VERSION_EXPLICITA` al release previo. Restaura la base
-sólo ante una migración incompatible revisada por separado; esta entrega no añade
-migraciones.
+apagados. El rollback normal no restaura una UI ni un renderer legacy: vuelve a
+la imagen Agentic anterior con `./bin/kamal-mvp rollback VERSION_EXPLICITA`,
+mantiene la política `qa_enforced` y pausa la promoción mientras se revisa la
+causa. Restaura PostgreSQL sólo ante una migración incompatible revisada por
+separado; la migración Agentic-only conserva las filas históricas.
 
 ## 8. Activa el servicio FFMPEGA determinista, si lo deseas
 

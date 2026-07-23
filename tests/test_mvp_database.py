@@ -15,6 +15,7 @@ from sqlalchemy.exc import SQLAlchemyError
 
 from open_storyline.mvp.database import (
     CHECKPOINT_SCHEMA_REVISION,
+    AGENTIC_ONLY_SCHEMA_REVISION,
     COMPATIBLE_SCHEMA_REVISIONS,
     LEGACY_SCHEMA_REVISION,
     WORKSPACE_SCHEMA_REVISION,
@@ -119,7 +120,7 @@ class WorkspaceModelContractTests(unittest.TestCase):
         restore_check = (ROOT / "scripts" / "mvp-postgres-restore-check.sh").read_text(
             encoding="utf-8"
         )
-        self.assertIn("20260721_0003", restore_check)
+        self.assertIn(AGENTIC_ONLY_SCHEMA_REVISION, restore_check)
         self.assertIn("REQUIRED_TABLE_COUNT=12", restore_check)
 
 
@@ -173,6 +174,7 @@ class DatabaseReadinessTests(unittest.IsolatedAsyncioTestCase):
                 LEGACY_SCHEMA_REVISION,
                 WORKSPACE_SCHEMA_REVISION,
                 CHECKPOINT_SCHEMA_REVISION,
+                AGENTIC_ONLY_SCHEMA_REVISION,
             }),
         )
         for revision in COMPATIBLE_SCHEMA_REVISIONS:

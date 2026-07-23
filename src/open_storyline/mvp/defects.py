@@ -318,6 +318,7 @@ REGISTRY_V1_EXCLUSIONS = MappingProxyType({
         "SESSION_TITLE_INVALID": "workspace request validation",
         "SESSION_TITLE_REQUIRED": "workspace request validation",
         "SESSION_WORKFLOW_VERSION_INVALID": "workspace request validation",
+        "SESSION_WORKFLOW_VERSION_UNKNOWN": "operator workspace inventory validation",
         "SRT_INVALID": "operator audit document validation",
         "VIDEO_ARTIFACT_MISSING": "operator audit verification finding",
         "WORKSPACE_COMMAND_INVALID": "operator CLI validation",

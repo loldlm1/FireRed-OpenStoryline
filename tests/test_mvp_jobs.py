@@ -83,6 +83,35 @@ class PostgresTestCase(unittest.IsolatedAsyncioTestCase):
 
 @unittest.skipUnless(os.getenv("TEST_DATABASE_URL"), "TEST_DATABASE_URL is not configured")
 class JobStoreTests(PostgresTestCase):
+    async def test_legacy_jobs_cannot_be_enqueued_recovered_or_claimed(self):
+        legacy_session = await self.store.create_session(
+            "Historical", workflow_version=1
+        )
+        legacy = await self.store.create(
+            editing_session_id=legacy_session["id"],
+            prompt="historical fixture",
+            filename="legacy.mp4",
+        )
+        legacy_source = self.store.input_path(legacy["id"], "legacy.mp4")
+        legacy_source.write_bytes(b"video")
+        legacy = await self.store.mark_uploaded(legacy["id"], legacy_source, 5)
+
+        agentic_session, agentic = await self.create_queued_job(
+            prompt="agentic fixture"
+        )
+        self.assertEqual(agentic_session["workflow_version"], 2)
+        manager = JobManager(self.store)
+
+        with self.assertRaises(JobStoreError) as blocked:
+            await manager.enqueue(legacy["id"])
+        self.assertEqual(blocked.exception.code, "SESSION_WORKFLOW_LEGACY")
+
+        recovered = await self.store.recover_pending()
+        self.assertIn(agentic["id"], recovered)
+        self.assertNotIn(legacy["id"], recovered)
+        self.assertEqual(await self.store.claim_next_job(), agentic["id"])
+        self.assertEqual((await self.store.load(legacy["id"]))["state"], "queued")
+
     async def test_postgres_is_authoritative_and_artifacts_remain_job_scoped(self):
         _editing_session, state = await self.create_queued_job()
         artifact = self.store.output_dir(state["id"]) / "short-01.mp4"
@@ -339,7 +368,9 @@ class WorkerCoordinationTests(PostgresTestCase):
             self.database,
             max_active_jobs=1,
         )
-        editing_session = await store.create_session("Capacity")
+        editing_session = await store.create_session(
+            "Capacity", workflow_version=1
+        )
         await store.create(
             editing_session_id=editing_session["id"],
             prompt="first",
@@ -466,7 +497,36 @@ class LegacyImportTests(PostgresTestCase):
 
 @unittest.skipUnless(os.getenv("TEST_DATABASE_URL"), "TEST_DATABASE_URL is not configured")
 class JobAPITests(PostgresTestCase):
-    async def test_session_upload_status_and_download_contracts(self):
+    async def test_historical_sessions_are_hidden_and_read_only(self):
+        historical = await self.store.create_session(
+            "Historical", workflow_version=1
+        )
+        manager = JobManager(self.store)
+        retention = RetentionService(
+            self.store,
+            RetentionSettings(False, 7, 30, 3600, 100),
+        )
+        app = FastAPI()
+        app.include_router(
+            create_mvp_router(
+                lambda: self.store,
+                lambda: manager,
+                lambda: retention,
+            )
+        )
+        transport = httpx.ASGITransport(app=app)
+        async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+            listed = await client.get("/api/mvp/sessions")
+            detail = await client.get(f"/api/mvp/sessions/{historical['id']}")
+            jobs = await client.get(f"/api/mvp/sessions/{historical['id']}/jobs")
+            deleted = await client.delete(f"/api/mvp/sessions/{historical['id']}")
+
+        self.assertNotIn(historical["id"], {item["id"] for item in listed.json()["items"]})
+        for response in (detail, jobs, deleted):
+            self.assertEqual(response.status_code, 409)
+            self.assertEqual(response.json()["detail"]["code"], "SESSION_WORKFLOW_LEGACY")
+
+    async def test_agentic_session_creation_retires_job_upload_route(self):
         manager = JobManager(self.store)
         retention = RetentionService(
             self.store,
@@ -488,11 +548,12 @@ class JobAPITests(PostgresTestCase):
             )
             self.assertEqual(created_session.status_code, 201)
             session_id = created_session.json()["id"]
+            self.assertEqual(created_session.json()["workflow_version"], 2)
             retired = await client.post("/api/mvp/jobs")
             self.assertEqual(retired.status_code, 409)
             self.assertEqual(retired.json()["detail"]["code"], "SESSION_REQUIRED")
 
-            created = await client.post(
+            removed = await client.post(
                 f"/api/mvp/sessions/{session_id}/jobs",
                 data={
                     "prompt": "make four vertical clips",
@@ -505,40 +566,11 @@ class JobAPITests(PostgresTestCase):
                 },
                 files={"file": ("talk.mp4", b"fake-video", "video/mp4")},
             )
-            self.assertEqual(created.status_code, 202)
-            job = created.json()
-            self.assertEqual(job["state"], "queued")
-            self.assertEqual(job["editing_session_id"], session_id)
-            self.assertEqual(job["request"]["edit_mode"], "agentic")
-            self.assertEqual(job["request"]["asset_policy"], "off")
-            self.assertEqual(job["request"]["max_generated_assets_per_clip"], 1)
-            self.assertEqual(job["request"]["stock_policy"], "auto")
-            self.assertEqual(job["request"]["max_stock_assets_per_clip"], 2)
+            self.assertEqual(removed.status_code, 405)
 
             resumed = await client.get(f"/api/mvp/sessions/{session_id}")
             self.assertEqual(resumed.status_code, 200)
-            self.assertEqual(resumed.json()["jobs"][0]["id"], job["id"])
-
-            artifact = self.store.output_dir(job["id"]) / "manifest.json"
-            artifact.write_text("{}", encoding="utf-8")
-            await self.store.register_artifact(job["id"], artifact, kind="manifest")
-            download = await client.get(
-                f"/api/mvp/jobs/{job['id']}/artifacts/manifest.json"
-            )
-            self.assertEqual(download.status_code, 200)
-            self.assertEqual(download.content, b"{}")
-
-            bundle = await client.get(f"/api/mvp/jobs/{job['id']}/bundle")
-            self.assertEqual(bundle.status_code, 200)
-            bundle_path = Path(self.temporary_directory.name) / "download.zip"
-            bundle_path.write_bytes(bundle.content)
-            with zipfile.ZipFile(bundle_path) as archive:
-                self.assertIn("manifest.json", archive.namelist())
-
-            traversal = await client.get(
-                f"/api/mvp/jobs/{job['id']}/artifacts/%2E%2E%2Fmanifest.json"
-            )
-            self.assertIn(traversal.status_code, {404, 400})
+            self.assertEqual(resumed.json()["jobs"], [])
 
     async def test_session_delete_is_idempotent_and_rejects_active_jobs(self):
         manager = JobManager(self.store)
@@ -562,11 +594,8 @@ class JobAPITests(PostgresTestCase):
             repeated = await client.delete(f"/api/mvp/sessions/{session_id}")
             resumed = await client.get(f"/api/mvp/sessions/{session_id}")
 
-            active_session = await client.post(
-                "/api/mvp/sessions",
-                json={"title": "Active"},
-            )
-            active_id = active_session.json()["id"]
+            active_session = await self.store.create_session("Active")
+            active_id = active_session["id"]
             await self.store.create(
                 editing_session_id=active_id,
                 prompt="active job",

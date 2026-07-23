@@ -21,9 +21,9 @@ with `Dockerfile.remote` and Kamal.
 - The optional pinned FFMPEGA sidecar executes only typed, allowlisted effects.
 - Job media and work files remain isolated under `outputs/mvp_jobs/<job_id>`.
 
-The product currently retains a workspace compatibility path while the
-Agentic-only migration is completed. It is part of the remote MVP, not the
-removed local application.
+The reusable Agentic workspace is the only executable editing workflow.
+Historical workflow-version-1 records remain non-executable audit history and
+cannot enter the worker queue.
 
 ## Documentation
 

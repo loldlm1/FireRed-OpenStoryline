@@ -82,29 +82,28 @@ isolated so upstream behavior can continue to be merged into this fork.
    or prefill a user-editable improved version. Selecting a favorite never
    changes deterministic QA verdicts.
 
-## Reusable workspace contract and rollout bridge
+## Agentic-only reusable workspace contract
 
-- `OPENSTORYLINE_SESSION_WORKSPACE_MODE` accepts only `legacy` or `enabled` and
-  defaults to `legacy`. `legacy` serves `web/mvp-legacy.html` and creates
-  workflow-version-1 sessions. `enabled` serves the modular reusable workspace
-  and creates workflow-version-2 sessions.
+- The application serves only the modular reusable workspace and every new
+  session uses workflow version 2. There is no runtime environment switch or
+  request field that can select a legacy editor.
 - A workflow-version-2 session owns exactly one source video. Once validation
   succeeds it cannot be replaced or modified. A different video always requires
   a new session. Existing workflow-version-1 sessions remain readable and keep
-  their original job-owned media paths; they are never silently converted into
-  reusable sessions.
+  their original job-owned media paths as administrative audit history; they are
+  never silently converted or accepted by the worker queue.
 - Prompt text and run settings are immutable per version. Each version can have
   multiple attempts, all attributable to the same source hash. At most one
   completed run in the session may be the human-selected favorite.
 - Database readiness uses an explicit compatibility set rather than revision
   ordering. The legacy `20260717_0001`, reusable-workspace `20260719_0002`,
-  and checkpoint `20260721_0003` schemas are accepted; missing, obsolete, and
-  unknown revisions fail closed with `DATABASE_SCHEMA_OUTDATED`.
-- Deploy the compatibility bridge before applying the additive migration, and
-  keep mode `legacy` until a separately authorized canary. A normal rollback
-  returns to the bridge application while retaining the additive schema, source
-  metadata, prompt versions, activity, and media; it does not infer downgrade
-  safety.
+  checkpoint `20260721_0003`, and Agentic-default `20260723_0004` schemas are
+  accepted; missing, obsolete, and unknown revisions fail closed with
+  `DATABASE_SCHEMA_OUTDATED`.
+- Revision `20260723_0004` changes only the database default for new sessions;
+  it does not rewrite or delete workflow-version-1 records. A normal rollback
+  uses the previous compatible image while retaining the additive schema,
+  source metadata, prompt versions, activity, and media.
 
 ## Agentic creative QA
 

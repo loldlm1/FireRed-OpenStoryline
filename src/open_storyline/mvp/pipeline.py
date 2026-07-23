@@ -387,7 +387,7 @@ class MVPJobProcessor:
         prior_quality_feedback = request.get("prior_attempt_quality_feedback")
         if not isinstance(prior_quality_feedback, dict):
             prior_quality_feedback = {}
-        agentic_requested = request.get("edit_mode") == "agentic"
+        agentic_requested = True
         catalog_snapshot: dict[str, Any] | None = None
         if (
             agentic_requested

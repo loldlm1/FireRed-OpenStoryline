@@ -19,8 +19,8 @@ Kamal 部署。
 - 可选的固定版本 FFMPEGA sidecar 只执行有类型且在白名单内的特效。
 - 任务媒体和工作文件隔离在 `outputs/mvp_jobs/<job_id>` 下。
 
-在 Agentic-only 迁移完成前，产品仍保留远程工作区兼容路径。它属于远程 MVP，
-不是已删除的本地应用。
+可复用的 Agentic 工作区是唯一可执行的编辑工作流。历史 workflow-version-1
+记录仅作为不可执行的审计历史保留，不能进入工作队列。
 
 ## 文档
 

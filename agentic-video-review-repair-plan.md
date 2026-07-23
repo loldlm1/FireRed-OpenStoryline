@@ -1,7 +1,7 @@
 # Plan: Agentic-Only Render Review and Repair Upgrade
 
 **Generated**: 2026-07-22
-**Status**: Planning only; implementation not started
+**Status**: In progress; Sprints 1-3 complete
 **Estimated Complexity**: High
 
 ## Overview
@@ -243,14 +243,14 @@ image/configuration. Do not delete any local runtime files in this sprint.
 
 ### Sprint 1 Gate
 
-- [ ] All Sprint 1 tasks complete.
-- [ ] Sprint 1 validation passes and evidence is recorded.
-- [ ] The local-runtime removal manifest and production-use confirmation are
+- [x] All Sprint 1 tasks complete.
+- [x] Sprint 1 validation passes and evidence is recorded.
+- [x] The local-runtime removal manifest and production-use confirmation are
   reviewed by the maintainer.
-- [ ] Residual risks are documented.
-- [ ] Exactly one Sprint 1 commit is created with the proposed message.
-- [ ] The rollback point is recorded.
-- [ ] Sprint 2 has not started before this gate completes.
+- [x] Residual risks are documented.
+- [x] Exactly one Sprint 1 commit is created with the proposed message.
+- [x] The rollback point is recorded.
+- [x] Sprint 2 has not started before this gate completes.
 
 ## Sprint 2: Remove The Unused Full Local Application
 
@@ -342,13 +342,13 @@ rebuild; that is why the remote image is validated before deletion.
 
 ### Sprint 2 Gate
 
-- [ ] All local-only files are deleted only after the dependency manifest passes.
-- [ ] Remote imports, tests, image build, and deployment configuration pass.
-- [ ] No secret, media, provider body, or generated artifact entered the commit.
-- [ ] Residual rollback/reinstallation risk is documented.
-- [ ] Exactly one Sprint 2 commit is created with the proposed message.
-- [ ] The rollback point is recorded.
-- [ ] Sprint 3 has not started before this gate completes.
+- [x] All local-only files are deleted only after the dependency manifest passes.
+- [x] Remote imports, tests, image build, and deployment configuration pass.
+- [x] No secret, media, provider body, or generated artifact entered the commit.
+- [x] Residual rollback/reinstallation risk is documented.
+- [x] Exactly one Sprint 2 commit is created with the proposed message.
+- [x] The rollback point is recorded.
+- [x] Sprint 3 has not started before this gate completes.
 
 ## Sprint 3: Make The Remote MVP Agentic-Only
 
@@ -443,13 +443,13 @@ sprint unless the inventory is empty and the backup/restore gate passes.
 
 ### Sprint 3 Gate
 
-- [ ] No active user-facing legacy editor/workspace path remains.
-- [ ] Inventory, migration, backup, and restore evidence are recorded.
-- [ ] Authenticated desktop/mobile smoke checks pass without console errors.
-- [ ] Historical data handling and residual compatibility risks are documented.
-- [ ] Exactly one Sprint 3 commit is created with the proposed message.
-- [ ] The rollback point is recorded.
-- [ ] Sprint 4 has not started before this gate completes.
+- [x] No active user-facing legacy editor/workspace path remains.
+- [x] Inventory, migration, backup, and restore evidence are recorded.
+- [x] Authenticated desktop/mobile smoke checks pass without console errors.
+- [x] Historical data handling and residual compatibility risks are documented.
+- [x] Exactly one Sprint 3 commit is created with the proposed message.
+- [x] The rollback point is recorded.
+- [x] Sprint 4 has not started before this gate completes.
 
 ## Sprint 4: Define Adaptive Rendered Evidence
 

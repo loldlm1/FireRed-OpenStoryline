@@ -74,9 +74,9 @@ route paths, status codes, structured error codes, response fields, event names,
 artifact names, and DOM hooks unless a coordinated migration explicitly changes
 them.
 
-The remote product currently retains `web/mvp-legacy.html` as a compatibility
-surface. Its removal belongs to the Agentic-only data and rollout migration,
-not to the deleted full-local runtime.
+The remote product serves only `web/mvp.html`. Workflow-version-1 records stay
+available to bounded administrative audit commands but cannot be listed or
+executed through the active product workspace.
 
 ## Model And Render Contracts
 

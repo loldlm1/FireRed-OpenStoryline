@@ -22,7 +22,7 @@ COPY src/open_storyline/__init__.py ./src/open_storyline/__init__.py
 COPY src/open_storyline/mvp/ ./src/open_storyline/mvp/
 COPY creative_catalog/ ./creative_catalog/
 COPY scripts/generate_creative_catalog_manifest.py ./scripts/generate_creative_catalog_manifest.py
-COPY web/mvp.html web/mvp-legacy.html ./web/
+COPY web/mvp.html ./web/
 COPY web/static/mvp/ ./web/static/mvp/
 
 RUN install -d -m 0755 /usr/local/share/fonts/openstoryline \

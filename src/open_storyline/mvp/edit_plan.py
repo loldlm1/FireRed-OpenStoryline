@@ -47,7 +47,6 @@ SUPPORTED_CAPABILITIES = frozenset({
     "subtitles",
 })
 
-EditMode = Literal["legacy", "agentic"]
 AssetPolicy = Literal["off", "auto", "required"]
 AgenticServerMode = Literal["off", "shadow", "render"]
 LayoutMode = Literal["crop", "fit", "letterbox", "source"]
@@ -2198,17 +2197,14 @@ def resolve_agentic_server_mode(config: Any) -> AgenticServerMode:
     return value  # type: ignore[return-value]
 
 
-def validate_job_controls(edit_mode: str, asset_policy: str) -> tuple[EditMode, AssetPolicy]:
-    normalized_edit = str(edit_mode or "legacy").strip().lower()
+def validate_asset_policy(asset_policy: str) -> AssetPolicy:
     normalized_assets = str(asset_policy or "auto").strip().lower()
-    if normalized_edit not in {"legacy", "agentic"}:
-        raise EditPlanError("EDIT_MODE_INVALID", "edit_mode must be legacy or agentic")
     if normalized_assets not in {"off", "auto", "required"}:
         raise EditPlanError(
             "ASSET_POLICY_INVALID",
             "asset_policy must be off, auto, or required",
         )
-    return normalized_edit, normalized_assets  # type: ignore[return-value]
+    return normalized_assets  # type: ignore[return-value]
 
 
 def validate_generated_asset_limit(value: int) -> int:

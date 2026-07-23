@@ -67,8 +67,7 @@ Use the smallest applicable installed skill while preserving local contracts:
 - `migrations/` and `alembic.ini`: explicit PostgreSQL schema history.
 - `scripts/mvp-postgres-*.sh`: database bootstrap, backup, and restore checks.
 - `creative_catalog/`: licensed creative assets and generated manifest.
-- `web/mvp.html`, `web/mvp-legacy.html`, and `web/static/mvp/`: remote UI and
-  its temporary compatibility surface.
+- `web/mvp.html` and `web/static/mvp/`: Agentic-only remote UI.
 - `Dockerfile.remote`, `Dockerfile.ffmpega`, and `Dockerfile.quality`: separate
   remote web, effect, and quality images.
 - `config/deploy.yml`, `.kamal/`, and `bin/kamal-mvp`: Kamal release workflow.

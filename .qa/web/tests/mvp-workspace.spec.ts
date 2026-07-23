@@ -416,7 +416,6 @@ function historyVersion(index: number, options: {
 }
 
 async function installHistoryApi(page: Page, options: {
-  legacy?: boolean;
   versions?: HistoryVersion[];
   retryDelayMs?: number;
 } = {}) {
@@ -463,24 +462,12 @@ async function installHistoryApi(page: Page, options: {
     if (path === '/api/mvp/sessions' && method === 'GET') {
       const item = {
         ...session(ready),
-        workflow_version: options.legacy ? 1 : 2,
-        input_video: options.legacy ? null : ready,
+        workflow_version: 2,
+        input_video: ready,
       };
       return json(route, { items: [item], next_cursor: null });
     }
     if (path === `/api/mvp/sessions/${sessionId}` && method === 'GET') {
-      if (options.legacy) {
-        const legacyJob = historyRun(jobId, '', 1);
-        legacyJob.prompt_version_id = null;
-        legacyJob.attempt_number = null as unknown as number;
-        legacyJob.prompt = 'Corte histórico de una carga anterior.';
-        return json(route, {
-          ...session(missingSource()),
-          workflow_version: 1,
-          jobs: [legacyJob],
-          next_job_cursor: null,
-        });
-      }
       return json(route, { ...session(ready), jobs: [], next_job_cursor: null });
     }
     if (path === `/api/mvp/sessions/${sessionId}/input-video`) return json(route, ready);
@@ -869,7 +856,7 @@ test.describe('reusable video workspace', () => {
     expect(mock.favoriteId).toBeNull();
   });
 
-  test('shows missing media guidance and keeps legacy sessions read-only', async ({ page }) => {
+  test('shows missing media guidance for retained Agentic history', async ({ page }) => {
     await installHistoryApi(page, {
       versions: [historyVersion(1, { id: promptVersionId, runId: jobId, available: false })],
     });
@@ -877,17 +864,6 @@ test.describe('reusable video workspace', () => {
     const card = page.locator('#recent-jobs .version-card').first();
     await card.getByRole('button', { name: 'Ver salidas y QA' }).click();
     await expect(card).toContainText('Los medios ya no están disponibles');
-
-    await page.unroute('**/api/mvp/**');
-    await installHistoryApi(page, { legacy: true });
-    await page.reload();
-    await expect(page.locator('#legacy-workspace')).toBeVisible();
-    await expect(page.locator('#modern-workspace')).toBeHidden();
-    await expect(page.locator('#legacy-history')).toContainText('Corte histórico de una carga anterior');
-    await expect(page.locator('#legacy-history')).toContainText('Descargar');
-    await page.locator('#legacy-create-session').click();
-    await expect(page.locator('#session-dialog')).toBeVisible();
-    await expect(page.locator('#session-title')).toBeFocused();
   });
 
   test('390px mobile keeps the source, composer, and activity in a usable reading order', async ({ page }) => {

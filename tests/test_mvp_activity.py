@@ -143,7 +143,9 @@ class ActivityPostgresTests(unittest.IsolatedAsyncioTestCase):
             poll_interval=0.01,
             heartbeat_interval=0.02,
         )
-        editing_session = await self.store.create_session("Activity")
+        editing_session = await self.store.create_session(
+            "Activity", workflow_version=2
+        )
         job = await self.store.create(
             editing_session_id=editing_session["id"],
             prompt="private editing prompt marker",
@@ -192,6 +194,8 @@ class ActivityPostgresTests(unittest.IsolatedAsyncioTestCase):
         await asyncio.sleep(0.02)
         second = await self.emit(progress=0.75)
         chunk = (await asyncio.wait_for(waiting, timeout=1)).decode("utf-8")
+        if chunk == ": heartbeat\n\n":
+            chunk = (await asyncio.wait_for(anext(stream), timeout=1)).decode("utf-8")
         self.assertIn(f"id: {second['sequence']}", chunk)
         heartbeat = (await asyncio.wait_for(anext(stream), timeout=1)).decode("utf-8")
         self.assertEqual(heartbeat, ": heartbeat\n\n")
@@ -241,7 +245,6 @@ class ActivityPostgresTests(unittest.IsolatedAsyncioTestCase):
             create_mvp_router(
                 lambda: self.store,
                 lambda: manager,
-                None,
                 None,
                 None,
                 None,

@@ -14,7 +14,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from open_storyline.mvp.audit import AuditService, parse_since
 from open_storyline.mvp.database import Database, DatabaseConfigurationError
 from open_storyline.mvp.jobs import JobStore, JobStoreError
-from open_storyline.mvp.models import EditingSession, PromptVersion, VideoJob
+from open_storyline.mvp.models import Artifact, EditingSession, PromptVersion, VideoJob
 from open_storyline.mvp.prompt_versions import PromptVersionService
 from open_storyline.mvp.retention import RetentionService, RetentionSettings
 from open_storyline.mvp.security import sanitize_for_persistence
@@ -382,10 +382,118 @@ async def backfill_legacy_prompt_versions(
                 await session.commit()
 
 
+async def inventory_workflows(database: Database) -> dict[str, Any]:
+    """Return aggregate-only workflow compatibility evidence."""
+    async with database.sessions() as session:
+        revision = await session.scalar(
+            text("SELECT version_num FROM alembic_version LIMIT 1")
+        )
+        session_rows = list(
+            (
+                await session.execute(
+                    select(
+                        EditingSession.workflow_version,
+                        func.count(EditingSession.id),
+                    ).group_by(EditingSession.workflow_version)
+                )
+            ).all()
+        )
+        job_rows = list(
+            (
+                await session.execute(
+                    select(
+                        EditingSession.workflow_version,
+                        VideoJob.state,
+                        func.count(VideoJob.id),
+                    )
+                    .join(
+                        VideoJob,
+                        VideoJob.editing_session_id == EditingSession.id,
+                    )
+                    .group_by(EditingSession.workflow_version, VideoJob.state)
+                )
+            ).all()
+        )
+        artifact_rows = list(
+            (
+                await session.execute(
+                    select(
+                        EditingSession.workflow_version,
+                        Artifact.availability,
+                        func.count(Artifact.id),
+                    )
+                    .join(VideoJob, VideoJob.id == Artifact.job_id)
+                    .join(
+                        EditingSession,
+                        EditingSession.id == VideoJob.editing_session_id,
+                    )
+                    .group_by(
+                        EditingSession.workflow_version,
+                        Artifact.availability,
+                    )
+                )
+            ).all()
+        )
+        prompt_rows = list(
+            (
+                await session.execute(
+                    select(
+                        EditingSession.workflow_version,
+                        func.count(PromptVersion.id),
+                    )
+                    .join(
+                        PromptVersion,
+                        PromptVersion.editing_session_id == EditingSession.id,
+                    )
+                    .group_by(EditingSession.workflow_version)
+                )
+            ).all()
+        )
+
+    session_counts = {str(version): int(count) for version, count in session_rows}
+    job_counts: dict[str, dict[str, int]] = {}
+    for version, state, count in job_rows:
+        job_counts.setdefault(str(version), {})[str(state)] = int(count)
+    artifact_counts: dict[str, dict[str, int]] = {}
+    for version, availability, count in artifact_rows:
+        artifact_counts.setdefault(str(version), {})[str(availability)] = int(count)
+    prompt_counts = {str(version): int(count) for version, count in prompt_rows}
+    unknown_versions = sorted(
+        int(value) for value in session_counts if int(value) not in {1, 2}
+    )
+    if unknown_versions:
+        raise JobStoreError(
+            "SESSION_WORKFLOW_VERSION_UNKNOWN",
+            "unknown workflow versions require manual review",
+        )
+
+    def workflow(version: int) -> dict[str, Any]:
+        jobs = job_counts.get(str(version), {})
+        artifacts = artifact_counts.get(str(version), {})
+        return {
+            "sessions": session_counts.get(str(version), 0),
+            "jobs": {"total": sum(jobs.values()), "by_state": jobs},
+            "active_jobs": sum(jobs.get(state, 0) for state in ("uploading", "queued", "running")),
+            "prompt_versions": prompt_counts.get(str(version), 0),
+            "artifacts": {"total": sum(artifacts.values()), "by_availability": artifacts},
+            "executable": version == 2,
+        }
+
+    return {
+        "ok": True,
+        "read_only": True,
+        "schema_revision": str(revision or "unknown"),
+        "workflow_v1_history": workflow(1),
+        "workflow_v2_agentic": workflow(2),
+    }
+
+
 async def _workspace_command(
     arguments: argparse.Namespace,
     database: Database,
 ) -> dict[str, Any]:
+    if arguments.workspace_command == "inventory":
+        return await inventory_workflows(database)
     if arguments.workspace_command == "backfill-prompts":
         return await backfill_legacy_prompt_versions(
             database,
@@ -631,6 +739,10 @@ def main() -> int:
     workspace_commands = workspace.add_subparsers(
         dest="workspace_command",
         required=True,
+    )
+    workspace_commands.add_parser(
+        "inventory",
+        help="report aggregate Agentic and historical workflow counts",
     )
     prompt_backfill = workspace_commands.add_parser(
         "backfill-prompts", help="link legacy jobs to immutable prompt versions"

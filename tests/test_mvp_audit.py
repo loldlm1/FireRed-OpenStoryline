@@ -122,7 +122,9 @@ class AuditPostgresTestCase(unittest.IsolatedAsyncioTestCase):
         self.temporary_directory.cleanup()
 
     async def create_job(self, *, prompt: str = "make one clip") -> dict:
-        editing_session = await self.store.create_session("Audit session")
+        editing_session = await self.store.create_session(
+            "Audit session", workflow_version=1
+        )
         state = await self.store.create(
             editing_session_id=editing_session["id"],
             prompt=prompt,
