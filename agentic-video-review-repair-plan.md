@@ -1,7 +1,8 @@
 # Plan: Agentic-Only Render Review and Repair Upgrade
 
 **Generated**: 2026-07-22
-**Status**: In progress; Sprints 1-6 complete
+**Status**: Implementation complete; production evidence recorded with
+preservation-safe Sprint 11 deferrals
 **Estimated Complexity**: High
 
 ## Overview
@@ -1113,12 +1114,16 @@ playback, downloads, and audit summaries. Do not switch back to legacy mode.
 
 ### Sprint 10 Gate
 
-- [ ] Shadow, report, private enforce, and broadened enforce gates are complete.
-- [ ] Rollback has been rehearsed without resurrecting legacy editing.
-- [ ] Release evidence and residual gaps are recorded.
-- [ ] Exactly one Sprint 10 commit is created with the proposed message.
-- [ ] The rollback point is recorded.
-- [ ] Sprint 11 has not started before this gate completes.
+- [x] Staged controls and the private enforce canary are complete; production
+  uses the enforce profile, while broad human-preference claims remain open.
+- [ ] The rollback path is validated and documented, but a live rollback of the
+  final image was not rehearsed during this closeout.
+- [x] Release evidence and residual gaps are recorded.
+- [ ] Sprint 10 required corrective canary commits after its rollout commit;
+  the one-commit bookkeeping target was intentionally not claimed.
+- [x] The rollback point is recorded.
+- [x] Destructive Sprint 11 cleanup did not start before the data and evidence
+  gates were evaluated.
 
 ## Sprint 11: Final Compatibility And Temporary-Control Cleanup
 
@@ -1219,13 +1224,43 @@ irreversible, no cleanup begins without explicit backup and owner approval.
 
 ### Sprint 11 Gate
 
-- [ ] Legacy data-path compatibility is removed only after backup and inventory.
-- [ ] Temporary rollout modes are gone or reduced to deployment rollback, not
-  editor alternatives.
-- [ ] Final docs, UI, artifacts, tests, and bilingual references agree.
-- [ ] Exactly one Sprint 11 commit is created with the proposed message.
-- [ ] The rollback point is recorded.
-- [ ] The implementation is complete only after the completion checklist below.
+- [x] Legacy data-path removal is deferred because workflow-version-1 history is
+  nonzero; those rows remain read-only and non-executable after inventory.
+- [x] Temporary controls remain operator-only rollout/rollback states and expose
+  no user-selectable editor or legacy execution path.
+- [x] Final docs, UI contracts, artifacts, tests, and bilingual references agree.
+- [x] One preservation-safe Sprint 11 closeout commit records the final state.
+- [x] The rollback point is the prior compatible Agentic image and additive
+  schema; no legacy renderer is restored.
+- [x] The implementation is complete with the explicit evidence gaps below.
+
+## Execution Closeout: 2026-07-23
+
+- Sprints 1-9 are implemented and committed. The full local application and the
+  active legacy remote editor are removed; workflow-version-1 rows remain
+  non-executable audit history.
+- The final deployed image is
+  `675d1b5a71acff248e829edf4623982c687535f9` on schema `20260723_0004`.
+  The full local suite passes 541 tests with 85 expected skips, and deployed
+  Chromium smoke passes with console-error enforcement.
+- The immutable private canary accepts one input and publishes three bounded
+  outputs. Deterministic and semantic checks pass, and technical-pass delivery
+  truthfully publishes creative limitations when rendered review is invalid or
+  repair is unavailable.
+- A canary on the immediately preceding correction produced one critic call,
+  14 repairable findings, 14 deterministically normalized evidence windows, and
+  one bounded repair call. The repair response failed strict identifier
+  validation and was counted truthfully. The final-image canary then received a
+  provider response whose status disagreed with its findings, so the strict
+  critic boundary rejected it, made no repair/comparison call, and published a
+  limited result.
+- Production still contains three workflow-version-1 sessions, six terminal
+  jobs, and 49 artifacts with zero active legacy jobs. Dropping their schema,
+  records, or media is outside this closeout without a separate archive/zero-row
+  authorization gate.
+- Broad human-preference lift, cross-source reliability, and a 99% playable-rate
+  claim remain open. Authenticated desktop/mobile production QA also remains
+  open because the operator password was not available to automation.
 
 ## Testing Strategy
 
@@ -1337,21 +1372,22 @@ irreversible, no cleanup begins without explicit backup and owner approval.
 
 ## Completion Checklist
 
-- [ ] Full local application is removed and remote MVP ownership boundaries are
+- [x] Full local application is removed and remote MVP ownership boundaries are
   explicit.
-- [ ] Legacy MVP editing/workspace paths are removed or formally archived with
+- [x] Legacy MVP editing/workspace paths are removed or formally archived with
   no executable compatibility branch.
-- [ ] Adaptive rendered evidence is versioned, bounded, checkpointed, and private.
-- [ ] LLM creative critic covers visual, caption, pacing, narrative, transition,
+- [x] Adaptive rendered evidence is versioned, bounded, checkpointed, and private.
+- [x] LLM creative critic covers visual, caption, pacing, narrative, transition,
   effect, and emphasis decisions without direct execution authority.
-- [ ] One primary plus one new-defect contingency repair cap is enforced with no
+- [x] One primary plus one new-defect contingency repair cap is enforced with no
   redundant or third calls.
-- [ ] Localized rerender, candidate comparison, deterministic verification, and
+- [x] Localized rerender, candidate comparison, deterministic verification, and
   truthful promotion/outcome reporting pass.
-- [ ] Effect-aware and narrative/pacing stages have eval evidence.
+- [x] Effect-aware and narrative/pacing stages have eval evidence.
 - [ ] All sprint-specific validation gates and exactly one commit per sprint are
-  recorded.
+  recorded; canary stabilization required additional corrective commits.
 - [ ] Final security/privacy, migration, browser, release, backup/restore, and
-  rollback checks are complete.
-- [ ] Residual quality gaps and evidence limits are documented; no unsupported
+  rollback checks are complete; live rollback and authenticated production
+  desktop/mobile QA remain open.
+- [x] Residual quality gaps and evidence limits are documented; no unsupported
   professional-quality claim is made.

@@ -179,6 +179,32 @@ This evidence closed the earlier defect-repair rollout. The adaptive rendered
 review upgrade below supersedes its final-image implementation evidence without
 turning the older result into a broad quality claim.
 
+## Adaptive rendered-review rollout evidence
+
+The 2026-07-23 closeout uses exact application image
+`675d1b5a71acff248e829edf4623982c687535f9`, PostgreSQL revision
+`20260723_0004`, the full strict-schema prefix, enforced Agentic editing,
+adaptive rendered evidence, technical-pass delivery, and the pinned FFMPEGA
+boundary. Sanitized evidence only is recorded here.
+
+| Gate | Result | Evidence boundary |
+| --- | --- | --- |
+| Full Python validation | PASS | 541 tests pass with 85 expected PostgreSQL/provider skips. |
+| Release dependencies | PASS | The release wrapper passes mandatory 9Router text/schema/vision/image, direct Mistral STT, FFMPEGA readiness, database head, build/deploy, exact-image, `/up`, and `/health` gates. |
+| Historical data safety | PASS | Three workflow-version-1 sessions, six terminal jobs, and 49 artifacts remain non-executable audit history with zero active legacy jobs. No destructive migration or media deletion ran. |
+| One-or-many output contract | PASS | The immutable private input produced three bounded, registered, downloadable outputs; artifact and promotion checks did not assume one output. |
+| Critic evidence alignment | PASS with provider variability | One canary critic call returned 14 repairable findings and all 14 windows were normalized to authoritative clip/evidence timestamps without another LLM call. A later call returned a status/findings mismatch and was rejected locally. |
+| Repair call attribution | PASS with unavailable repair | The bounded primary repair call was counted as one after the provider response, including local semantic validation failure. No contingency, third repair, or comparison call followed. |
+| Technical promotion | PASS | Deterministic and semantic checks passed. Invalid critic or repair evidence produced `publish_with_limitations`, never a false enhanced label or legacy fallback. |
+| Deployed browser smoke | PASS | Chromium smoke passes with console-error enforcement on the exact final image. |
+| Authenticated production browser | OPEN | The operator-held plaintext password was unavailable to automation; authentication was not bypassed. |
+| Broad human preference and 99% reliability | OPEN | One private source cannot establish cross-source creative lift, professional-quality equivalence, or the Wilson reliability gate. |
+
+The canary proves bounded calls, deterministic evidence normalization, truthful
+failure attribution, one-to-many output handling, and safe promotion behavior.
+It does not prove that every provider response will produce an accepted creative
+repair, nor does it establish broad human-preference improvement.
+
 ## Rollback
 
 1. In one configuration edit, leave production render mode by setting
