@@ -174,6 +174,19 @@ class RenderCriticTests(unittest.IsolatedAsyncioTestCase):
             [item["image_index"] for item in prompt["evidence"]],
             [1, 2],
         )
+        self.assertEqual(
+            prompt["clip_bounds"],
+            [{
+                "clip_index": 1,
+                "duration_ms": 4000,
+                "evidence_timestamps_ms": [1000, 2200],
+            }],
+        )
+        self.assertTrue(
+            prompt["constraints"][
+                "finding_window_must_contain_all_referenced_evidence_timestamps"
+            ]
+        )
         self.assertNotIn("data:image", json.dumps(report))
 
     async def test_effect_findings_require_final_executed_effect_evidence(self):

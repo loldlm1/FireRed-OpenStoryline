@@ -133,6 +133,16 @@ def build_render_critic_prompt(
         ),
         "editing_prompt": _bounded_editing_prompt(editing_prompt),
         "narrative_context": narrative_context or {},
+        "clip_bounds": [
+            {
+                "clip_index": clip.clip_index,
+                "duration_ms": clip.duration_ms,
+                "evidence_timestamps_ms": [
+                    frame.timestamp_ms for frame in clip.frames
+                ],
+            }
+            for clip in manifest.clips
+        ],
         "evidence": evidence,
         "effect_execution": [
             {
@@ -146,6 +156,9 @@ def build_render_critic_prompt(
             "scope": "rendered_evidence_only",
             "non_mutating": True,
             "evidence_ids_only": True,
+            "finding_windows_use_clip_local_output_ms": True,
+            "finding_window_must_be_within_clip_duration": True,
+            "finding_window_must_contain_all_referenced_evidence_timestamps": True,
             "no_commands_paths_or_filters": True,
             "no_provider_body_or_private_data_echo": True,
             "supported_capabilities": sorted(_SAFE_CAPABILITIES),

@@ -65,6 +65,8 @@ from open_storyline.mvp.render_evidence import (
     manifest_from_checkpoint,
 )
 from open_storyline.mvp.render_critic import (
+    RENDER_CRITIC_VERSION,
+    RenderCriticError,
     critic_call_fingerprint,
     render_critic_report_from_checkpoint,
     render_review_mode,
@@ -4595,16 +4597,64 @@ class MVPJobProcessor:
             except asyncio.CancelledError:
                 raise
             except Exception as exc:
+                error_code = str(
+                    getattr(exc, "code", "RENDER_CRITIC_UNAVAILABLE")
+                )[:80]
+                attempts = tuple(getattr(remote_client, "last_attempts", ()))
+                render_critic_report = {
+                    "version": RENDER_CRITIC_VERSION,
+                    "mode": critic_mode,
+                    "status": "unavailable",
+                    "scope": "rendered_evidence_only",
+                    "non_mutating": True,
+                    "summary": "rendered creative review was unavailable",
+                    "provider_calls": int(bool(attempts)),
+                    "finding_count": 0,
+                    "findings": [],
+                    "error_code": error_code,
+                    "validation_reason": (
+                        str(exc).split(": ", 1)[-1][:160]
+                        if isinstance(exc, RenderCriticError)
+                        else ""
+                    ),
+                }
                 critic_manifest.update({
                     "status": "unavailable",
-                    "error_code": str(
-                        getattr(exc, "code", "RENDER_CRITIC_UNAVAILABLE")
-                    )[:80],
+                    "provider_calls": render_critic_report["provider_calls"],
+                    "error_code": error_code,
                 })
+                critic_path = output_dir / names.render_critic
+                critic_path.write_text(
+                    json.dumps(
+                        render_critic_report,
+                        ensure_ascii=False,
+                        indent=2,
+                    ),
+                    encoding="utf-8",
+                )
+                await store.register_artifact(
+                    job_id,
+                    critic_path,
+                    kind="render_critic",
+                )
+                emit_event(
+                    "render_critic_unavailable",
+                    job_id=job_id,
+                    stage="post_render_qa",
+                    **compact_render_critic_observability(
+                        render_critic_report
+                    ),
+                )
             agentic_manifest["render_critic"] = critic_manifest
             repair_manifest: dict[str, Any] = {
                 "mode": critic_mode,
-                "status": "disabled" if critic_mode != "enforce" else "not_needed",
+                "status": (
+                    "disabled"
+                    if critic_mode != "enforce"
+                    else "unavailable"
+                    if (render_critic_report or {}).get("status") == "unavailable"
+                    else "not_needed"
+                ),
                 "selected_candidate": "original",
                 "provider_calls": 0,
                 "rounds": 0,
@@ -4615,6 +4665,10 @@ class MVPJobProcessor:
                     effect.skill for effect in effects_plan.effects
                 ],
             }
+            if repair_manifest["status"] == "unavailable":
+                repair_manifest["error_code"] = (
+                    render_critic_report or {}
+                ).get("error_code", "RENDER_CRITIC_UNAVAILABLE")
             repair_records: list[dict[str, Any]] = []
             repair_directories: list[Path] = []
             original_agentic_result = agentic_result
@@ -4631,6 +4685,7 @@ class MVPJobProcessor:
                 frame_quality=frame_quality_report,
                 render_qa=render_qa_report,
                 creative_conformance=creative_conformance_report,
+                creative_review=render_critic_report,
                 caption_footprints=original_caption_footprints,
             )
             original_blocker_codes = set(original_candidate_gate["blocker_codes"])
@@ -5644,6 +5699,7 @@ class MVPJobProcessor:
                 frame_quality=frame_quality_report,
                 render_qa=render_qa_report,
                 creative_conformance=creative_conformance_report,
+                creative_review=render_critic_report,
                 caption_footprints=caption_footprints,
             )
             if promotion_report["decision"] == "block":
