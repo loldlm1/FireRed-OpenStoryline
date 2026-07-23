@@ -6,6 +6,7 @@ from pathlib import Path
 from types import SimpleNamespace
 from tempfile import TemporaryDirectory
 import os
+import json
 import subprocess
 import sys
 import unittest
@@ -28,6 +29,13 @@ from open_storyline.mvp.models import (
     SessionAnalysisCache,
     SessionInputVideo,
     VideoJob,
+)
+from open_storyline.mvp.render_evidence import (
+    EvidenceClip,
+    EvidenceFrame,
+    EvidenceLimits,
+    RenderEvidenceManifest,
+    manifest_from_checkpoint,
 )
 
 
@@ -202,6 +210,61 @@ class CheckpointDatabaseTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(session_hit.payload["text"], "hello")
         self.assertEqual(job_hit.payload, {"clips": [1]})
+
+    async def test_render_evidence_checkpoint_round_trip_is_metadata_only(self):
+        frame = EvidenceFrame(
+            evidence_id="ev-" + "a" * 24,
+            clip_index=1,
+            timestamp_ms=100,
+            purpose=("opening_anchor",),
+            source_artifact="short-01.mp4",
+            width=320,
+            height=180,
+            encoded_bytes=100,
+            sha256="b" * 64,
+        )
+        clip = EvidenceClip(
+            clip_index=1,
+            source_artifact="short-01.mp4",
+            output_sha256="c" * 64,
+            duration_ms=1000,
+            frames=(frame,),
+            selected_reasons=("opening_anchor",),
+        )
+        manifest = RenderEvidenceManifest(
+            source_sha256="d" * 64,
+            render_execution_sha256="e" * 64,
+            plan_sha256="f" * 64,
+            effects_sha256="0" * 64,
+            candidate_fingerprint="1" * 64,
+            call_fingerprint="1" * 64,
+            limits=EvidenceLimits(),
+            clips=(clip,),
+            frame_count=1,
+            burst_count=0,
+            encoded_bytes=100,
+        )
+        fingerprint = checkpoint_fingerprint({
+            "stage": "render_evidence",
+            "candidate_fingerprint": manifest.candidate_fingerprint,
+        })
+        await self.checkpoints.save_job(
+            job_id=self.job_id,
+            stage="render_evidence",
+            contract_version="render_evidence.v1",
+            fingerprint=fingerprint,
+            payload=manifest.to_dict(),
+            metadata={"frame_count": 1, "encoded_bytes": 100},
+        )
+        hit = await self.checkpoints.load_job(
+            job_id=self.job_id,
+            stage="render_evidence",
+            fingerprint=fingerprint,
+        )
+        self.assertIsNotNone(hit)
+        restored = manifest_from_checkpoint(hit.payload)
+        self.assertEqual(restored.candidate_fingerprint, manifest.candidate_fingerprint)
+        self.assertNotIn("data_url", json.dumps(hit.payload))
 
     async def test_tampered_checkpoint_is_quarantined(self):
         fingerprint = checkpoint_fingerprint({"stage": "transcript", "v": 2})

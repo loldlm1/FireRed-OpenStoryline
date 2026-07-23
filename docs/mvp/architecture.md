@@ -61,14 +61,16 @@ isolated so upstream behavior can continue to be merged into this fork.
    explicitly permitted for that job, and FFmpeg renders the typed timeline
    operations and subtitles on CPU.
 9. Agentic renders remain unregistered candidates while deterministic QA writes
-   `render_qa.json`, `frame_quality_qa.json`, `creative_conformance.json`,
-   caption-footprint evidence, and `render_promotion.json`. Report mode records
-   objective blockers without changing completion behavior. Enforce mode uses
-   the configured completion policy: `strict` blocks any objective blocker,
-   while the independently enabled `baseline_guaranteed` policy publishes a
-   technically valid output with typed creative limitations and still deletes
-   candidates with technical blockers. Rhythm and semantic findings remain
-   advisory and do not predict retention or virality.
+   `render_qa.json`, `frame_quality_qa.json`, `render_evidence.json`,
+   `creative_conformance.json`, caption-footprint evidence, and
+   `render_promotion.json`. Rendered evidence uses bounded anchors and
+   event-focused bursts; it never sends every frame or persists frame bytes.
+   Report mode records objective blockers without changing completion behavior.
+   Enforce mode uses the configured completion policy: `strict` blocks any
+   objective blocker, while the independently enabled `baseline_guaranteed`
+   policy publishes a technically valid output with typed creative limitations
+   and still deletes candidates with technical blockers. Rhythm and semantic
+   findings remain advisory and do not predict retention or virality.
 10. PostgreSQL ingests sanitized JSON/SRT evidence, promotion decisions, public
    activity events, and deterministic FFprobe/subtitle checks without storing
    media or frame bytes.

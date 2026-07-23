@@ -296,53 +296,24 @@ def _scaled_dimensions(source_width: int, source_height: int, max_width: int, ma
     return width, height
 
 
-def sample_frames(
+def sample_frame_requests(
     source: str | Path,
+    requests: Sequence[FrameRequest],
     *,
-    scene_report: SceneBoundaryReport,
     source_width: int,
     source_height: int,
-    max_frames: int = 12,
     max_width: int = 512,
     max_height: int = 512,
     max_frame_bytes: int = 1_500_000,
     timeout_per_frame: float = 120.0,
-    clip_start_ms: int | None = None,
-    clip_end_ms: int | None = None,
     id_prefix: str = "",
-    focus_windows: Sequence[tuple[int, int]] = (),
-) -> FrameManifest:
+) -> tuple[SampledFrame, ...]:
+    """Extract a bounded, caller-selected set of frames into transient memory."""
     if not 16_384 <= max_frame_bytes <= 8 * 1024 * 1024:
         raise FrameSamplingError(
             "FRAME_BYTES_LIMIT_INVALID",
             "max_frame_bytes must be between 16384 and 8388608",
         )
-    if (clip_start_ms is None) != (clip_end_ms is None):
-        raise FrameSamplingError(
-            "FRAME_CLIP_INVALID",
-            "clip_start_ms and clip_end_ms must be supplied together",
-        )
-    if focus_windows and clip_start_ms is None:
-        raise FrameSamplingError(
-            "FRAME_FOCUS_INVALID",
-            "focus windows require selected clip bounds",
-        )
-    requests = (
-        build_frame_requests(
-            scene_report.scenes,
-            source_duration_ms=scene_report.source_duration_ms,
-            max_frames=max_frames,
-        )
-        if clip_start_ms is None
-        else build_clip_frame_requests(
-            scene_report.scenes,
-            source_duration_ms=scene_report.source_duration_ms,
-            clip_start_ms=int(clip_start_ms),
-            clip_end_ms=int(clip_end_ms),
-            max_frames=max_frames,
-            focus_windows=focus_windows,
-        )
-    )
     clean_prefix = str(id_prefix or "")
     if clean_prefix and not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]*-", clean_prefix):
         raise FrameSamplingError("FRAME_ID_PREFIX_INVALID", "frame ID prefix is invalid")
@@ -350,6 +321,8 @@ def sample_frames(
     sampled: list[SampledFrame] = []
     source_path = str(Path(source).resolve())
     for index, request in enumerate(requests, start=1):
+        if int(request.timestamp_ms) < 0:
+            raise FrameSamplingError("FRAME_TIMESTAMP_INVALID", "frame timestamp cannot be negative")
         command = [
             "ffmpeg",
             "-v",
@@ -396,14 +369,70 @@ def sample_frames(
             )
         sampled.append(SampledFrame(
             id=f"{clean_prefix}frame-{index:03d}",
-            timestamp_ms=request.timestamp_ms,
-            scene_id=request.scene_id,
+            timestamp_ms=int(request.timestamp_ms),
+            scene_id=str(request.scene_id),
             width=width,
             height=height,
-            extraction_reason=request.reason,
+            extraction_reason=str(request.reason),
             encoded_bytes=len(result.stdout),
             data_url="data:image/jpeg;base64," + base64.b64encode(result.stdout).decode("ascii"),
         ))
+    return tuple(sampled)
+
+
+def sample_frames(
+    source: str | Path,
+    *,
+    scene_report: SceneBoundaryReport,
+    source_width: int,
+    source_height: int,
+    max_frames: int = 12,
+    max_width: int = 512,
+    max_height: int = 512,
+    max_frame_bytes: int = 1_500_000,
+    timeout_per_frame: float = 120.0,
+    clip_start_ms: int | None = None,
+    clip_end_ms: int | None = None,
+    id_prefix: str = "",
+    focus_windows: Sequence[tuple[int, int]] = (),
+) -> FrameManifest:
+    if (clip_start_ms is None) != (clip_end_ms is None):
+        raise FrameSamplingError(
+            "FRAME_CLIP_INVALID",
+            "clip_start_ms and clip_end_ms must be supplied together",
+        )
+    if focus_windows and clip_start_ms is None:
+        raise FrameSamplingError(
+            "FRAME_FOCUS_INVALID",
+            "focus windows require selected clip bounds",
+        )
+    requests = (
+        build_frame_requests(
+            scene_report.scenes,
+            source_duration_ms=scene_report.source_duration_ms,
+            max_frames=max_frames,
+        )
+        if clip_start_ms is None
+        else build_clip_frame_requests(
+            scene_report.scenes,
+            source_duration_ms=scene_report.source_duration_ms,
+            clip_start_ms=int(clip_start_ms),
+            clip_end_ms=int(clip_end_ms),
+            max_frames=max_frames,
+            focus_windows=focus_windows,
+        )
+    )
+    sampled = sample_frame_requests(
+        source,
+        requests,
+        source_width=source_width,
+        source_height=source_height,
+        max_width=max_width,
+        max_height=max_height,
+        max_frame_bytes=max_frame_bytes,
+        timeout_per_frame=timeout_per_frame,
+        id_prefix=id_prefix,
+    )
     return FrameManifest(
         source_duration_ms=scene_report.source_duration_ms,
         source_width=source_width,

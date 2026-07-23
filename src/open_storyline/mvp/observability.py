@@ -21,6 +21,7 @@ SAFE_CODE = re.compile(r"^[A-Z0-9_]{1,120}$")
 SAFE_VERSION = re.compile(r"^[A-Za-z0-9._-]{1,80}$")
 QUALITY_FEEDBACK_VERSION = "quality_feedback.v1"
 REPAIR_OBSERVABILITY_VERSION = "repair_observability.v1"
+RENDER_EVIDENCE_OBSERVABILITY_VERSION = "render_evidence_observability.v1"
 REPAIR_EVIDENCE_TYPES = frozenset(
     evidence_type
     for definition in DEFECT_REGISTRY.values()
@@ -337,6 +338,50 @@ def compact_repair_observability(report: dict[str, Any]) -> dict[str, Any]:
         "evidence_count": _integer(source.get("evidence_count"), maximum=64),
         "would_call": source.get("would_call") is True,
         "call_allowed": source.get("call_allowed") is True,
+    }
+
+
+def compact_render_evidence_observability(manifest: dict[str, Any]) -> dict[str, Any]:
+    """Keep only bounded evidence-selection metadata in logs and audit events."""
+    source = _mapping(manifest)
+    clips = []
+    reasons: set[str] = set()
+    for clip in _records(source.get("clips"), limit=50):
+        selected = [
+            value
+            for value in clip.get("selected_reasons") or []
+            if isinstance(value, str) and SAFE_VERSION.fullmatch(value)
+        ][:32]
+        reasons.update(selected)
+        frames = _records(clip.get("frames"), limit=32)
+        bursts = _records(clip.get("bursts"), limit=16)
+        clips.append({
+            "clip_index": _integer(clip.get("clip_index"), minimum=1, maximum=50),
+            "frame_count": len(frames),
+            "burst_count": len(bursts),
+            "encoded_bytes": sum(
+                _integer(frame.get("encoded_bytes"), maximum=8 * 1024 * 1024)
+                for frame in frames
+            ),
+            "selected_reasons": selected,
+        })
+    return {
+        "version": RENDER_EVIDENCE_OBSERVABILITY_VERSION,
+        "manifest_version": (
+            "render_evidence.v1" if source.get("version") == "render_evidence.v1" else ""
+        ),
+        "sampler_version": _token(source.get("sampler_version"), limit=64),
+        "candidate_fingerprint": (
+            str(source.get("candidate_fingerprint") or "")
+            if re.fullmatch(r"[a-f0-9]{64}", str(source.get("candidate_fingerprint") or ""))
+            else ""
+        ),
+        "checkpoint_reused": source.get("checkpoint_reused") is True,
+        "frame_count": _integer(source.get("frame_count"), maximum=128),
+        "burst_count": _integer(source.get("burst_count"), maximum=800),
+        "encoded_bytes": _integer(source.get("encoded_bytes"), maximum=64 * 1024 * 1024),
+        "selected_reasons": sorted(reasons)[:32],
+        "clips": clips,
     }
 
 

@@ -1,7 +1,7 @@
 # Plan: Agentic-Only Render Review and Repair Upgrade
 
 **Generated**: 2026-07-22
-**Status**: In progress; Sprints 1-3 complete
+**Status**: In progress; Sprints 1-4 complete
 **Estimated Complexity**: High
 
 ## Overview
@@ -541,13 +541,13 @@ on it until Sprint 5 report mode.
 
 ### Sprint 4 Gate
 
-- [ ] Evidence manifests are versioned, bounded, deterministic, and private.
-- [ ] Adaptive sampling covers required events and does not become exhaustive
+- [x] Evidence manifests are versioned, bounded, deterministic, and private.
+- [x] Adaptive sampling covers required events and does not become exhaustive
   frame-by-frame review.
-- [ ] Checkpoint reuse and invalidation are tested.
-- [ ] Exactly one Sprint 4 commit is created with the proposed message.
-- [ ] The rollback point is recorded.
-- [ ] Sprint 5 has not started before this gate completes.
+- [x] Checkpoint reuse and invalidation are tested.
+- [x] Exactly one Sprint 4 commit is created with the proposed message.
+- [x] The rollback point is recorded at the Sprint 4 commit.
+- [x] Sprint 5 has not started before this gate completes.
 
 ## Sprint 5: Add The LLM Render Critic In Shadow/Report
 

@@ -99,6 +99,14 @@ class AgenticEditingConfig(ConfigBaseModel):
     delivery_policy: Literal["qa_enforced", "technical_pass_guaranteed"] = "qa_enforced"
     semantic_qa_enabled: bool = False
     semantic_qa_max_frames: int = Field(default=4, ge=1, le=8)
+    render_evidence_max_frames_per_clip: int = Field(default=12, ge=3, le=32)
+    render_evidence_max_frames_total: int = Field(default=64, ge=3, le=128)
+    render_evidence_max_bursts_per_clip: int = Field(default=8, ge=0, le=16)
+    render_evidence_max_frame_bytes: int = Field(default=1_500_000, ge=16_384, le=8_388_608)
+    render_evidence_max_total_bytes: int = Field(default=12_582_912, ge=16_384, le=67_108_864)
+    render_evidence_max_width: int = Field(default=512, ge=128, le=2048)
+    render_evidence_max_height: int = Field(default=512, ge=128, le=2048)
+    render_evidence_timeout_seconds: float = Field(default=120.0, gt=0, le=300)
     scene_threshold: float = Field(default=0.35, gt=0, lt=1)
     min_scene_duration_ms: int = Field(default=1000, ge=100, le=30_000)
     max_scenes: int = Field(default=64, ge=1, le=256)

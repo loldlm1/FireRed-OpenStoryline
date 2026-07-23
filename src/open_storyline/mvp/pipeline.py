@@ -53,6 +53,15 @@ from open_storyline.mvp.frame_quality import (
     FRAME_QUALITY_VERSION,
     build_frame_quality_report,
 )
+from open_storyline.mvp.render_evidence import (
+    RenderEvidenceError,
+    RenderedCandidate,
+    build_render_evidence,
+    derive_evidence_events,
+    evidence_fingerprint,
+    evidence_limits,
+    manifest_from_checkpoint,
+)
 from open_storyline.mvp.fallbacks import (
     FallbackEntry,
     FallbackDirective,
@@ -81,7 +90,11 @@ from open_storyline.mvp.creative_qa import (
 )
 from open_storyline.mvp.jobs import JobStore
 from open_storyline.mvp.ninerouter import NineRouterClient, NineRouterError
-from open_storyline.mvp.observability import compact_repair_observability, emit_event
+from open_storyline.mvp.observability import (
+    compact_render_evidence_observability,
+    compact_repair_observability,
+    emit_event,
+)
 from open_storyline.mvp.outcomes import build_completed_outcome_report
 from open_storyline.mvp.render import (
     AgenticShortRenderer,
@@ -3911,6 +3924,139 @@ class MVPJobProcessor:
                 frame_quality_path,
                 kind="frame_quality_qa",
             )
+            evidence_manifest: dict[str, Any] = {
+                "enabled": True,
+                "status": "unavailable",
+                "checkpoint_reused": False,
+                "frame_count": 0,
+                "burst_count": 0,
+            }
+            try:
+                evidence_config = evidence_limits(self.config.agentic_editing)
+                plan_payload = edit_plan.to_dict()
+                effects_payload = (
+                    effects_plan.to_dict() if effects_plan is not None else {"effects": []}
+                )
+                execution_clips = {
+                    int(item.get("clip_index") or 0): item
+                    for item in agentic_result.execution.get("clips") or []
+                }
+                plan_clips = {
+                    int(item.get("clip_index") or 0): item
+                    for item in plan_payload.get("clips") or []
+                }
+                quality_clips = {
+                    int(item.get("clip_index") or 0): item
+                    for item in frame_quality_report.get("clips") or []
+                }
+                evidence_candidates = []
+                for qa_input in qa_inputs:
+                    clip_index = int(qa_input.clip_index)
+                    evidence_candidates.append(RenderedCandidate(
+                        clip_index=clip_index,
+                        video_path=Path(qa_input.video_path),
+                        duration_ms=int(qa_input.expected_duration_ms),
+                        source_artifact=Path(qa_input.video_path).name,
+                        source_width=render_settings.width,
+                        source_height=render_settings.height,
+                        events=derive_evidence_events(
+                            clip_plan=plan_clips.get(clip_index),
+                            render_clip=execution_clips.get(clip_index),
+                            quality_clip=quality_clips.get(clip_index),
+                            duration_ms=int(qa_input.expected_duration_ms),
+                            has_subtitles=qa_input.subtitle_path is not None,
+                            effect_count=len(effects_payload.get("effects") or []),
+                        ),
+                    ))
+                evidence_fingerprint_value = evidence_fingerprint(
+                    evidence_candidates,
+                    source_sha256=source_hash,
+                    render_execution=agentic_result.execution,
+                    plan=plan_payload,
+                    effects=effects_payload,
+                    limits=evidence_config,
+                )
+                evidence_hit = await load_job_checkpoint(
+                    job_id=job_id,
+                    stage="render_evidence",
+                    fingerprint=evidence_fingerprint_value,
+                )
+                if evidence_hit is not None:
+                    evidence = manifest_from_checkpoint(evidence_hit.payload).model_copy(
+                        update={"checkpoint_reused": True}
+                    )
+                    track_checkpoint("render_evidence", reused=True)
+                else:
+                    bundle = await asyncio.to_thread(
+                        build_render_evidence,
+                        evidence_candidates,
+                        source_sha256=source_hash,
+                        render_execution=agentic_result.execution,
+                        plan=plan_payload,
+                        effects=effects_payload,
+                        limits=evidence_config,
+                    )
+                    evidence = bundle.manifest
+                    track_checkpoint("render_evidence", reused=False)
+                    await save_job_checkpoint(
+                        job_id=job_id,
+                        stage="render_evidence",
+                        contract_version="render_evidence.v1",
+                        fingerprint=evidence_fingerprint_value,
+                        payload=evidence.to_dict(),
+                        metadata={
+                            "frame_count": evidence.frame_count,
+                            "burst_count": evidence.burst_count,
+                            "encoded_bytes": evidence.encoded_bytes,
+                        },
+                    )
+                evidence_path = output_dir / names.render_evidence
+                evidence_path.write_text(
+                    json.dumps(evidence.to_dict(), ensure_ascii=False, indent=2),
+                    encoding="utf-8",
+                )
+                await store.register_artifact(
+                    job_id,
+                    evidence_path,
+                    kind="render_evidence",
+                )
+                evidence_manifest = {
+                    "enabled": True,
+                    "status": "available",
+                    "artifact": names.render_evidence,
+                    "candidate_fingerprint": evidence.candidate_fingerprint,
+                    "checkpoint_reused": evidence.checkpoint_reused,
+                    "frame_count": evidence.frame_count,
+                    "burst_count": evidence.burst_count,
+                    "encoded_bytes": evidence.encoded_bytes,
+                    "selected_reasons": sorted({
+                        reason
+                        for clip in evidence.clips
+                        for reason in clip.selected_reasons
+                    }),
+                }
+                emit_event(
+                    "render_evidence_ready",
+                    job_id=job_id,
+                    stage="post_render_qa",
+                    **compact_render_evidence_observability(evidence.to_dict()),
+                )
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:
+                error_code = str(getattr(exc, "code", "RENDER_EVIDENCE_UNAVAILABLE"))[:80]
+                evidence_manifest["error_code"] = error_code
+                await activity.emit_safely(
+                    job_id,
+                    stage="post_render_qa",
+                    category="qa",
+                    status="warning",
+                    message_key="activity.qa.unavailable",
+                    progress=STAGES["post_render_qa"].progress,
+                    error_code=error_code,
+                    retryable=retryable_error(error_code),
+                )
+            agentic_manifest["render_evidence"] = evidence_manifest
             caption_footprints = []
             for item in rendered:
                 if item.caption_footprint_path is None:

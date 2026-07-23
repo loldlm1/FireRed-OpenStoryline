@@ -160,8 +160,11 @@ deterministic structural reviews, and optional agent/human reviews. Video,
 audio, frame, thumbnail, and ZIP bytes never enter PostgreSQL.
 
 Agentic render candidates also produce bounded `frame_quality_qa.json`,
-`render_promotion.json`, `repair_report.json`, and `outcome_report.json`
-documents. Frame quality records cropdetect active-area
+`render_evidence.json`, `render_promotion.json`, `repair_report.json`, and
+`outcome_report.json` documents. Render evidence stores only candidate hashes,
+timestamps, selection reasons, bounded dimensions, frame hashes, and checkpoint
+fingerprints; JPEG data URLs remain transient in memory. Frame quality records
+cropdetect active-area
 ratios, decoded frame counts, bounded blur/blockiness signal summaries, and
 caption-masked aligned SSIM/PSNR samples without retaining sampled frames or
 private paths. `OPENSTORYLINE_RENDER_PROMOTION_MODE=report` preserves completion
