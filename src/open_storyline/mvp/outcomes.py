@@ -511,6 +511,53 @@ def _render_critic_summary(value: Any) -> dict[str, Any]:
     }
 
 
+def _post_render_repair_summary(value: Any) -> dict[str, Any]:
+    source = value if isinstance(value, dict) else {}
+    status = str(source.get("status") or "disabled")[:32]
+    if status not in {
+        "disabled",
+        "not_needed",
+        "attempted",
+        "accepted",
+        "rejected",
+        "unavailable",
+        "no_change",
+        "deferred_effect_review",
+    }:
+        status = "unavailable"
+    improvement = source.get("improvement")
+    compact_improvement = {}
+    if isinstance(improvement, dict):
+        compact_improvement = {
+            "demonstrated": improvement.get("demonstrated") is True,
+            "original_finding_count": _metric_int(
+                improvement.get("original_finding_count"),
+            ),
+            "repaired_finding_count": _metric_int(
+                improvement.get("repaired_finding_count"),
+            ),
+            "new_blocker_finding_ids": [
+                str(item)[:80]
+                for item in improvement.get("new_blocker_finding_ids") or ()
+            ][:16],
+        }
+    return {
+        "version": str(source.get("version") or "")[:80],
+        "mode": str(source.get("mode") or "off")[:20],
+        "status": status,
+        "selected_candidate": str(source.get("selected_candidate") or "original")[:20],
+        "provider_calls": _metric_int(source.get("provider_calls"), 2),
+        "rounds": _metric_int(source.get("rounds"), 2),
+        "checkpoint_reused": source.get("checkpoint_reused") is True,
+        "affected_clip_indexes": [
+            _metric_int(item, 50)
+            for item in source.get("affected_clip_indexes") or ()
+        ][:8],
+        "error_code": str(source.get("error_code") or "")[:80],
+        "improvement": compact_improvement,
+    }
+
+
 def repair_defect_lifecycle(repair: dict[str, Any]) -> list[dict[str, Any]]:
     records: dict[str, dict[str, Any]] = {}
 
@@ -614,6 +661,7 @@ def build_completed_outcome_report(
     rollout_attribution: dict[str, Any] | None = None,
     semantic_review: dict[str, Any] | None = None,
     render_critic: dict[str, Any] | None = None,
+    post_render_repair: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     fallbacks = tuple(fallback_entries)
     promotion = promotion_report if isinstance(promotion_report, dict) else {}
@@ -720,6 +768,7 @@ def build_completed_outcome_report(
         },
         "semantic_qa": _semantic_qa_summary(semantic_review),
         "creative_review": _render_critic_summary(render_critic),
+        "post_render_repair": _post_render_repair_summary(post_render_repair),
         "delivery": {
             "policy": delivery_policy,
             "decision": delivery_decision,

@@ -24,6 +24,7 @@ The validator makes no provider or deployment call. `setup`, `deploy`, and
 | Strict-schema capability probe | Provider operations | Unverified | Run `scripts/qa_ninerouter.py --strict-models --live-inference --strict-schema --skip-ssh`, then set `OPENSTORYLINE_STRUCTURED_OUTPUT_CAPABILITY_VERIFIED=true` | Set the verification flag to `false` before returning to permissive mode | Responses-based acceptance and extra-field rejection both pass for the configured model | Schema unsupported, mismatch, refusal, incomplete response, or provider regression |
 | Strict boundaries | AI application owner | `json_object`, empty list | Set `json_schema` and add the next complete prefix described below | Remove boundaries in reverse order, then restore `json_object` | Strict validity and local semantic validity remain healthy | Higher schema failures, latency, cost, or lower playable output |
 | Post-render critic report | AI application owner | `off` | After `render_critic.v1` is in the strict prefix, set `OPENSTORYLINE_POST_RENDER_REVIEW_MODE=shadow` or `report` | Set it to `off`; deterministic QA and promotion remain authoritative | Findings reference supplied evidence only, calls are fingerprinted, and no plan/output mutation occurs | Provider/schema failures, private evidence, duplicate calls, or creative findings treated as technical blockers |
+| Post-render repair enforce | AI application owner | `off` | After `post_render_repair.v1`, strict deterministic QA, and enforced pre-render repair are active, set post-render review to `enforce` for a private canary | Return post-render review to `report` or `off`; the original validated candidate remains eligible | One primary repair at most, one new-objective-defect contingency at most, localized rerendering, and demonstrated critic improvement with no new deterministic blocker | Third semantic request, invalid typed patch, effect-bearing repair before its boundary, candidate regression, private evidence, or missing rollback candidate |
 | Repair report | AI application owner | `off` | After all strict boundaries, set agentic mode to `shadow` and repair mode to `report` | Set repair mode to `off` | Eligible dispositions match enforce mode while semantic repair calls remain zero | Unexpected eligibility, private evidence, or unbounded request/report |
 | Repair enforce | AI application owner | `off` | Set agentic mode to `render`, repair mode to `enforce`, baseline fallbacks to `true`, and retry UX to `true` | Leave render mode first, then set repair mode to `off` or use an explicit shadow/off profile | At most one visual call and at most two plan batches (`primary` plus new-defect `contingency`); no FFMPEGA repair calls; no invariant violations | Repair failures, third-call attempt, new defects, checkpoint mismatch, latency, cost, or playable-rate threshold |
 | Technical-pass delivery | QA/release owner | `qa_enforced` | Keep creative QA strict, set render promotion to `enforce`, then set delivery to `technical_pass_guaranteed` | Restore `qa_enforced` | Creative-only blockers publish truthfully; technical and mixed blockers remain withheld | Any technical blocker becomes downloadable or strict evidence is rewritten |
@@ -39,9 +40,11 @@ and the two FFMPEGA schemas move together.
 3. Add `edit_plan.v1,edit_plan_repair.v1`
 4. Add `semantic_qa.v1`
 5. Add `render_critic.v1`; then set post-render review to `shadow` or `report`.
-6. Add `ffmpega_agentic_finishing.v1,ffmpega_deterministic_effects.v1`
-7. Set repair to `report` while agentic editing remains `shadow`.
-8. Switch the production profile atomically: agentic `render`, repair
+6. Add `post_render_repair.v1`; private canaries may then set post-render review
+   to `enforce` while effects remain disabled.
+7. Add `ffmpega_agentic_finishing.v1,ffmpega_deterministic_effects.v1`.
+8. Set repair to `report` while agentic editing remains `shadow`.
+9. Switch the production profile atomically: agentic `render`, repair
    `enforce`, baseline fallbacks `true`, promotion `enforce`, delivery
    `technical_pass_guaranteed`, and retry/details UI `true`.
 
@@ -54,7 +57,7 @@ Example fully staged canary values:
 ```bash
 OPENSTORYLINE_STRUCTURED_OUTPUT_MODE=json_schema
 OPENSTORYLINE_STRUCTURED_OUTPUT_CAPABILITY_VERIFIED=true
-OPENSTORYLINE_STRUCTURED_OUTPUT_BOUNDARIES=shorts_selection.v1,visual_understanding.v1,edit_plan.v1,edit_plan_repair.v1,semantic_qa.v1,render_critic.v1,ffmpega_agentic_finishing.v1,ffmpega_deterministic_effects.v1
+OPENSTORYLINE_STRUCTURED_OUTPUT_BOUNDARIES=shorts_selection.v1,visual_understanding.v1,edit_plan.v1,edit_plan_repair.v1,semantic_qa.v1,render_critic.v1,post_render_repair.v1,ffmpega_agentic_finishing.v1,ffmpega_deterministic_effects.v1
 OPENSTORYLINE_POST_RENDER_REVIEW_MODE=report
 OPENSTORYLINE_AGENTIC_EDITING_MODE=render
 OPENSTORYLINE_LLM_DEFECT_REPAIR_MODE=enforce

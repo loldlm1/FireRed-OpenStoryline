@@ -484,7 +484,8 @@ class KamalConfigTests(unittest.TestCase):
             OPENSTORYLINE_STRUCTURED_OUTPUT_BOUNDARIES=(
                 "shorts_selection.v1,visual_understanding.v1,edit_plan.v1,"
                 "edit_plan_repair.v1,semantic_qa.v1,render_critic.v1,"
-                "ffmpega_agentic_finishing.v1,ffmpega_deterministic_effects.v1"
+                "post_render_repair.v1,ffmpega_agentic_finishing.v1,"
+                "ffmpega_deterministic_effects.v1"
             ),
             OPENSTORYLINE_LLM_DEFECT_REPAIR_MODE="enforce",
             OPENSTORYLINE_AGENTIC_EDITING_MODE="render",
@@ -507,7 +508,8 @@ class KamalConfigTests(unittest.TestCase):
             "OPENSTORYLINE_STRUCTURED_OUTPUT_BOUNDARIES": (
                 "shorts_selection.v1,visual_understanding.v1,edit_plan.v1,"
                 "edit_plan_repair.v1,semantic_qa.v1,render_critic.v1,"
-                "ffmpega_agentic_finishing.v1,ffmpega_deterministic_effects.v1"
+                "post_render_repair.v1,ffmpega_agentic_finishing.v1,"
+                "ffmpega_deterministic_effects.v1"
             ),
             "OPENSTORYLINE_AGENTIC_EDITING_MODE": "render",
         }
@@ -536,14 +538,15 @@ class KamalConfigTests(unittest.TestCase):
             OPENSTORYLINE_STRUCTURED_OUTPUT_BOUNDARIES=(
                 "shorts_selection.v1,visual_understanding.v1,edit_plan.v1,"
                 "edit_plan_repair.v1,semantic_qa.v1,render_critic.v1,"
-                "ffmpega_agentic_finishing.v1,ffmpega_deterministic_effects.v1"
+                "post_render_repair.v1,ffmpega_agentic_finishing.v1,"
+                "ffmpega_deterministic_effects.v1"
             ),
             OPENSTORYLINE_LLM_DEFECT_REPAIR_MODE="report",
             OPENSTORYLINE_AGENTIC_EDITING_MODE="shadow",
         )
         self.assertEqual(result.returncode, 0, result.stderr)
 
-    def test_post_render_review_requires_strict_critic_boundary_and_blocks_enforce(self):
+    def test_post_render_review_requires_strict_critic_and_repair_boundaries(self):
         incomplete = validate_rollout_flags(
             OPENSTORYLINE_STRUCTURED_OUTPUT_MODE="json_schema",
             OPENSTORYLINE_STRUCTURED_OUTPUT_CAPABILITY_VERIFIED="true",
@@ -563,7 +566,8 @@ class KamalConfigTests(unittest.TestCase):
             "OPENSTORYLINE_STRUCTURED_OUTPUT_BOUNDARIES": (
                 "shorts_selection.v1,visual_understanding.v1,edit_plan.v1,"
                 "edit_plan_repair.v1,semantic_qa.v1,render_critic.v1,"
-                "ffmpega_agentic_finishing.v1,ffmpega_deterministic_effects.v1"
+                "post_render_repair.v1,ffmpega_agentic_finishing.v1,"
+                "ffmpega_deterministic_effects.v1"
             ),
             "OPENSTORYLINE_LLM_DEFECT_REPAIR_MODE": "enforce",
             "OPENSTORYLINE_AGENTIC_EDITING_MODE": "render",
@@ -581,8 +585,7 @@ class KamalConfigTests(unittest.TestCase):
             **complete,
             OPENSTORYLINE_POST_RENDER_REVIEW_MODE="enforce",
         )
-        self.assertNotEqual(enforce.returncode, 0)
-        self.assertIn("unavailable before bounded repair rollout", enforce.stderr)
+        self.assertEqual(enforce.returncode, 0, enforce.stderr)
 
     def test_plan_repair_call_cap_is_hard_coded_not_operator_tunable(self):
         repair = (ROOT / "src" / "open_storyline" / "mvp" / "repair.py").read_text(

@@ -15,6 +15,7 @@ Registered boundaries are:
 - `edit_plan_repair.v1`
 - `semantic_qa.v1`
 - `render_critic.v1`
+- `post_render_repair.v1`
 - `ffmpega_agentic_finishing.v1`
 - `ffmpega_deterministic_effects.v1`
 
@@ -46,6 +47,15 @@ revalidation. Advisory-only,
 post-render, provider, media, security, unknown, and FFMPEGA findings cannot
 trigger these calls. Returning the setting to `off` is the repair rollback and
 does not disable the defect registry or strict schema transport.
+
+`OPENSTORYLINE_POST_RENDER_REVIEW_MODE=enforce` additionally enables the
+strict `post_render_repair.v1` boundary after a rendered-evidence critic
+finding. The model can return only typed replacement plans for affected clips.
+Deterministic code preserves source bounds and protected intent, rerenders only
+those clips, repeats technical QA, and promotes the candidate only when the
+critic score improves without a new authoritative blocker. One primary request
+is allowed; one contingency request is allowed only for a new objective defect.
+Effect-bearing repairs remain disabled until the effect-aware rollout stage.
 
 The deploy wrapper runs Responses-based strict acceptance and extra-field
 rejection probes whenever `json_schema` mode is selected. A failed probe blocks

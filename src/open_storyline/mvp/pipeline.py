@@ -1,11 +1,12 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Any
+from typing import Any, Sequence
 import asyncio
 from hashlib import sha256
 import json
 import re
+import shutil
 
 from open_storyline.mvp.activity import ActivityService, STAGES, retryable_error
 from open_storyline.mvp.assets import (
@@ -102,11 +103,23 @@ from open_storyline.mvp.observability import (
     emit_event,
 )
 from open_storyline.mvp.outcomes import build_completed_outcome_report
+from open_storyline.mvp.post_render_repair import (
+    PostRenderRepairError,
+    PostRenderRepairState,
+    compare_critic_improvement,
+    eligible_render_findings,
+    objective_findings_for_contingency,
+    post_render_repair_fingerprint,
+    post_render_repair_from_checkpoint,
+    request_post_render_repair,
+)
 from open_storyline.mvp.render import (
+    AgenticRenderResult,
     AgenticShortRenderer,
     CPUShortRenderer,
     RENDER_QUALITY_PROFILE_VERSION,
     RenderError,
+    RenderedShort,
     extract_frame_data_urls,
     probe_media,
     render_settings_from_config,
@@ -116,6 +129,7 @@ from open_storyline.mvp.prompts import (
     EDIT_PLAN_SYSTEM_PROMPT,
     REPAIR_SYSTEM_PROMPT,
     REPAIR_SYSTEM_PROMPT_VERSION,
+    POST_RENDER_REPAIR_SYSTEM_PROMPT,
     RENDER_CRITIC_SYSTEM_PROMPT,
     VISUAL_UNDERSTANDING_SYSTEM_PROMPT,
 )
@@ -173,6 +187,7 @@ from open_storyline.mvp.visual_understanding import (
 )
 from open_storyline.mvp.structured_outputs import (
     EDIT_PLAN_REPAIR_SCHEMA,
+    POST_RENDER_REPAIR_SCHEMA,
     VISUAL_UNDERSTANDING_SCHEMA,
     structured_output,
 )
@@ -194,6 +209,192 @@ GLOBAL_ANALYSIS_CHECKPOINT_VERSION = "global_analysis_checkpoint.v1"
 CLIP_ANALYSIS_CHECKPOINT_VERSION = "clip_analysis_checkpoint.v1"
 VISUAL_REPAIR_CHECKPOINT_VERSION = "visual_repair_checkpoint.v1"
 PLAN_REPAIR_CHECKPOINT_VERSION = "plan_repair_checkpoint.v2"
+POST_RENDER_REPAIR_CHECKPOINT_VERSION = "post_render_repair_checkpoint.v1"
+
+
+def _merge_agentic_render_results(
+    original: AgenticRenderResult,
+    repaired: AgenticRenderResult,
+    *,
+    affected_clip_indexes: Sequence[int],
+) -> AgenticRenderResult:
+    affected = set(int(index) for index in affected_clip_indexes)
+    original_clips = list(original.execution.get("clips") or [])
+    repaired_clips = list(repaired.execution.get("clips") or [])
+    repaired_execution = {
+        int(item.get("clip_index") or 0): item for item in repaired_clips
+    }
+    repaired_rendered = {
+        int(execution.get("clip_index") or 0): rendered
+        for execution, rendered in zip(repaired_clips, repaired.rendered)
+    }
+    if set(repaired_execution) != affected or set(repaired_rendered) != affected:
+        raise RenderError(
+            "AGENTIC_RENDER_CLIP_MISMATCH",
+            "localized repair did not render exactly the affected clips",
+        )
+    original_rendered = {
+        int(execution.get("clip_index") or 0): rendered
+        for execution, rendered in zip(original_clips, original.rendered)
+    }
+    merged_clips = [
+        repaired_execution.get(int(item.get("clip_index") or 0), item)
+        for item in original_clips
+    ]
+    merged_rendered = tuple(
+        repaired_rendered.get(index, original_rendered[index])
+        for index in [int(item.get("clip_index") or 0) for item in original_clips]
+    )
+    execution = dict(original.execution)
+    execution["clips"] = merged_clips
+    execution["summary"] = {
+        "clips": len(merged_clips),
+        "encodes": int((original.execution.get("summary") or {}).get("encodes") or 0)
+        + int((repaired.execution.get("summary") or {}).get("encodes") or 0),
+        "fallbacks": sum(int(item.get("fallback_count") or 0) for item in merged_clips),
+        "post_render_repair_encodes": len(affected),
+    }
+    return AgenticRenderResult(rendered=merged_rendered, execution=execution)
+
+
+def _move_repaired_rendered_to_output(
+    original: AgenticRenderResult,
+    repaired: AgenticRenderResult,
+    *,
+    affected_clip_indexes: Sequence[int],
+) -> AgenticRenderResult:
+    affected = set(int(index) for index in affected_clip_indexes)
+    original_pairs = {
+        int(execution.get("clip_index") or 0): rendered
+        for execution, rendered in zip(
+            original.execution.get("clips") or (),
+            original.rendered,
+        )
+    }
+    repaired_pairs = list(zip(repaired.execution.get("clips") or (), repaired.rendered))
+    repaired_by_index = {
+        int(execution.get("clip_index") or 0): rendered
+        for execution, rendered in repaired_pairs
+    }
+    moved: list[RenderedShort] = []
+    moved_execution: list[dict[str, Any]] = []
+    seen: set[int] = set()
+
+    if set(repaired_by_index) & affected != affected:
+        raise RenderError(
+            "AGENTIC_RENDER_CLIP_MISMATCH",
+            "localized repair candidate is missing an affected clip",
+        )
+    for clip_index in affected:
+        destination = original_pairs.get(clip_index)
+        source = repaired_by_index.get(clip_index)
+        if destination is None or source is None:
+            raise RenderError(
+                "AGENTIC_RENDER_CLIP_MISMATCH",
+                "localized repair output is not aligned with the original candidate",
+            )
+        for source_path, destination_path in (
+            (source.video_path, destination.video_path),
+            (source.subtitle_path, destination.subtitle_path),
+            (source.subtitle_layout_path, destination.subtitle_layout_path),
+            (source.caption_footprint_path, destination.caption_footprint_path),
+        ):
+            if (source_path is None) != (destination_path is None):
+                raise RenderError(
+                    "AGENTIC_RENDER_CLIP_MISMATCH",
+                    "localized repair artifact set does not match the original candidate",
+                )
+            if source_path is not None and not source_path.is_file():
+                raise RenderError(
+                    "AGENTIC_VIDEO_RENDER_FAILED",
+                    "localized repair output is missing",
+                )
+
+    def replace_file(source: Path | None, destination: Path | None) -> Path | None:
+        if source is None or destination is None:
+            return destination
+        source.replace(destination)
+        return destination
+
+    for execution, rendered in repaired_pairs:
+        clip_index = int(execution.get("clip_index") or 0)
+        if clip_index not in affected:
+            continue
+        if clip_index not in original_pairs:
+            raise RenderError(
+                "AGENTIC_RENDER_CLIP_MISMATCH",
+                "localized repair output is not aligned with the original candidate",
+            )
+        seen.add(clip_index)
+        destination = original_pairs[clip_index]
+        moved.append(RenderedShort(
+            video_path=replace_file(rendered.video_path, destination.video_path),
+            subtitle_path=replace_file(rendered.subtitle_path, destination.subtitle_path),
+            clip=destination.clip,
+            subtitle_layout_path=replace_file(
+                rendered.subtitle_layout_path,
+                destination.subtitle_layout_path,
+            ),
+            caption_footprint_path=replace_file(
+                rendered.caption_footprint_path,
+                destination.caption_footprint_path,
+            ),
+            render_quality=rendered.render_quality,
+        ))
+        moved_execution.append(dict(execution))
+    if seen != affected:
+        raise RenderError(
+            "AGENTIC_RENDER_CLIP_MISMATCH",
+            "localized repair candidate is missing an affected clip",
+        )
+    moved_result = AgenticRenderResult(
+        rendered=tuple(moved),
+        execution={**repaired.execution, "clips": moved_execution},
+    )
+    return _merge_agentic_render_results(
+        original,
+        moved_result,
+        affected_clip_indexes=affected_clip_indexes,
+    )
+
+
+def _changed_clip_indexes(original: Any, candidate: Any) -> tuple[int, ...]:
+    original_by_index = {clip.clip_index: clip for clip in original.clips}
+    candidate_by_index = {clip.clip_index: clip for clip in candidate.clips}
+    return tuple(sorted(
+        index
+        for index, clip in original_by_index.items()
+        if candidate_by_index.get(index) != clip
+    ))
+
+
+def _qa_inputs_for_rendered(rendered: Sequence[RenderedShort]) -> list[QAInput]:
+    return [
+        QAInput(
+            clip_index=index,
+            video_path=item.video_path,
+            expected_duration_ms=item.clip.duration_ms,
+            subtitle_path=item.subtitle_path,
+        )
+        for index, item in enumerate(rendered, start=1)
+    ]
+
+
+def _caption_footprints(rendered: Sequence[RenderedShort]) -> list[dict[str, Any]]:
+    documents = []
+    for item in rendered:
+        if item.caption_footprint_path is None:
+            continue
+        try:
+            documents.append(json.loads(
+                item.caption_footprint_path.read_text(encoding="utf-8")
+            ))
+        except (OSError, json.JSONDecodeError):
+            documents.append({
+                "status": "blocked",
+                "summary": {"blocker_codes": ["CAPTION_FOOTPRINT_UNAVAILABLE"]},
+            })
+    return documents
 
 
 def _stt_result(payload: dict[str, Any]) -> STTResult:
@@ -3787,6 +3988,7 @@ class MVPJobProcessor:
         render_qa_report: dict[str, Any] | None = None
         creative_conformance_report: dict[str, Any] | None = None
         render_critic_report: dict[str, Any] | None = None
+        post_render_repair_report: dict[str, Any] | None = None
         semantic_review_report: dict[str, Any] = {
             "status": "disabled",
             "provider_calls": 0,
@@ -4078,6 +4280,7 @@ class MVPJobProcessor:
                 "finding_count": 0,
                 "checkpoint_reused": False,
             }
+            critic_mode = "off"
             try:
                 critic_mode = render_review_mode(self.config.agentic_editing)
                 critic_manifest["mode"] = critic_mode
@@ -4178,19 +4381,774 @@ class MVPJobProcessor:
                     )[:80],
                 })
             agentic_manifest["render_critic"] = critic_manifest
-            caption_footprints = []
-            for item in rendered:
-                if item.caption_footprint_path is None:
-                    continue
+            repair_manifest: dict[str, Any] = {
+                "mode": critic_mode,
+                "status": "disabled" if critic_mode != "enforce" else "not_needed",
+                "selected_candidate": "original",
+                "provider_calls": 0,
+                "rounds": 0,
+                "checkpoint_reused": False,
+            }
+            repair_records: list[dict[str, Any]] = []
+            repair_directories: list[Path] = []
+            original_agentic_result = agentic_result
+            original_edit_plan = edit_plan
+            original_critic_report = render_critic_report
+            original_caption_footprints = _caption_footprints(rendered)
+            original_candidate_gate = build_render_promotion_report(
+                mode="enforce",
+                policy=completion_policy(self.config.agentic_editing),
+                limited_output_enabled=limited_output_promotion_enabled(),
+                delivery=delivery_policy(self.config.agentic_editing),
+                frame_quality=frame_quality_report,
+                render_qa=render_qa_report,
+                creative_conformance=creative_conformance_report,
+                caption_footprints=original_caption_footprints,
+            )
+            original_blocker_codes = set(original_candidate_gate["blocker_codes"])
+            eligible_findings = (
+                eligible_render_findings(
+                    render_critic_report or {},
+                    supported_capabilities=REFRAME_RENDER_CAPABILITIES,
+                )
+                if critic_mode == "enforce"
+                else ()
+            )
+            effects_defer_repair = bool(
+                effects_plan is not None and effects_plan.effects
+            )
+
+            def validate_post_render_plan(
+                payload: dict[str, Any],
+                affected_clip_indexes: tuple[int, ...],
+                *,
+                base_plan: Any,
+            ) -> Any:
+                candidate = merge_repaired_edit_plan_response(
+                    payload,
+                    base_plan=base_plan,
+                    affected_clip_indexes=affected_clip_indexes,
+                    selected_clips=plan.clips,
+                    known_region_ids=(
+                        region.id for region in visual_understanding.regions
+                    ),
+                    known_track_ids=(
+                        track.id for track in visual_understanding.tracks
+                    ),
+                    known_evidence_ids_by_clip={
+                        int(clip["clip_index"]): clip["evidence_ids"]
+                        for clip in shorts_plan_artifact["clips"]
+                    },
+                    max_segments_per_clip=(
+                        self.config.agentic_editing.max_segments_per_clip
+                    ),
+                    max_overlays_per_clip=(
+                        self.config.agentic_editing.max_overlays_per_clip
+                    ),
+                    max_assets_per_clip=(
+                        self.config.agentic_editing.max_assets_per_clip
+                    ),
+                    max_generated_assets_per_clip=effective_generated_asset_cap,
+                    max_stock_assets_per_clip=effective_stock_asset_cap,
+                    asset_policy=effective_asset_policy,
+                    stock_policy=effective_stock_policy,
+                    renderer_capabilities=REFRAME_RENDER_CAPABILITIES,
+                    catalog_snapshot=catalog_snapshot,
+                    creative_intent=creative_intent,
+                )
+                candidate_preflight = build_preflight(
+                    candidate,
+                    available_capabilities=REFRAME_RENDER_CAPABILITIES,
+                    asset_policy=effective_asset_policy,
+                    stock_policy=effective_stock_policy,
+                    resolved_asset_ids=set(asset_result.paths),
+                    known_region_ids=(
+                        region.id for region in visual_understanding.regions
+                    ),
+                    known_track_ids=(
+                        track.id for track in visual_understanding.tracks
+                    ),
+                    known_evidence_ids_by_clip={
+                        int(clip["clip_index"]): clip["evidence_ids"]
+                        for clip in shorts_plan_artifact["clips"]
+                    },
+                    visual_coverage=visual_coverage,
+                    max_segments_per_clip=(
+                        self.config.agentic_editing.max_segments_per_clip
+                    ),
+                    max_overlays_per_clip=(
+                        self.config.agentic_editing.max_overlays_per_clip
+                    ),
+                    max_assets_per_clip=(
+                        self.config.agentic_editing.max_assets_per_clip
+                    ),
+                    visual_understanding=visual_understanding,
+                    source_width=media.width,
+                    source_height=media.height,
+                    output_width=self.config.mvp.render_width,
+                    output_height=self.config.mvp.render_height,
+                )
+                if candidate_preflight.blocking:
+                    raise PostRenderRepairError(
+                        "POST_RENDER_REPAIR_RESPONSE_INVALID",
+                        "post-render repair failed deterministic preflight",
+                    )
                 try:
-                    caption_footprints.append(json.loads(
-                        item.caption_footprint_path.read_text(encoding="utf-8")
-                    ))
-                except (OSError, json.JSONDecodeError):
-                    caption_footprints.append({
-                        "status": "blocked",
-                        "summary": {"blocker_codes": ["CAPTION_FOOTPRINT_UNAVAILABLE"]},
+                    dry_run_edit_plan_composition(
+                        candidate,
+                        visual=visual_understanding,
+                        source_media=media,
+                        output_width=self.config.mvp.render_width,
+                        output_height=self.config.mvp.render_height,
+                        hysteresis_ratio=(
+                            self.config.agentic_editing.crop_hysteresis_ratio
+                        ),
+                        smoothing_alpha=(
+                            self.config.agentic_editing.crop_smoothing_alpha
+                        ),
+                        max_crop_velocity_ratio_per_second=(
+                            self.config.agentic_editing.max_crop_velocity_ratio_per_second
+                        ),
+                    )
+                except CompositionError as exc:
+                    raise PostRenderRepairError(
+                        "POST_RENDER_REPAIR_RESPONSE_INVALID",
+                        "post-render repair failed composition validation",
+                    ) from exc
+                return candidate
+
+            if critic_mode == "enforce" and effects_defer_repair:
+                repair_manifest.update({
+                    "status": "deferred_effect_review",
+                    "error_code": "POST_RENDER_EFFECT_REPAIR_DEFERRED",
+                })
+            elif (
+                critic_mode == "enforce"
+                and eligible_findings
+                and evidence is not None
+                and evidence_config is not None
+                and render_critic_report is not None
+            ):
+                repair_state = PostRenderRepairState()
+                base_plan = edit_plan
+                base_result = agentic_result
+                round_findings = eligible_findings
+                contingency_codes: tuple[str, ...] = ()
+                accepted: dict[str, Any] | None = None
+                repair_manifest["status"] = "attempted"
+
+                for round_name in ("primary", "contingency"):
+                    if round_name == "contingency" and not contingency_codes:
+                        break
+                    repair_state.authorize(
+                        round_name,
+                        introduced_objective_codes=contingency_codes,
+                    )
+                    repair_fingerprint = post_render_repair_fingerprint(
+                        manifest=evidence,
+                        base_plan=base_plan,
+                        findings=round_findings,
+                        editing_prompt=state["prompt"],
+                        round_name=round_name,
+                        model=getattr(remote_client, "model", "unknown"),
+                        reasoning_effort=getattr(
+                            remote_client,
+                            "reasoning_effort",
+                            "unknown",
+                        ),
+                    )
+                    repair_stage = (
+                        "post_render_repair"
+                        if round_name == "primary"
+                        else "post_render_repair_contingency"
+                    )
+                    repair_hit = None
+                    try:
+                        repair_hit = await load_job_checkpoint(
+                            job_id=job_id,
+                            stage=repair_stage,
+                            fingerprint=repair_fingerprint,
+                        )
+                        if repair_hit is not None:
+                            proposal = post_render_repair_from_checkpoint(
+                                repair_hit.payload,
+                                expected_request_fingerprint=repair_fingerprint,
+                                base_plan=base_plan,
+                            )
+                            track_checkpoint(repair_stage, reused=True)
+                        else:
+                            if evidence_bundle is None:
+                                evidence_bundle = await asyncio.to_thread(
+                                    build_render_evidence,
+                                    evidence_candidates,
+                                    source_sha256=source_hash,
+                                    render_execution=agentic_result.execution,
+                                    plan=plan_payload,
+                                    effects=effects_payload,
+                                    limits=evidence_config,
+                                    checkpoint_reused=True,
+                                )
+                            proposal = await request_post_render_repair(
+                                manifest=evidence,
+                                image_data_urls=evidence_bundle.image_data_urls,
+                                base_plan=base_plan,
+                                findings=round_findings,
+                                editing_prompt=state["prompt"],
+                                round_name=round_name,
+                                client=remote_client,
+                                plan_validator=lambda payload, indexes, base=base_plan: (
+                                    validate_post_render_plan(
+                                        payload,
+                                        indexes,
+                                        base_plan=base,
+                                    )
+                                ),
+                            )
+                            track_checkpoint(repair_stage, reused=False)
+                            await save_job_checkpoint(
+                                job_id=job_id,
+                                stage=repair_stage,
+                                contract_version=(
+                                    POST_RENDER_REPAIR_CHECKPOINT_VERSION
+                                ),
+                                fingerprint=repair_fingerprint,
+                                payload=proposal.to_checkpoint_payload(),
+                                metadata={
+                                    "round": round_name,
+                                    "status": proposal.status,
+                                    "affected_clip_indexes": list(
+                                        proposal.affected_clip_indexes
+                                    ),
+                                },
+                            )
+                    except PostRenderRepairError as exc:
+                        unavailable_report = {
+                            "version": "post_render_repair.v1",
+                            "round": round_name,
+                            "status": "unavailable",
+                            "request_fingerprint": repair_fingerprint,
+                            "base_plan_fingerprint": checkpoint_fingerprint(
+                                base_plan.to_dict()
+                            ),
+                            "candidate_plan_fingerprint": "",
+                            "affected_clip_indexes": [],
+                            "finding_ids": [
+                                str(item.get("finding_id") or "")[:80]
+                                for item in round_findings
+                            ],
+                            "decisions": [],
+                            "error_code": exc.code,
+                            "provider_calls": 0,
+                            "attempts": [],
+                            "no_op": False,
+                            "checkpoint_reused": repair_hit is not None,
+                        }
+                        repair_records.append(unavailable_report)
+                        await save_job_checkpoint(
+                            job_id=job_id,
+                            stage=repair_stage,
+                            contract_version=(
+                                POST_RENDER_REPAIR_CHECKPOINT_VERSION
+                            ),
+                            fingerprint=repair_fingerprint,
+                            payload={"report": unavailable_report},
+                            metadata={
+                                "round": round_name,
+                                "status": "unavailable",
+                                "error_code": exc.code,
+                            },
+                        )
+                        repair_manifest.update({
+                            "status": "unavailable",
+                            "error_code": exc.code,
+                            "checkpoint_reused": repair_hit is not None,
+                        })
+                        break
+                    repair_manifest["provider_calls"] += proposal.provider_calls
+                    repair_manifest["checkpoint_reused"] = bool(
+                        repair_manifest["checkpoint_reused"]
+                        or proposal.checkpoint_reused
+                    )
+                    round_record = proposal.to_report_dict()
+                    repair_records.append(round_record)
+                    if proposal.status != "repair" or proposal.candidate_plan is None:
+                        repair_manifest["status"] = (
+                            "no_change"
+                            if proposal.status == "no_change"
+                            else "unavailable"
+                        )
+                        break
+
+                    changed_clip_indexes = _changed_clip_indexes(
+                        base_plan,
+                        proposal.candidate_plan,
+                    )
+                    if changed_clip_indexes != proposal.affected_clip_indexes:
+                        round_record.update({
+                            "candidate_disposition": "rejected",
+                            "error_code": "POST_RENDER_REPAIR_RESPONSE_INVALID",
+                        })
+                        repair_manifest["status"] = "rejected"
+                        break
+                    candidate_dir = output_dir / (
+                        f".post-render-repair-{round_name}-{repair_fingerprint[:12]}"
+                    )
+                    candidate_dir.mkdir(parents=True, exist_ok=True)
+                    repair_directories.append(candidate_dir)
+                    try:
+                        localized_result = await asyncio.to_thread(
+                            agentic_renderer.render_plan,
+                            source=source,
+                            edit_plan=proposal.candidate_plan,
+                            selected_clips=plan.clips,
+                            visual_understanding=visual_understanding,
+                            transcript_segments=transcript.segments,
+                            destination_dir=candidate_dir,
+                            source_media=media,
+                            crop_hysteresis_ratio=(
+                                self.config.agentic_editing.crop_hysteresis_ratio
+                            ),
+                            crop_smoothing_alpha=(
+                                self.config.agentic_editing.crop_smoothing_alpha
+                            ),
+                            max_crop_velocity_ratio_per_second=(
+                                self.config.agentic_editing.max_crop_velocity_ratio_per_second
+                            ),
+                            resolved_assets=asset_result.paths,
+                            clip_indexes=changed_clip_indexes,
+                        )
+                        candidate_result = _merge_agentic_render_results(
+                            base_result,
+                            localized_result,
+                            affected_clip_indexes=changed_clip_indexes,
+                        )
+                        candidate_inputs = _qa_inputs_for_rendered(
+                            candidate_result.rendered
+                        )
+                        candidate_qa = await generate_creative_qa_artifacts(
+                            output_dir=candidate_dir,
+                            inputs=candidate_inputs,
+                            edit_plan=proposal.candidate_plan.to_dict(),
+                            render_execution=candidate_result.execution,
+                            intent_conformance=creative_conformance,
+                            resolved_assets=asset_result.paths,
+                            expected_width=render_settings.width,
+                            expected_height=render_settings.height,
+                            strict=True,
+                            semantic_enabled=False,
+                            semantic_max_frames=semantic_qa_frame_limit(
+                                self.config.agentic_editing
+                            ),
+                            semantic_client=None,
+                        )
+                        candidate_frame_quality = await asyncio.to_thread(
+                            build_frame_quality_report,
+                            candidate_inputs,
+                            source=source,
+                            render_execution=candidate_result.execution,
+                            expected_width=render_settings.width,
+                            expected_height=render_settings.height,
+                            strict=True,
+                        )
+                        candidate_gate = build_render_promotion_report(
+                            mode="enforce",
+                            policy=completion_policy(
+                                self.config.agentic_editing
+                            ),
+                            limited_output_enabled=(
+                                limited_output_promotion_enabled()
+                            ),
+                            delivery=delivery_policy(
+                                self.config.agentic_editing
+                            ),
+                            frame_quality=candidate_frame_quality,
+                            render_qa=candidate_qa.render_qa,
+                            creative_conformance=candidate_qa.conformance,
+                            caption_footprints=_caption_footprints(
+                                candidate_result.rendered
+                            ),
+                        )
+                        candidate_plan_payload = proposal.candidate_plan.to_dict()
+                        execution_clips = {
+                            int(item.get("clip_index") or 0): item
+                            for item in candidate_result.execution.get("clips") or []
+                        }
+                        plan_clips = {
+                            int(item.get("clip_index") or 0): item
+                            for item in candidate_plan_payload.get("clips") or []
+                        }
+                        quality_clips = {
+                            int(item.get("clip_index") or 0): item
+                            for item in candidate_frame_quality.get("clips") or []
+                        }
+                        candidate_evidence_inputs = [
+                            RenderedCandidate(
+                                clip_index=item.clip_index,
+                                video_path=Path(item.video_path),
+                                duration_ms=int(item.expected_duration_ms),
+                                source_artifact=Path(item.video_path).name,
+                                source_width=render_settings.width,
+                                source_height=render_settings.height,
+                                events=derive_evidence_events(
+                                    clip_plan=plan_clips.get(item.clip_index),
+                                    render_clip=execution_clips.get(item.clip_index),
+                                    quality_clip=quality_clips.get(item.clip_index),
+                                    duration_ms=int(item.expected_duration_ms),
+                                    has_subtitles=item.subtitle_path is not None,
+                                    effect_count=0,
+                                ),
+                            )
+                            for item in candidate_inputs
+                        ]
+                        candidate_evidence_bundle = await asyncio.to_thread(
+                            build_render_evidence,
+                            candidate_evidence_inputs,
+                            source_sha256=source_hash,
+                            render_execution=candidate_result.execution,
+                            plan=candidate_plan_payload,
+                            effects={"effects": []},
+                            limits=evidence_config,
+                        )
+                        candidate_evidence = candidate_evidence_bundle.manifest
+                        review_clips = tuple(
+                            clip
+                            for clip in candidate_evidence.clips
+                            if clip.clip_index in changed_clip_indexes
+                        )
+                        candidate_review_evidence = candidate_evidence.model_copy(
+                            update={
+                                "clips": review_clips,
+                                "frame_count": sum(
+                                    len(clip.frames) for clip in review_clips
+                                ),
+                                "burst_count": sum(
+                                    len(clip.bursts) for clip in review_clips
+                                ),
+                                "encoded_bytes": sum(
+                                    frame.encoded_bytes
+                                    for clip in review_clips
+                                    for frame in clip.frames
+                                ),
+                            }
+                        )
+                        candidate_critic_fingerprint = critic_call_fingerprint(
+                            candidate_review_evidence,
+                            editing_prompt=state["prompt"],
+                            model=getattr(remote_client, "model", "unknown"),
+                            reasoning_effort=getattr(
+                                remote_client,
+                                "reasoning_effort",
+                                "unknown",
+                            ),
+                        )
+                        candidate_critic_stage = (
+                            f"render_critic_repair_{round_name}"
+                        )
+                        candidate_critic_hit = await load_job_checkpoint(
+                            job_id=job_id,
+                            stage=candidate_critic_stage,
+                            fingerprint=candidate_critic_fingerprint,
+                        )
+                        if candidate_critic_hit is not None:
+                            candidate_critic = render_critic_report_from_checkpoint(
+                                candidate_critic_hit.payload,
+                                expected_call_fingerprint=(
+                                    candidate_critic_fingerprint
+                                ),
+                                expected_candidate_fingerprint=(
+                                    candidate_evidence.candidate_fingerprint
+                                ),
+                            )
+                            track_checkpoint(candidate_critic_stage, reused=True)
+                        else:
+                            candidate_critic = await review_render_evidence(
+                                candidate_review_evidence,
+                                image_data_urls=(
+                                    candidate_evidence_bundle.image_data_urls
+                                ),
+                                client=remote_client,
+                                editing_prompt=state["prompt"],
+                                mode="enforce",
+                            )
+                            candidate_critic["checkpoint_reused"] = False
+                            track_checkpoint(candidate_critic_stage, reused=False)
+                            await save_job_checkpoint(
+                                job_id=job_id,
+                                stage=candidate_critic_stage,
+                                contract_version="render_critic.v1",
+                                fingerprint=candidate_critic_fingerprint,
+                                payload=candidate_critic,
+                                metadata={
+                                    "round": round_name,
+                                    "status": candidate_critic.get("status"),
+                                    "finding_count": candidate_critic.get(
+                                        "finding_count",
+                                        0,
+                                    ),
+                                },
+                            )
+                        original_affected_findings = [
+                            item
+                            for item in original_critic_report.get("findings") or []
+                            if int(item.get("clip_index") or 0)
+                            in changed_clip_indexes
+                        ]
+                        original_affected_critic = {
+                            **original_critic_report,
+                            "status": (
+                                "review" if original_affected_findings else "pass"
+                            ),
+                            "finding_count": len(original_affected_findings),
+                            "findings": original_affected_findings,
+                        }
+                        comparison = compare_critic_improvement(
+                            original_affected_critic,
+                            candidate_critic,
+                        )
+                        unchanged_findings = [
+                            item
+                            for item in original_critic_report.get("findings") or []
+                            if int(item.get("clip_index") or 0)
+                            not in changed_clip_indexes
+                        ]
+                        merged_critic_findings = [
+                            *unchanged_findings,
+                            *(candidate_critic.get("findings") or []),
+                        ]
+                        merged_candidate_critic = {
+                            **candidate_critic,
+                            "status": (
+                                "unavailable"
+                                if candidate_critic.get("status") == "unavailable"
+                                else "review" if merged_critic_findings else "pass"
+                            ),
+                            "summary": (
+                                "repaired clips were reviewed with unchanged findings preserved"
+                            ),
+                            "candidate_fingerprint": (
+                                candidate_evidence.candidate_fingerprint
+                            ),
+                            "finding_count": len(merged_critic_findings),
+                            "findings": merged_critic_findings,
+                        }
+                        new_blocker_codes = tuple(sorted(
+                            set(candidate_gate["blocker_codes"])
+                            - original_blocker_codes
+                        ))
+                        round_record.update({
+                            "candidate_disposition": "accepted"
+                            if (
+                                not new_blocker_codes
+                                and candidate_gate["decision"] != "block"
+                                and comparison["demonstrated"]
+                            )
+                            else "rejected",
+                            "localized_render_clip_indexes": list(
+                                changed_clip_indexes
+                            ),
+                            "reviewed_clip_indexes": list(changed_clip_indexes),
+                            "candidate_gate": {
+                                "decision": candidate_gate["decision"],
+                                "blocker_codes": candidate_gate["blocker_codes"],
+                                "new_blocker_codes": list(new_blocker_codes),
+                            },
+                            "improvement": comparison,
+                        })
+                        if (
+                            not new_blocker_codes
+                            and candidate_gate["decision"] != "block"
+                            and comparison["demonstrated"]
+                        ):
+                            accepted = {
+                                "plan": proposal.candidate_plan,
+                                "result": candidate_result,
+                                "qa": candidate_qa,
+                                "frame_quality": candidate_frame_quality,
+                                "evidence": candidate_evidence,
+                                "evidence_bundle": candidate_evidence_bundle,
+                                "critic": merged_candidate_critic,
+                                "comparison": comparison,
+                            }
+                            repair_manifest["status"] = "accepted"
+                            break
+                        if round_name == "primary" and new_blocker_codes:
+                            contingency_codes = new_blocker_codes
+                            round_findings = objective_findings_for_contingency(
+                                contingency_codes,
+                                clip_indexes=changed_clip_indexes,
+                                manifest=candidate_evidence,
+                            )
+                            base_plan = proposal.candidate_plan
+                            base_result = candidate_result
+                            evidence = candidate_evidence
+                            evidence_bundle = candidate_evidence_bundle
+                            continue
+                        repair_manifest["status"] = "rejected"
+                        break
+                    except asyncio.CancelledError:
+                        raise
+                    except Exception as exc:
+                        error_code = str(
+                            getattr(
+                                exc,
+                                "code",
+                                "POST_RENDER_REPAIR_UNAVAILABLE",
+                            )
+                        )[:80]
+                        round_record.update({
+                            "candidate_disposition": "unavailable",
+                            "error_code": error_code,
+                        })
+                        repair_manifest.update({
+                            "status": "unavailable",
+                            "error_code": error_code,
+                        })
+                        break
+
+                if accepted is not None:
+                    final_changed_indexes = _changed_clip_indexes(
+                        original_edit_plan,
+                        accepted["plan"],
+                    )
+                    agentic_result = _move_repaired_rendered_to_output(
+                        original_agentic_result,
+                        accepted["result"],
+                        affected_clip_indexes=final_changed_indexes,
+                    )
+                    rendered = list(agentic_result.rendered)
+                    edit_plan = accepted["plan"]
+                    qa_inputs = _qa_inputs_for_rendered(rendered)
+                    render_qa_report = accepted["qa"].render_qa
+                    creative_conformance_report = accepted["qa"].conformance
+                    semantic_review_report = (
+                        creative_conformance_report.get("semantic_review")
+                        if isinstance(
+                            creative_conformance_report.get("semantic_review"),
+                            dict,
+                        )
+                        else semantic_review_report
+                    )
+                    frame_quality_report = accepted["frame_quality"]
+                    evidence = accepted["evidence"]
+                    evidence_bundle = accepted["evidence_bundle"]
+                    render_critic_report = accepted["critic"]
+                    plan_payload = edit_plan.to_dict()
+                    edit_plan_path.write_text(
+                        json.dumps(plan_payload, ensure_ascii=False, indent=2),
+                        encoding="utf-8",
+                    )
+                    render_execution_path.write_text(
+                        json.dumps(
+                            agentic_result.execution,
+                            ensure_ascii=False,
+                            indent=2,
+                        ),
+                        encoding="utf-8",
+                    )
+                    render_quality_path.write_text(
+                        json.dumps({
+                            "version": RENDER_QUALITY_PROFILE_VERSION,
+                            "configured_profile": render_settings.quality_profile,
+                            "clips": [
+                                item.render_quality
+                                for item in rendered
+                                if item.render_quality is not None
+                            ],
+                        }, ensure_ascii=False, indent=2),
+                        encoding="utf-8",
+                    )
+                    for path, payload in (
+                        (output_dir / names.render_qa, render_qa_report),
+                        (
+                            output_dir / names.retention_rhythm_qa,
+                            accepted["qa"].rhythm_qa,
+                        ),
+                        (
+                            output_dir / names.creative_conformance,
+                            creative_conformance_report,
+                        ),
+                        (frame_quality_path, frame_quality_report),
+                        (output_dir / names.render_evidence, evidence.to_dict()),
+                        (output_dir / names.render_critic, render_critic_report),
+                    ):
+                        path.write_text(
+                            json.dumps(payload, ensure_ascii=False, indent=2),
+                            encoding="utf-8",
+                        )
+                    evidence_manifest.update({
+                        "status": "available",
+                        "candidate_fingerprint": evidence.candidate_fingerprint,
+                        "checkpoint_reused": evidence.checkpoint_reused,
+                        "frame_count": evidence.frame_count,
+                        "burst_count": evidence.burst_count,
+                        "encoded_bytes": evidence.encoded_bytes,
                     })
+                    critic_manifest.update({
+                        "status": render_critic_report.get(
+                            "status",
+                            "unavailable",
+                        ),
+                        "call_fingerprint": render_critic_report.get(
+                            "call_fingerprint"
+                        ),
+                        "provider_calls": render_critic_report.get(
+                            "provider_calls",
+                            0,
+                        ),
+                        "finding_count": render_critic_report.get(
+                            "finding_count",
+                            0,
+                        ),
+                        "checkpoint_reused": render_critic_report.get(
+                            "checkpoint_reused"
+                        ) is True,
+                        "error_code": render_critic_report.get("error_code"),
+                    })
+                    qa_manifest.update({
+                        "status": creative_conformance_report.get(
+                            "status",
+                            "unavailable",
+                        ),
+                        "post_render_repair_revalidated": True,
+                    })
+                    repair_manifest.update({
+                        "selected_candidate": "repaired",
+                        "affected_clip_indexes": list(final_changed_indexes),
+                        "improvement": accepted["comparison"],
+                    })
+                    agentic_manifest["qa"] = qa_manifest
+                    agentic_manifest["render_evidence"] = evidence_manifest
+                    agentic_manifest["render_critic"] = critic_manifest
+
+            repair_manifest["rounds"] = len(repair_records)
+            post_render_repair_report = {
+                "version": "post_render_repair.v1",
+                **repair_manifest,
+                "round_records": repair_records,
+            }
+            if critic_mode == "enforce":
+                repair_path = output_dir / names.post_render_repair
+                repair_path.write_text(
+                    json.dumps(
+                        post_render_repair_report,
+                        ensure_ascii=False,
+                        indent=2,
+                    ),
+                    encoding="utf-8",
+                )
+                await store.register_artifact(
+                    job_id,
+                    repair_path,
+                    kind="post_render_repair",
+                )
+                agentic_manifest["post_render_repair"] = {
+                    "artifact": names.post_render_repair,
+                    **repair_manifest,
+                }
+            for candidate_dir in repair_directories:
+                shutil.rmtree(candidate_dir, ignore_errors=True)
+
+            caption_footprints = _caption_footprints(rendered)
             promotion_report = build_render_promotion_report(
                 mode=promotion_mode,
                 policy=completion_policy(self.config.agentic_editing),
@@ -4351,6 +5309,7 @@ class MVPJobProcessor:
             repair_report=repair_report,
             semantic_review=semantic_review_report,
             render_critic=render_critic_report,
+            post_render_repair=post_render_repair_report,
             rollout_attribution={
                 "model": getattr(remote_client, "model", "unknown"),
                 "reasoning_effort": getattr(
@@ -4390,6 +5349,7 @@ class MVPJobProcessor:
                         VISUAL_UNDERSTANDING_SYSTEM_PROMPT,
                         REPAIR_SYSTEM_PROMPT,
                         RENDER_CRITIC_SYSTEM_PROMPT,
+                        POST_RENDER_REPAIR_SYSTEM_PROMPT,
                     )
                 ],
             },

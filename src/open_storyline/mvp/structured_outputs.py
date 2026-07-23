@@ -20,6 +20,7 @@ EDIT_PLAN_SCHEMA = "edit_plan.v1"
 EDIT_PLAN_REPAIR_SCHEMA = "edit_plan_repair.v1"
 SEMANTIC_QA_SCHEMA = "semantic_qa.v1"
 RENDER_CRITIC_SCHEMA = "render_critic.v1"
+POST_RENDER_REPAIR_SCHEMA = "post_render_repair.v1"
 FFMPEGA_AGENTIC_SCHEMA = "ffmpega_agentic_finishing.v1"
 FFMPEGA_DETERMINISTIC_SCHEMA = "ffmpega_deterministic_effects.v1"
 
@@ -270,6 +271,24 @@ class RenderCriticResponseWire(WireModel):
     findings: list[RenderCriticFindingWire] = Field(max_length=64)
 
 
+class PostRenderRepairDecisionWire(WireModel):
+    finding_id: str = Field(
+        min_length=1,
+        max_length=80,
+        pattern=r"^finding-[A-Za-z0-9._:-]+$",
+    )
+    decision: Literal["repair", "no_change"]
+    reason: str = Field(min_length=1, max_length=320)
+    affected_clip_indexes: list[int] = Field(max_length=8)
+
+
+class PostRenderRepairResponseWire(WireModel):
+    status: Literal["repair", "no_change"]
+    decisions: list[PostRenderRepairDecisionWire] = Field(min_length=1, max_length=64)
+    requested_capabilities: list[str] = Field(max_length=32)
+    clips: list[ClipEditPlanWire] = Field(max_length=8)
+
+
 @dataclass(frozen=True)
 class StructuredOutputDefinition:
     name: str
@@ -351,6 +370,7 @@ STRUCTURED_OUTPUTS = {
         _definition(EDIT_PLAN_REPAIR_SCHEMA, EditPlanWire),
         _definition(SEMANTIC_QA_SCHEMA, SemanticQAResponseWire),
         _definition(RENDER_CRITIC_SCHEMA, RenderCriticResponseWire),
+        _definition(POST_RENDER_REPAIR_SCHEMA, PostRenderRepairResponseWire),
         _definition(FFMPEGA_AGENTIC_SCHEMA, FFMPEGAAgenticFinishingResponse),
         _definition(FFMPEGA_DETERMINISTIC_SCHEMA, FFMPEGADeterministicEffectsResponse),
     )
@@ -381,6 +401,7 @@ __all__ = [
     "FFMPEGA_DETERMINISTIC_SCHEMA",
     "SEMANTIC_QA_SCHEMA",
     "RENDER_CRITIC_SCHEMA",
+    "POST_RENDER_REPAIR_SCHEMA",
     "SHORTS_SELECTION_SCHEMA",
     "STRUCTURED_OUTPUTS",
     "StructuredOutputDefinition",

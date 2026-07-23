@@ -2266,6 +2266,7 @@ class AgenticArtifactNames:
     frame_quality_qa: str = "frame_quality_qa.json"
     render_evidence: str = "render_evidence.json"
     render_critic: str = "render_critic.json"
+    post_render_repair: str = "post_render_repair.json"
     render_promotion: str = "render_promotion.json"
     repair_report: str = "repair_report.json"
     outcome_report: str = "outcome_report.json"

@@ -7,7 +7,7 @@ import os
 import unittest
 from unittest.mock import patch
 
-from open_storyline.mvp.checkpoints import CheckpointHit
+from open_storyline.mvp.checkpoints import CheckpointHit, checkpoint_fingerprint
 from open_storyline.mvp.compositor import CompositionError, dry_run_edit_plan_composition
 from open_storyline.mvp.edit_plan import (
     AssetRequest,
@@ -29,6 +29,7 @@ from open_storyline.mvp.ninerouter import NineRouterAttempt, NineRouterError
 from open_storyline.mvp.pipeline import MVPJobProcessor
 from open_storyline.mvp.preflight import PreflightFinding, PreflightReport, build_preflight
 from open_storyline.mvp.promotion import RenderPromotionError
+from open_storyline.mvp.post_render_repair import PostRenderRepairProposal
 from open_storyline.mvp.render import AgenticRenderResult, MediaInfo, RenderError, RenderedShort
 from open_storyline.mvp.render_evidence import (
     EvidenceClip,
@@ -106,6 +107,59 @@ class FakeAgenticRenderer:
                 "version": "render_execution.v1",
                 "summary": {"clips": 1, "encodes": 1, "fallbacks": 0},
                 "clips": [{"video": "short-01.mp4", "encode_count": 1}],
+            },
+        )
+
+
+class FakeAgenticRepairRenderer(FakeAgenticRenderer):
+    render_clip_indexes = []
+
+    def render_plan(
+        self,
+        *,
+        edit_plan,
+        selected_clips,
+        destination_dir,
+        clip_indexes=None,
+        **_kwargs,
+    ):
+        indexes = tuple(clip_indexes or (clip.clip_index for clip in edit_plan.clips))
+        type(self).render_clip_indexes.append(indexes)
+        root = Path(destination_dir)
+        rendered = []
+        executions = []
+        for clip_index in indexes:
+            clip_plan = next(
+                clip for clip in edit_plan.clips if clip.clip_index == clip_index
+            )
+            path = root / clip_plan.output_name
+            path.write_bytes(
+                b"repaired-agentic-render"
+                if root.name.startswith(".post-render-repair-")
+                else b"original-agentic-render"
+            )
+            rendered.append(RenderedShort(
+                path,
+                None,
+                selected_clips[clip_index - 1],
+            ))
+            executions.append({
+                "clip_index": clip_index,
+                "video": clip_plan.output_name,
+                "encode_count": 1,
+                "fallback_count": 0,
+                "segments": [],
+            })
+        return AgenticRenderResult(
+            rendered=tuple(rendered),
+            execution={
+                "version": "render_execution.v1",
+                "summary": {
+                    "clips": len(executions),
+                    "encodes": len(executions),
+                    "fallbacks": 0,
+                },
+                "clips": executions,
             },
         )
 
@@ -1671,6 +1725,159 @@ class MVPAgenticPipelineTests(unittest.IsolatedAsyncioTestCase):
                 registered_names.index("render_promotion.json"),
                 registered_names.index("short-01.mp4"),
             )
+
+    async def test_enforced_post_render_repair_rerenders_only_affected_clip_and_promotes(self):
+        with TemporaryDirectory() as directory:
+            FakeAgenticRepairRenderer.render_clip_indexes = []
+            root = Path(directory)
+            store = FakeStore(
+                root,
+                server_request={
+                    "max_clips": 1,
+                    "edit_mode": "agentic",
+                    "asset_policy": "off",
+                },
+            )
+            processor = object.__new__(MVPJobProcessor)
+            processor.config = config("render")
+            processor.config.agentic_editing.creative_qa_enabled = True
+            processor.config.agentic_editing.post_render_review_mode = "enforce"
+            processor.stt = FakeSTT()
+            checkpoints = FakeCheckpointStore()
+            evidence_bundle = fake_render_evidence_bundle()
+            finding = {
+                "finding_id": "finding-" + "7" * 24,
+                "finding_fingerprint": "8" * 64,
+                "defect_code": "RENDER_CRITIC_FINDING",
+                "category": "framing",
+                "severity": "warning",
+                "classification": "creative",
+                "confidence": 0.95,
+                "clip_index": 1,
+                "start_ms": 0,
+                "end_ms": 2_000,
+                "evidence_ids": ["ev-" + "a" * 24],
+                "repair_objective": "Use a safer full-frame composition.",
+                "requested_capabilities": ["fit"],
+                "repairable": True,
+            }
+            initial_critic = {
+                "version": "render_critic.v1",
+                "status": "review",
+                "scope": "rendered_evidence_only",
+                "non_mutating": True,
+                "summary": "composition review",
+                "call_fingerprint": "2" * 64,
+                "candidate_fingerprint": evidence_bundle.manifest.candidate_fingerprint,
+                "provider_calls": 1,
+                "finding_count": 1,
+                "findings": [finding],
+                "mode": "enforce",
+                "attempts": [],
+            }
+            repaired_critic = {
+                **initial_critic,
+                "status": "pass",
+                "summary": "composition repaired",
+                "provider_calls": 1,
+                "finding_count": 0,
+                "findings": [],
+            }
+            scene_report = build_scene_boundaries([], source_duration_ms=30_000, threshold=0.35)
+            frame_manifest = FrameManifest(
+                source_duration_ms=30_000,
+                source_width=1920,
+                source_height=1080,
+                frames=(SampledFrame(
+                    id="frame-001",
+                    timestamp_ms=250,
+                    scene_id="scene-001",
+                    width=512,
+                    height=288,
+                    extraction_reason="scene_opening",
+                    encoded_bytes=4,
+                    data_url="data:image/jpeg;base64,ZmFrZQ==",
+                ),),
+            )
+            base_plan = build_shadow_edit_plan(
+                [ShortCandidate(0, 20_000, "Title", "Hook", "Reason", 0.9)],
+                source_duration_ms=30_000,
+            )
+            clip = base_plan.clips[0]
+            repaired_segment = clip.segments[0].model_copy(update={
+                "layout": LayoutSpec(mode="fit", fallback="fit", allow_full_frame_fallback=True),
+            })
+            repaired_plan = base_plan.model_copy(update={
+                "requested_capabilities": ("fit", "hard_cut", "subtitles"),
+                "clips": (clip.model_copy(update={"segments": (repaired_segment,)}),),
+            })
+            proposal = PostRenderRepairProposal(
+                round_name="primary",
+                status="repair",
+                request_fingerprint="r" * 64,
+                base_plan_fingerprint=checkpoint_fingerprint(base_plan.to_dict()),
+                candidate_plan_fingerprint=checkpoint_fingerprint(repaired_plan.to_dict()),
+                affected_clip_indexes=(1,),
+                finding_ids=(finding["finding_id"],),
+                decisions=({
+                    "finding_id": finding["finding_id"],
+                    "decision": "repair",
+                    "reason": "Use fit layout.",
+                    "affected_clip_indexes": [1],
+                },),
+                candidate_plan=repaired_plan,
+                provider_calls=1,
+                attempts=(),
+            )
+
+            with (
+                patch("open_storyline.mvp.pipeline.probe_media", return_value=MediaInfo(30_000, 1920, 1080, True)),
+                patch("open_storyline.mvp.pipeline.extract_audio_for_stt", side_effect=lambda _source, target: target),
+                patch("open_storyline.mvp.pipeline.detect_scene_boundaries", return_value=scene_report),
+                patch("open_storyline.mvp.pipeline.sample_frames", return_value=frame_manifest),
+                patch("open_storyline.mvp.pipeline.VisualUnderstandingPlanner", FakeVisualPlanner),
+                patch("open_storyline.mvp.pipeline.AgenticEditPlanner", FakeEditPlanner),
+                patch("open_storyline.mvp.pipeline.NineRouterClient.from_config", return_value=FakeRemoteClient()),
+                patch("open_storyline.mvp.pipeline.ShortsPlanner", FakePlanner),
+                patch("open_storyline.mvp.pipeline.AgenticShortRenderer", FakeAgenticRepairRenderer),
+                patch("open_storyline.mvp.pipeline.CPUShortRenderer", side_effect=AssertionError("legacy renderer called")),
+                patch("open_storyline.mvp.pipeline.CheckpointStore", return_value=checkpoints),
+                patch("open_storyline.mvp.pipeline.evidence_fingerprint", return_value="5" * 64),
+                patch("open_storyline.mvp.pipeline.critic_call_fingerprint", return_value="2" * 64),
+                patch("open_storyline.mvp.pipeline.post_render_repair_fingerprint", return_value="r" * 64),
+                patch("open_storyline.mvp.pipeline.build_render_evidence", return_value=evidence_bundle),
+                patch("open_storyline.mvp.pipeline.review_render_evidence", side_effect=[initial_critic, repaired_critic]) as critic_call,
+                patch("open_storyline.mvp.pipeline.request_post_render_repair", return_value=proposal) as repair_call,
+                patch("open_storyline.mvp.pipeline.generate_creative_qa_artifacts", side_effect=fake_creative_qa_artifacts),
+                patch(
+                    "open_storyline.mvp.pipeline.build_frame_quality_report",
+                    return_value={
+                        "version": "frame_quality_qa.v1",
+                        "status": "pass",
+                        "findings": [],
+                    },
+                ),
+            ):
+                await processor("e" * 32, store)
+
+            registered_names = [name for name, _kind in store.registered]
+            repair_report = json.loads(
+                (root / "output" / "post_render_repair.json").read_text(encoding="utf-8")
+            )
+            self.assertEqual(repair_call.await_count, 1)
+            self.assertEqual(critic_call.await_count, 2)
+            self.assertEqual(
+                FakeAgenticRepairRenderer.render_clip_indexes,
+                [(1,), (1,)],
+            )
+            self.assertEqual(repair_report["status"], "accepted")
+            self.assertEqual(repair_report["selected_candidate"], "repaired")
+            self.assertIn("post_render_repair.json", registered_names)
+            self.assertEqual(
+                (root / "output" / "short-01.mp4").read_bytes(),
+                b"repaired-agentic-render",
+            )
+            FakeAgenticRepairRenderer.render_clip_indexes = []
 
     async def test_enforce_mode_blocks_and_removes_candidate_before_video_registration(self):
         with TemporaryDirectory() as directory:

@@ -1,7 +1,7 @@
 # Plan: Agentic-Only Render Review and Repair Upgrade
 
 **Generated**: 2026-07-22
-**Status**: In progress; Sprints 1-5 complete
+**Status**: In progress; Sprints 1-6 complete
 **Estimated Complexity**: High
 
 ## Overview
@@ -745,13 +745,13 @@ and reports remain inspectable.
 
 ### Sprint 6 Gate
 
-- [ ] Typed creative patches are validated and cannot issue raw execution.
-- [ ] Localized rerender and checkpoint reuse work.
-- [ ] The one-primary plus new-defect-contingency cap is enforced.
-- [ ] Candidate verification prevents technical regressions and silent fallback.
-- [ ] Exactly one Sprint 6 commit is created with the proposed message.
-- [ ] The rollback point is recorded.
-- [ ] Sprint 7 has not started before this gate completes.
+- [x] Typed creative patches are validated and cannot issue raw execution.
+- [x] Localized rerender and checkpoint reuse work.
+- [x] The one-primary plus new-defect-contingency cap is enforced.
+- [x] Candidate verification prevents technical regressions and silent fallback.
+- [x] Exactly one Sprint 6 commit is created with the proposed message.
+- [x] The rollback point is recorded.
+- [x] Sprint 7 has not started before this gate completes.
 
 ## Sprint 7: Add Effect-Aware Render Review And Repair
 
