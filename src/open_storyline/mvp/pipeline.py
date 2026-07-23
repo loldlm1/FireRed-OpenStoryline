@@ -107,6 +107,7 @@ from open_storyline.mvp.jobs import JobStore
 from open_storyline.mvp.ninerouter import NineRouterClient, NineRouterError
 from open_storyline.mvp.observability import (
     compact_render_critic_observability,
+    compact_candidate_comparison_observability,
     compact_render_evidence_observability,
     compact_repair_observability,
     emit_event,
@@ -5262,6 +5263,14 @@ class MVPJobProcessor:
                                     },
                                 )
                             candidate_comparison_report = candidate_preference
+                            emit_event(
+                                "candidate_comparison_ready",
+                                job_id=job_id,
+                                stage="post_render_qa",
+                                **compact_candidate_comparison_observability(
+                                    candidate_preference
+                                ),
+                            )
                         elif candidate_preference is None:
                             candidate_comparison_report = {
                                 "version": CANDIDATE_COMPARISON_VERSION,
@@ -5270,6 +5279,14 @@ class MVPJobProcessor:
                                 "provider_calls": 0,
                                 "reason": "single_candidate_or_technical_gate",
                             }
+                            emit_event(
+                                "candidate_comparison_ready",
+                                job_id=job_id,
+                                stage="post_render_qa",
+                                **compact_candidate_comparison_observability(
+                                    candidate_comparison_report
+                                ),
+                            )
                         preference_accepts = (
                             candidate_preference is None
                             or candidate_preference.get("status") in {"unavailable", "skipped"}
@@ -5550,6 +5567,12 @@ class MVPJobProcessor:
                     "artifact": names.post_render_repair,
                     **repair_manifest,
                 }
+            if candidate_comparison_report is not None:
+                agentic_manifest["candidate_comparison"] = (
+                    compact_candidate_comparison_observability(
+                        candidate_comparison_report
+                    )
+                )
             for candidate_dir in repair_directories:
                 shutil.rmtree(candidate_dir, ignore_errors=True)
 

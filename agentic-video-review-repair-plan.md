@@ -1019,13 +1019,13 @@ Agentic-only image if telemetry or eval ingestion is incomplete.
 
 ### Sprint 9 Gate
 
-- [ ] Call ledger, eval scorecard, privacy review, and failure handling are
+- [x] Call ledger, eval scorecard, privacy review, and failure handling are
   complete.
-- [ ] No redundant-call or third-call invariant is left untested.
-- [ ] Rollout validator and full MVP test baseline pass.
-- [ ] Exactly one Sprint 9 commit is created with the proposed message.
-- [ ] The rollback point is recorded.
-- [ ] Sprint 10 has not started before this gate completes.
+- [x] No redundant-call or third-call invariant is left untested.
+- [x] Rollout validator and full MVP test baseline pass.
+- [x] Exactly one Sprint 9 commit is created with the proposed message.
+- [x] The rollback point is recorded.
+- [x] Sprint 10 has not started before this gate completes.
 
 ## Sprint 10: Staged Production Rollout
 

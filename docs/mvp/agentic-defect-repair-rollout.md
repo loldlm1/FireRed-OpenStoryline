@@ -108,6 +108,15 @@ playback and download registration, truthful creative limitations, technical
 withholding, repair checkpoint reuse, call counts, tokens, cost, latency, and
 the absence of new defects.
 
+The review scorecard must also report candidate-comparison calls, completed
+preferences, ties, skipped no-call decisions, checkpoint reuse, and invariant
+violations. A comparison provider failure is reportable and falls back to the
+deterministic candidate gate; it never authorizes another repair request.
+Promotion gates require zero third repair calls, zero promoted new technical
+defects, no raw evidence persistence, stable artifact lineage, and an
+owner-approved human preference aggregate from the rubric in
+[agentic-video-review-eval.md](agentic-video-review-eval.md).
+
 Queue the newest immutable prompt when it is the intended canary, or select an
 older authoritative version explicitly when a targeted QA variant is newer:
 

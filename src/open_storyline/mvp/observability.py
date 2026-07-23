@@ -23,6 +23,7 @@ QUALITY_FEEDBACK_VERSION = "quality_feedback.v1"
 REPAIR_OBSERVABILITY_VERSION = "repair_observability.v1"
 RENDER_EVIDENCE_OBSERVABILITY_VERSION = "render_evidence_observability.v1"
 RENDER_CRITIC_OBSERVABILITY_VERSION = "render_critic_observability.v1"
+CANDIDATE_COMPARISON_OBSERVABILITY_VERSION = "candidate_comparison_observability.v1"
 REPAIR_EVIDENCE_TYPES = frozenset(
     evidence_type
     for definition in DEFECT_REGISTRY.values()
@@ -466,6 +467,52 @@ def compact_render_critic_observability(report: dict[str, Any]) -> dict[str, Any
             else ""
         ),
         "findings": findings,
+    }
+
+
+def compact_candidate_comparison_observability(
+    report: dict[str, Any],
+) -> dict[str, Any]:
+    """Keep candidate preference telemetry private and bounded."""
+    source = _mapping(report)
+    selection = str(source.get("selection") or "tie")
+    if selection not in {"original", "repaired", "tie"}:
+        selection = "tie"
+    status = str(source.get("status") or "unavailable")
+    if status not in {"completed", "skipped", "unavailable"}:
+        status = "unavailable"
+    call_fingerprint = str(source.get("call_fingerprint") or "")
+    return {
+        "version": CANDIDATE_COMPARISON_OBSERVABILITY_VERSION,
+        "report_version": (
+            "candidate_comparison.v1"
+            if source.get("version") == "candidate_comparison.v1"
+            else ""
+        ),
+        "status": status,
+        "selection": selection,
+        "confidence": _number(source.get("confidence"), maximum=1) or 0,
+        "uncertainty": _token(source.get("uncertainty"), limit=12),
+        "provider_calls": _integer(source.get("provider_calls"), maximum=1),
+        "checkpoint_reused": source.get("checkpoint_reused") is True,
+        "call_fingerprint": (
+            call_fingerprint
+            if re.fullmatch(r"[a-f0-9]{64}", call_fingerprint)
+            else ""
+        ),
+        "evidence_count": min(
+            32,
+            len([
+                value
+                for value in source.get("evidence_ids") or ()
+                if isinstance(value, str) and SAFE_ID.fullmatch(value)
+            ]),
+        ),
+        "error_code": (
+            str(source.get("error_code") or "")
+            if SAFE_CODE.fullmatch(str(source.get("error_code") or ""))
+            else ""
+        ),
     }
 
 

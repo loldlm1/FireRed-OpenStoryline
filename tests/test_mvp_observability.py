@@ -4,14 +4,34 @@ import unittest
 from open_storyline.mvp.observability import (
     QUALITY_FEEDBACK_VERSION,
     RENDER_CRITIC_OBSERVABILITY_VERSION,
+    CANDIDATE_COMPARISON_OBSERVABILITY_VERSION,
     REPAIR_OBSERVABILITY_VERSION,
     compact_prior_attempt_quality_feedback,
     compact_render_critic_observability,
+    compact_candidate_comparison_observability,
     compact_repair_observability,
 )
 
 
 class PriorAttemptQualityFeedbackTests(unittest.TestCase):
+    def test_candidate_comparison_observability_is_private_and_bounded(self):
+        private_marker = "private rationale transcript /private/source.mp4"
+        compact = compact_candidate_comparison_observability({
+            "version": "candidate_comparison.v1",
+            "status": "completed",
+            "selection": "repaired",
+            "confidence": 0.88,
+            "uncertainty": "low",
+            "provider_calls": 1,
+            "call_fingerprint": "a" * 64,
+            "evidence_ids": ["ev-" + "b" * 24],
+            "rationale": private_marker,
+        })
+        self.assertEqual(compact["version"], CANDIDATE_COMPARISON_OBSERVABILITY_VERSION)
+        self.assertEqual(compact["selection"], "repaired")
+        self.assertEqual(compact["evidence_count"], 1)
+        self.assertNotIn(private_marker, json.dumps(compact))
+
     def test_render_critic_observability_excludes_private_explanations(self):
         private_marker = "private prompt transcript and /private/source.mp4"
         compact = compact_render_critic_observability({

@@ -1161,6 +1161,9 @@ def outcome_summary(value: Any) -> dict[str, Any] | None:
         if isinstance(value.get("semantic_qa"), dict)
         else {}
     )
+    candidate_comparison = _candidate_comparison_summary(
+        value.get("candidate_comparison")
+    )
     attribution = (
         value.get("attribution") if isinstance(value.get("attribution"), dict) else {}
     )
@@ -1188,6 +1191,7 @@ def outcome_summary(value: Any) -> dict[str, Any] | None:
             "blocker_codes": _codes(strict_qa.get("blocker_codes") or ()),
         },
         "semantic_qa": _semantic_qa_summary(semantic_qa),
+        "candidate_comparison": candidate_comparison,
         "delivery": {
             "policy": str(delivery.get("policy") or "")[:40],
             "decision": str(delivery.get("decision") or "")[:40],
@@ -1345,6 +1349,11 @@ def build_outcome_slo_summary(rows: Sequence[dict[str, Any]]) -> dict[str, Any]:
     predictive_attachment_opportunities = 0
     technical_pass_candidates = 0
     technical_pass_published = 0
+    comparison_calls = 0
+    comparison_completed = 0
+    comparison_repaired = 0
+    comparison_ties = 0
+    comparison_skips = 0
     attribution_counts: Counter[tuple[Any, ...]] = Counter()
     for row in rows:
         summary = outcome_summary(row.get("outcome"))
@@ -1362,6 +1371,18 @@ def build_outcome_slo_summary(rows: Sequence[dict[str, Any]]) -> dict[str, Any]:
         playable += int(is_playable)
         limitations.update(summary["limitation_codes"])
         repair_metrics = summary["repair"]["metrics"]
+        comparison = summary.get("candidate_comparison") or {}
+        comparison_calls += int(comparison.get("provider_calls") or 0)
+        comparison_completed += int(comparison.get("status") == "completed")
+        comparison_repaired += int(
+            comparison.get("status") == "completed"
+            and comparison.get("selection") == "repaired"
+        )
+        comparison_ties += int(
+            comparison.get("status") == "completed"
+            and comparison.get("selection") == "tie"
+        )
+        comparison_skips += int(comparison.get("status") == "skipped")
         for name in (
             "semantic_calls",
             "transport_attempts",
@@ -1669,6 +1690,13 @@ def build_outcome_slo_summary(rows: Sequence[dict[str, Any]]) -> dict[str, Any]:
                 technical_pass_published,
                 technical_pass_candidates,
             ),
+        },
+        "candidate_comparison": {
+            "provider_calls": comparison_calls,
+            "completed": comparison_completed,
+            "repaired_selected": comparison_repaired,
+            "ties": comparison_ties,
+            "skipped_no_call": comparison_skips,
         },
         "attribution": [
             {
