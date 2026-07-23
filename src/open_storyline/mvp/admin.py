@@ -11,7 +11,6 @@ import uuid
 from sqlalchemy import func, select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from open_storyline.config import default_config_path, load_settings
 from open_storyline.mvp.audit import AuditService, parse_since
 from open_storyline.mvp.database import Database, DatabaseConfigurationError
 from open_storyline.mvp.jobs import JobStore, JobStoreError
@@ -20,6 +19,7 @@ from open_storyline.mvp.prompt_versions import PromptVersionService
 from open_storyline.mvp.retention import RetentionService, RetentionSettings
 from open_storyline.mvp.security import sanitize_for_persistence
 from open_storyline.mvp.session_media import SessionMediaStore
+from open_storyline.mvp.settings import default_mvp_config_path, load_mvp_settings
 
 
 WORKSPACE_BACKFILL_ADVISORY_LOCK = 7_303_110_792_764
@@ -73,7 +73,7 @@ def _format_value(value: Any, output_format: str) -> None:
 
 
 def _default_root() -> Path:
-    config = load_settings(default_config_path())
+    config = load_mvp_settings(default_mvp_config_path())
     return Path(config.project.outputs_dir) / "mvp_jobs"
 
 

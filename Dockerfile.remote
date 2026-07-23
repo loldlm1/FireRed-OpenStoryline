@@ -18,7 +18,11 @@ RUN pip install --no-cache-dir -r requirements-remote.txt
 
 COPY config.toml mvp_fastapi.py alembic.ini ./
 COPY migrations/ ./migrations/
-COPY src/ ./src/
+COPY src/open_storyline/__init__.py src/open_storyline/config.py ./src/open_storyline/
+COPY src/open_storyline/mvp/ ./src/open_storyline/mvp/
+COPY src/open_storyline/utils/__init__.py src/open_storyline/utils/generated_media.py \
+    src/open_storyline/utils/remote_image.py src/open_storyline/utils/remote_stt.py \
+    ./src/open_storyline/utils/
 COPY creative_catalog/ ./creative_catalog/
 COPY scripts/generate_creative_catalog_manifest.py ./scripts/generate_creative_catalog_manifest.py
 COPY web/mvp.html web/mvp-legacy.html ./web/

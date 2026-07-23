@@ -7,7 +7,6 @@ from hashlib import sha256
 import json
 import re
 
-from open_storyline.config import Settings
 from open_storyline.mvp.activity import ActivityService, STAGES, retryable_error
 from open_storyline.mvp.assets import (
     AssetResolutionError,
@@ -157,6 +156,7 @@ from open_storyline.mvp.structured_outputs import (
     VISUAL_UNDERSTANDING_SCHEMA,
     structured_output,
 )
+from open_storyline.mvp.settings import MVPSettings
 from open_storyline.utils.remote_stt import (
     MISTRAL_STT_MODEL,
     MistralSTTClient,
@@ -299,7 +299,7 @@ class MVPJobProcessor:
 
     def __init__(
         self,
-        config: Settings,
+        config: MVPSettings,
         *,
         creative_catalog: CreativeCatalog | None = None,
     ) -> None:

@@ -17,7 +17,6 @@ SRC_DIR = ROOT_DIR / "src"
 if str(SRC_DIR) not in sys.path:
     sys.path.insert(0, str(SRC_DIR))
 
-from open_storyline.config import default_config_path, load_settings
 from open_storyline.mvp.activity import ActivityService
 from open_storyline.mvp.api import create_mvp_router
 from open_storyline.mvp.audit import AuditService
@@ -49,6 +48,7 @@ from open_storyline.mvp.retention import (
     RetentionSettings,
 )
 from open_storyline.mvp.session_media import SessionMediaStore
+from open_storyline.mvp.settings import default_mvp_config_path, load_mvp_settings
 
 
 SESSION_WORKSPACE_MODES = frozenset({"legacy", "enabled"})
@@ -95,7 +95,7 @@ def create_app() -> FastAPI:
 
     @asynccontextmanager
     async def lifespan(app: FastAPI):
-        config = load_settings(default_config_path())
+        config = load_mvp_settings(default_mvp_config_path())
         render_promotion_mode(config.agentic_editing)
         completion_policy(config.agentic_editing)
         delivery_policy(config.agentic_editing)
