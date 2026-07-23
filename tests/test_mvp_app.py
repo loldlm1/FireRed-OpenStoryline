@@ -30,6 +30,20 @@ class MVPAppBoundaryTests(unittest.IsolatedAsyncioTestCase):
             self.assertIn(directive, csp)
         self.assertNotIn("'unsafe-inline'", csp)
         self.assertNotIn("'unsafe-eval'", csp)
+        self.assertNotIn("cross-origin-opener-policy", response.headers)
+
+    async def test_trustworthy_origin_receives_opener_isolation(self):
+        app = create_app()
+        transport = httpx.ASGITransport(app=app)
+        async with httpx.AsyncClient(
+            transport=transport, base_url="https://example.test"
+        ) as client:
+            response = await client.get("/")
+
+        self.assertEqual(
+            response.headers["cross-origin-opener-policy"],
+            "same-origin",
+        )
 
     async def test_workspace_static_assets_are_scoped_and_not_cached(self):
         app = create_app()

@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 from contextlib import asynccontextmanager
+from ipaddress import ip_address
 from pathlib import Path
+from urllib.parse import urlsplit
 import hmac
 import sys
 import time
@@ -67,6 +69,20 @@ WORKSPACE_CONTENT_SECURITY_POLICY = "; ".join(
         "manifest-src 'self'",
     )
 )
+
+
+def _browser_origin_is_trustworthy(origin: str) -> bool:
+    parsed = urlsplit(str(origin or ""))
+    if parsed.scheme == "https":
+        return True
+    if parsed.scheme != "http" or not parsed.hostname:
+        return False
+    if parsed.hostname == "localhost":
+        return True
+    try:
+        return ip_address(parsed.hostname).is_loopback
+    except ValueError:
+        return False
 
 
 def create_app() -> FastAPI:
@@ -236,7 +252,14 @@ def create_app() -> FastAPI:
             response.headers["Content-Security-Policy"] = (
                 WORKSPACE_CONTENT_SECURITY_POLICY
             )
-            response.headers["Cross-Origin-Opener-Policy"] = "same-origin"
+            service = app.state.auth_service
+            browser_origin = (
+                service.settings.public_origin
+                if service is not None
+                else str(request.base_url)
+            )
+            if _browser_origin_is_trustworthy(browser_origin):
+                response.headers["Cross-Origin-Opener-Policy"] = "same-origin"
             response.headers["Cross-Origin-Resource-Policy"] = "same-origin"
         return response
 
