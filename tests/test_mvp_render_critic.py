@@ -303,15 +303,11 @@ class RenderCriticTests(unittest.IsolatedAsyncioTestCase):
                 mode="report",
             )
 
-    async def test_response_rejects_unknown_evidence_invalid_windows_and_duplicates(self):
+    async def test_response_rejects_unknown_evidence_duplicates_and_extra_fields(self):
         cases = []
         unknown = _response()
         unknown["findings"][0]["evidence_ids"] = ["ev-" + "9" * 24]
         cases.append(unknown)
-        invalid_window = _response()
-        invalid_window["findings"][0]["start_ms"] = 1500
-        invalid_window["findings"][0]["end_ms"] = 500
-        cases.append(invalid_window)
         duplicate = _response()
         duplicate["findings"] = [duplicate["findings"][0], dict(duplicate["findings"][0])]
         cases.append(duplicate)
@@ -359,6 +355,22 @@ class RenderCriticTests(unittest.IsolatedAsyncioTestCase):
         finding = report["findings"][0]
         self.assertEqual(finding["start_ms"], 500)
         self.assertEqual(finding["end_ms"], 4000)
+        self.assertTrue(finding["window_normalized"])
+
+    async def test_non_positive_window_uses_authoritative_evidence_timestamps(self):
+        response = _response()
+        response["findings"][0]["start_ms"] = 1500
+        response["findings"][0]["end_ms"] = 500
+        report = await review_render_evidence(
+            self.manifest,
+            image_data_urls=self.images,
+            client=FakeClient(response=response),
+            editing_prompt="safe prompt",
+            mode="report",
+        )
+        finding = report["findings"][0]
+        self.assertEqual(finding["start_ms"], 1000)
+        self.assertEqual(finding["end_ms"], 1001)
         self.assertTrue(finding["window_normalized"])
 
     async def test_provider_failure_is_sanitized_and_non_mutating(self):

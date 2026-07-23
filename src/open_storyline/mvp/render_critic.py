@@ -221,10 +221,7 @@ def _validate_response(
     fingerprints: set[str] = set()
     findings: list[dict[str, Any]] = []
     for item in response.findings:
-        if (
-            item.end_ms <= item.start_ms
-            or item.clip_index not in clip_durations
-        ):
+        if item.clip_index not in clip_durations:
             raise RenderCriticError(
                 "RENDER_CRITIC_EVIDENCE_INVALID",
                 "critic finding window is invalid",
@@ -272,9 +269,15 @@ def _validate_response(
             frame.timestamp_ms for frame in referenced if frame is not None
         )
         clip_duration = clip_durations[item.clip_index]
-        start_ms = item.start_ms
-        end_ms = min(item.end_ms, clip_duration)
-        window_normalized = end_ms != item.end_ms
+        if item.end_ms <= item.start_ms:
+            # Valid evidence can repair malformed window metadata without a retry.
+            start_ms = min(referenced_timestamps)
+            end_ms = min(clip_duration, max(referenced_timestamps) + 1)
+            window_normalized = True
+        else:
+            start_ms = item.start_ms
+            end_ms = min(item.end_ms, clip_duration)
+            window_normalized = end_ms != item.end_ms
         if end_ms <= start_ms:
             raise RenderCriticError(
                 "RENDER_CRITIC_EVIDENCE_INVALID",
