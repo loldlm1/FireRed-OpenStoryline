@@ -329,6 +329,22 @@ class RenderCriticTests(unittest.IsolatedAsyncioTestCase):
                         mode="report",
                     )
 
+    async def test_evidence_timestamp_normalizes_a_valid_but_misaligned_window(self):
+        response = _response()
+        response["findings"][0]["start_ms"] = 1500
+        response["findings"][0]["end_ms"] = 2000
+        report = await review_render_evidence(
+            self.manifest,
+            image_data_urls=self.images,
+            client=FakeClient(response=response),
+            editing_prompt="safe prompt",
+            mode="report",
+        )
+        finding = report["findings"][0]
+        self.assertEqual(finding["start_ms"], 1000)
+        self.assertEqual(finding["end_ms"], 2000)
+        self.assertTrue(finding["window_normalized"])
+
     async def test_provider_failure_is_sanitized_and_non_mutating(self):
         client = FakeClient(error=RuntimeError("provider body unavailable"))
         report = await review_render_evidence(

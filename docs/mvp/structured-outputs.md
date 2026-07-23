@@ -72,6 +72,15 @@ only when original and repaired candidates are materially different and both
 survive deterministic gates; a single candidate, unchanged evidence, or a
 technical blocker produces a no-call outcome.
 
+Critic evidence IDs are authoritative for clip and timestamp alignment. When a
+schema-valid finding cites known same-clip evidence but its otherwise valid
+window excludes one of those timestamps, deterministic validation expands the
+window just enough to include the cited evidence and records
+`window_normalized=true`. This metadata repair does not change the critic's
+creative judgment and avoids a redundant provider call. Unknown evidence,
+cross-clip references, invalid windows, and unsupported capabilities still fail
+closed.
+
 The deploy wrapper runs Responses-based strict acceptance and extra-field
 rejection probes whenever `json_schema` mode is selected. A failed probe blocks
 deployment. Run the isolated probe directly with:

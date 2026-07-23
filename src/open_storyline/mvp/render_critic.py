@@ -269,22 +269,35 @@ def _validate_response(
                 "RENDER_CRITIC_EVIDENCE_INVALID",
                 "critic evidence clip does not match the finding",
             )
+        referenced_timestamps = tuple(
+            frame.timestamp_ms for frame in referenced if frame is not None
+        )
+        window_normalized = False
+        start_ms = item.start_ms
+        end_ms = item.end_ms
         if any(
-            frame.timestamp_ms < item.start_ms or frame.timestamp_ms >= item.end_ms
-            for frame in referenced
-            if frame is not None
+            timestamp < start_ms or timestamp >= end_ms
+            for timestamp in referenced_timestamps
         ):
-            raise RenderCriticError(
-                "RENDER_CRITIC_EVIDENCE_INVALID",
-                "critic evidence timestamp is outside the finding window",
-            )
+            # Evidence timestamps are authoritative; repair only the metadata
+            # window instead of spending a second creative call on alignment.
+            start_ms = min(start_ms, min(referenced_timestamps))
+            end_ms = max(end_ms, max(referenced_timestamps) + 1)
+            start_ms = max(0, start_ms)
+            end_ms = min(clip_durations[item.clip_index], end_ms)
+            if end_ms <= start_ms:
+                raise RenderCriticError(
+                    "RENDER_CRITIC_EVIDENCE_INVALID",
+                    "critic evidence timestamp cannot fit the finding window",
+                )
+            window_normalized = True
         fingerprint = _hash_json({
             "call_fingerprint": call_fingerprint,
             "category": item.category,
             "classification": item.classification,
             "clip_index": item.clip_index,
-            "start_ms": item.start_ms,
-            "end_ms": item.end_ms,
+            "start_ms": start_ms,
+            "end_ms": end_ms,
             "evidence_ids": sorted(evidence_ids),
             "repair_objective": item.repair_objective,
         })
@@ -304,9 +317,10 @@ def _validate_response(
             "classification": item.classification,
             "confidence": item.confidence,
             "clip_index": item.clip_index,
-            "start_ms": item.start_ms,
-            "end_ms": item.end_ms,
+            "start_ms": start_ms,
+            "end_ms": end_ms,
             "evidence_ids": list(evidence_ids),
+            "window_normalized": window_normalized,
             "explanation": sanitize_text(item.explanation, limit=600),
             "repair_objective": sanitize_text(item.repair_objective, limit=320),
             "requested_capabilities": list(item.requested_capabilities),
