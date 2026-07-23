@@ -21,10 +21,12 @@ class MVPImportBoundaryTests(unittest.TestCase):
 
             forbidden = (
                 "open_storyline.agent",
+                "open_storyline.config",
                 "open_storyline.mcp",
                 "open_storyline.nodes",
                 "open_storyline.skills",
                 "open_storyline.storage",
+                "open_storyline.utils",
                 "langchain",
             )
             original_import = builtins.__import__
@@ -96,5 +98,7 @@ class MVPImportBoundaryTests(unittest.TestCase):
         self.assertNotIn("COPY src/ ./src/", dockerfile)
         self.assertIn("COPY src/open_storyline/mvp/ ./src/open_storyline/mvp/", dockerfile)
         self.assertNotIn("src/open_storyline/agent.py", dockerfile)
+        self.assertNotIn("src/open_storyline/config.py", dockerfile)
         self.assertNotIn("src/open_storyline/mcp/", dockerfile)
         self.assertNotIn("src/open_storyline/nodes/", dockerfile)
+        self.assertNotIn("src/open_storyline/utils/", dockerfile)

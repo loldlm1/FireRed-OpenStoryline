@@ -3,7 +3,7 @@
 The remote social-clips MVP uses PostgreSQL as its application database while
 keeping video files on the existing persistent output volume. PostgreSQL runs
 as the private `db` Kamal accessory on the same VPS and does not publish port
-5432. The full local LangChain/MCP profile remains independent.
+5432. It is the only supported application database/runtime profile.
 
 ## Database topology
 

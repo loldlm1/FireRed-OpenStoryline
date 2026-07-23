@@ -24,7 +24,7 @@ from open_storyline.mvp.edit_plan import (
     OverlaySpec,
     TimeWindow,
 )
-from open_storyline.utils.remote_image import (
+from open_storyline.mvp.remote_image import (
     ImageAttempt,
     RemoteImageError,
     RemoteImageResult,

@@ -9,7 +9,7 @@ from unittest.mock import patch
 
 import httpx
 
-from open_storyline.utils.remote_stt import (
+from open_storyline.mvp.remote_stt import (
     MAX_MISTRAL_API_KEYS,
     MISTRAL_STT_ENDPOINT,
     MISTRAL_STT_MODEL,

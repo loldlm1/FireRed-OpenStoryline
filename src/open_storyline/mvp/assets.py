@@ -15,11 +15,11 @@ from open_storyline.mvp.stock import (
     PexelsClient,
     PexelsError,
 )
-from open_storyline.utils.generated_media import (
+from open_storyline.mvp.generated_media import (
     RIGHTS_NOTICE,
     build_original_image_prompt,
 )
-from open_storyline.utils.remote_image import RemoteImageCascade, RemoteImageError
+from open_storyline.mvp.remote_image import RemoteImageCascade, RemoteImageError
 
 
 ASSET_MANIFEST_VERSION = "asset_manifest.v1"

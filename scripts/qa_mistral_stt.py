@@ -16,7 +16,7 @@ sys.path.insert(0, str(ROOT / "src"))
 
 import httpx
 
-from open_storyline.utils.remote_stt import (
+from open_storyline.mvp.remote_stt import (
     MISTRAL_STT_MODEL,
     MistralSTTClient,
     RemoteSTTError,

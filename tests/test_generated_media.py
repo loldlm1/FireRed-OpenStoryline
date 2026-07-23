@@ -4,12 +4,12 @@ import base64
 import json
 import unittest
 
-from open_storyline.utils.generated_media import (
+from open_storyline.mvp.generated_media import (
     ORIGINALITY_SUFFIX,
     build_original_image_prompt,
     generate_remote_media,
 )
-from open_storyline.utils.remote_image import RemoteImageError, RemoteImageResult
+from open_storyline.mvp.remote_image import RemoteImageError, RemoteImageResult
 
 
 PNG = base64.b64decode(

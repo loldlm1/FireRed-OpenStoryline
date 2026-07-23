@@ -38,7 +38,7 @@ from open_storyline.mvp.visual_understanding import (
     RegionObservation,
     VisualUnderstanding,
 )
-from open_storyline.utils.remote_image import ImageAttempt, RemoteImageError, RemoteImageResult
+from open_storyline.mvp.remote_image import ImageAttempt, RemoteImageError, RemoteImageResult
 
 
 PNG = base64.b64decode(

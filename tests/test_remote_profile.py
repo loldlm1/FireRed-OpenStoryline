@@ -27,6 +27,12 @@ class RemoteProfileTests(unittest.TestCase):
         self.assertNotIn("download.sh", dockerfile)
         self.assertNotIn("requirements.txt\n", dockerfile)
 
+    def test_release_wrapper_uses_remote_only_settings(self):
+        wrapper = (ROOT / "bin" / "kamal-mvp").read_text(encoding="utf-8")
+
+        self.assertIn("from open_storyline.mvp.settings import load_mvp_settings", wrapper)
+        self.assertNotIn("from open_storyline.config import", wrapper)
+
     def test_remote_build_context_is_an_explicit_allowlist(self):
         dockerignore = (
             (ROOT / ".dockerignore").read_text(encoding="utf-8").splitlines()
@@ -54,14 +60,8 @@ class RemoteProfileTests(unittest.TestCase):
                 "!src/",
                 "!src/open_storyline/",
                 "!src/open_storyline/__init__.py",
-                "!src/open_storyline/config.py",
                 "!src/open_storyline/mvp/",
                 "!src/open_storyline/mvp/**",
-                "!src/open_storyline/utils/",
-                "!src/open_storyline/utils/__init__.py",
-                "!src/open_storyline/utils/generated_media.py",
-                "!src/open_storyline/utils/remote_image.py",
-                "!src/open_storyline/utils/remote_stt.py",
                 "!web/",
                 "!web/mvp.html",
                 "!web/mvp-legacy.html",
@@ -106,6 +106,8 @@ class RemoteProfileTests(unittest.TestCase):
         self.assertIn("COPY web/mvp.html web/mvp-legacy.html ./web/", dockerfile)
         self.assertIn("COPY web/static/mvp/ ./web/static/mvp/", dockerfile)
         self.assertNotIn("COPY web/ ./web/", dockerfile)
+        self.assertNotIn("src/open_storyline/config.py", dockerfile)
+        self.assertNotIn("src/open_storyline/utils/", dockerfile)
         for module in (
             "activity.js",
             "api.js",

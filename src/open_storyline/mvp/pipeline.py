@@ -157,7 +157,7 @@ from open_storyline.mvp.structured_outputs import (
     structured_output,
 )
 from open_storyline.mvp.settings import MVPSettings
-from open_storyline.utils.remote_stt import (
+from open_storyline.mvp.remote_stt import (
     MISTRAL_STT_MODEL,
     MistralSTTClient,
     RemoteSTTError,
@@ -165,7 +165,7 @@ from open_storyline.utils.remote_stt import (
     STTResult,
     extract_audio_for_stt,
 )
-from open_storyline.utils.remote_image import RemoteImageCascade
+from open_storyline.mvp.remote_image import RemoteImageCascade
 
 
 TRANSCRIPT_CHECKPOINT_VERSION = "transcript_checkpoint.v1"

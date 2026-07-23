@@ -293,11 +293,11 @@ validate_pexels_release_config() {
 from pathlib import Path
 import sys
 
-from open_storyline.config import load_settings
+from open_storyline.mvp.settings import load_mvp_settings
 from open_storyline.mvp.stock import PexelsClient, PexelsError
 
 try:
-    PexelsClient.from_config(load_settings(Path(sys.argv[1])).agentic_editing)
+    PexelsClient.from_config(load_mvp_settings(Path(sys.argv[1])).agentic_editing)
 except PexelsError as exc:
     raise SystemExit(f"{exc.code}: guarded Pexels configuration is not release-ready") from None
 PY

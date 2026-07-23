@@ -18,14 +18,8 @@
 !src/
 !src/open_storyline/
 !src/open_storyline/__init__.py
-!src/open_storyline/config.py
 !src/open_storyline/mvp/
 !src/open_storyline/mvp/**
-!src/open_storyline/utils/
-!src/open_storyline/utils/__init__.py
-!src/open_storyline/utils/generated_media.py
-!src/open_storyline/utils/remote_image.py
-!src/open_storyline/utils/remote_stt.py
 !web/
 !web/mvp.html
 !web/mvp-legacy.html

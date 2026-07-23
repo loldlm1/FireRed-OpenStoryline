@@ -9,7 +9,7 @@ import json
 import os
 import time
 
-from open_storyline.utils.remote_image import RemoteImageCascade
+from open_storyline.mvp.remote_image import RemoteImageCascade
 
 
 ORIGINALITY_SUFFIX = (
