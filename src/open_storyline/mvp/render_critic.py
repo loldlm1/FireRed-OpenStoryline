@@ -224,7 +224,6 @@ def _validate_response(
         if (
             item.end_ms <= item.start_ms
             or item.clip_index not in clip_durations
-            or item.end_ms > clip_durations[item.clip_index]
         ):
             raise RenderCriticError(
                 "RENDER_CRITIC_EVIDENCE_INVALID",
@@ -272,9 +271,15 @@ def _validate_response(
         referenced_timestamps = tuple(
             frame.timestamp_ms for frame in referenced if frame is not None
         )
-        window_normalized = False
+        clip_duration = clip_durations[item.clip_index]
         start_ms = item.start_ms
-        end_ms = item.end_ms
+        end_ms = min(item.end_ms, clip_duration)
+        window_normalized = end_ms != item.end_ms
+        if end_ms <= start_ms:
+            raise RenderCriticError(
+                "RENDER_CRITIC_EVIDENCE_INVALID",
+                "critic finding window is invalid",
+            )
         if any(
             timestamp < start_ms or timestamp >= end_ms
             for timestamp in referenced_timestamps
@@ -284,7 +289,7 @@ def _validate_response(
             start_ms = min(start_ms, min(referenced_timestamps))
             end_ms = max(end_ms, max(referenced_timestamps) + 1)
             start_ms = max(0, start_ms)
-            end_ms = min(clip_durations[item.clip_index], end_ms)
+            end_ms = min(clip_duration, end_ms)
             if end_ms <= start_ms:
                 raise RenderCriticError(
                     "RENDER_CRITIC_EVIDENCE_INVALID",

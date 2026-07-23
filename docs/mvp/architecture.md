@@ -1,7 +1,8 @@
 # Remote-only video MVP
 
-This fork adds an opt-in MVP for turning one source video into several social
-clips. The MVP is deliberately CPU-first and does not run local AI models.
+This repository ships a remote-only Agentic MVP for turning one source video
+into one or several bounded social clips. It is deliberately CPU-first and does
+not run local AI models.
 
 ## Non-negotiable runtime policy
 
@@ -23,18 +24,19 @@ clips. The MVP is deliberately CPU-first and does not run local AI models.
   ordinals, categories, latency, cooldown, and request-sent state are retained;
   credentials, transcripts, audio, and provider response bodies are not logged.
 
-The original OpenStoryline workflow remains available. The new MVP path is
-isolated so upstream behavior can continue to be merged into this fork.
+The full local OpenStoryline application and the legacy remote editor are
+retired. Historical workflow-version-1 rows and media remain read-only audit
+history under the documented retention policy; they cannot enter the worker.
 
 ## Data flow
 
 1. The browser authenticates with the single project password. The server
    returns an opaque, revocable session cookie and a separate CSRF cookie;
    neither the password nor a reusable API token is stored by JavaScript.
-2. With workspace mode enabled, the browser creates a workflow-version-2
-   editing session and uploads one source video in resumable, offset-checked
-   chunks. The server validates the completed file with FFprobe, records its
-   size and SHA-256, and makes it immutable under
+2. The browser creates a workflow-version-2 Agentic editing session and uploads
+   one source video in resumable, offset-checked chunks. The server validates
+   the completed file with FFprobe, records its size and SHA-256, and makes it
+   immutable under
    `outputs/mvp_sessions/<session_id>/input/`.
 3. The browser creates an immutable prompt version. PostgreSQL atomically
    allocates its first run attempt and references the session source; no media
@@ -47,7 +49,7 @@ isolated so upstream behavior can continue to be merged into this fork.
    through 9Router and returns a structured clip plan.
 7. The server validates duration, bounds, overlap, and output count, then
    samples every selected source window independently for crop evidence.
-8. In agentic render mode, the server validates an executable edit plan and
+8. The Agentic editor validates an executable edit plan and
    same-window crop coverage, performs at most one bounded visual re-analysis
    and replan when coverage is insufficient, then runs the shared repairable
    defect detector before any render call. A strict primary plan-repair batch
@@ -173,11 +175,12 @@ isolated so upstream behavior can continue to be merged into this fork.
   body, cannot authorize actions or modify the edit plan, and degrades to an
   unavailable review note on provider failure.
 - `OPENSTORYLINE_POST_RENDER_REVIEW_MODE=off|shadow|report|enforce` is an
-  operator rollout control, not an editor mode. Sprint-5 `shadow` and `report`
-  create a bounded `render_critic.json` advisory report after final rendered
-  evidence; they cannot change the plan, candidate, effects, or promotion.
-  `enforce` remains rejected by rollout validation until bounded post-render
-  repair is available. The critic checkpoint stores only sanitized metadata,
+  operator rollout control, not an editor mode. `shadow` and `report` create a
+  bounded `render_critic.json` advisory report after final rendered evidence;
+  they cannot change the plan, candidate, effects, or promotion. `enforce`
+  activates the bounded typed post-render repair and candidate comparison path.
+  Critic or repair unavailability becomes a truthful creative limitation and
+  never selects a legacy renderer. Checkpoints store only sanitized metadata,
   stable finding fingerprints, attribution, and lifecycle state.
 - Optional FFMPEGA finishing runs in a separate, non-root, model-free container
   built from pinned upstream commit

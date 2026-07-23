@@ -175,9 +175,9 @@ The production claim is therefore scoped to the tested uploaded source, the
 authoritative prompt, the one targeted effect prompt, and the exact final image.
 It is not a cross-source, cross-niche, or 99%-reliability statement.
 
-This evidence closes the implementation plan. Manual QA with newly uploaded
-sessions remains normal operator validation and does not reopen the completed
-implementation sequence.
+This evidence closed the earlier defect-repair rollout. The adaptive rendered
+review upgrade below supersedes its final-image implementation evidence without
+turning the older result into a broad quality claim.
 
 ## Rollback
 
