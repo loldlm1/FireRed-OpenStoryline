@@ -6,6 +6,7 @@ import json
 import unittest
 
 from open_storyline.mvp.edit_plan import build_shadow_edit_plan, validate_edit_plan
+from open_storyline.mvp.ffmpega import EffectsPlan, validate_effects
 from open_storyline.mvp.post_render_repair import (
     PostRenderRepairError,
     PostRenderRepairState,
@@ -85,6 +86,17 @@ def _finding(*, severity="warning", confidence=0.9):
     }
 
 
+def _effect_finding():
+    return {
+        **_finding(),
+        "finding_id": "finding-" + "4" * 24,
+        "finding_fingerprint": "5" * 64,
+        "category": "effects",
+        "repair_objective": "Reduce the vignette so the frame stays open.",
+        "requested_capabilities": ["effect"],
+    }
+
+
 def _response(base_plan, *, no_change=False):
     clip = copy.deepcopy(base_plan.clips[0].model_dump(mode="json"))
     if not no_change:
@@ -94,6 +106,7 @@ def _response(base_plan, *, no_change=False):
         "decisions": [{
             "finding_id": _finding()["finding_id"],
             "decision": "no_change" if no_change else "repair",
+            "target": "none" if no_change else "clip_plan",
             "reason": "The typed zoom is supported." if not no_change else "No safe change.",
             "affected_clip_indexes": [] if no_change else [1],
         }],
@@ -103,6 +116,8 @@ def _response(base_plan, *, no_change=False):
             else [*base_plan.requested_capabilities, "focus_zoom"]
         ),
         "clips": [] if no_change else [clip],
+        "effect_action": "preserve",
+        "effect_plan": {"effects": []},
     }
 
 
@@ -139,6 +154,7 @@ class FakeClient:
 class PostRenderRepairTests(unittest.IsolatedAsyncioTestCase):
     def setUp(self):
         self.plan = _plan()
+        self.effects = EffectsPlan(effects=[])
         self.manifest = _manifest()
         self.images = {"ev-" + "a" * 24: "data:image/jpeg;base64,ZmFrZQ=="}
 
@@ -158,6 +174,7 @@ class PostRenderRepairTests(unittest.IsolatedAsyncioTestCase):
             manifest=self.manifest,
             image_data_urls=self.images,
             base_plan=self.plan,
+            base_effects=self.effects,
             findings=(_finding(),),
             editing_prompt="Improve the opening framing.",
             round_name="primary",
@@ -172,7 +189,7 @@ class PostRenderRepairTests(unittest.IsolatedAsyncioTestCase):
             1.2,
         )
         call = client.calls[0]
-        self.assertEqual(call["schema_name"], "post_render_repair.v1")
+        self.assertEqual(call["schema_name"], "post_render_repair.v2")
         self.assertEqual(len(call["image_data_urls"]), 1)
         self.assertNotIn("data:image", json.dumps(proposal.to_report_dict()))
 
@@ -181,6 +198,7 @@ class PostRenderRepairTests(unittest.IsolatedAsyncioTestCase):
             manifest=self.manifest,
             image_data_urls=self.images,
             base_plan=self.plan,
+            base_effects=self.effects,
             findings=(_finding(),),
             editing_prompt="Keep it restrained.",
             round_name="primary",
@@ -190,6 +208,64 @@ class PostRenderRepairTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(proposal.status, "no_change")
         self.assertIsNone(proposal.candidate_plan)
         self.assertEqual(proposal.affected_clip_indexes, ())
+
+    async def test_effect_repair_replaces_only_an_allowlisted_typed_plan(self):
+        current = validate_effects({
+            "effects": [{"skill": "vignette", "params": {"intensity": 0.8}}],
+        })
+        response = {
+            "status": "repair",
+            "decisions": [{
+                "finding_id": _effect_finding()["finding_id"],
+                "decision": "repair",
+                "target": "effect_plan",
+                "reason": "The finishing treatment is too strong.",
+                "affected_clip_indexes": [1],
+            }],
+            "requested_capabilities": list(self.plan.requested_capabilities),
+            "clips": [],
+            "effect_action": "replace",
+            "effect_plan": {
+                "effects": [{
+                    "skill": "vignette",
+                    "params": {"intensity": 0.25},
+                }],
+            },
+        }
+        proposal = await request_post_render_repair(
+            manifest=self.manifest,
+            image_data_urls=self.images,
+            base_plan=self.plan,
+            base_effects=current,
+            findings=(_effect_finding(),),
+            editing_prompt="Use a subtle finish.",
+            round_name="primary",
+            client=FakeClient(response),
+            plan_validator=self._validator,
+        )
+        self.assertIsNone(proposal.candidate_plan)
+        self.assertEqual(proposal.effect_affected_clip_indexes, (1,))
+        self.assertEqual(proposal.candidate_effects.effects[0].params["intensity"], 0.25)
+
+        blocked = copy.deepcopy(response)
+        blocked["effect_plan"] = {
+            "effects": [{
+                "skill": "fade",
+                "params": {"type": "in", "start": 0.0, "duration": 1.0},
+            }],
+        }
+        with self.assertRaises(PostRenderRepairError):
+            await request_post_render_repair(
+                manifest=self.manifest,
+                image_data_urls=self.images,
+                base_plan=self.plan,
+                base_effects=current,
+                findings=(_effect_finding(),),
+                editing_prompt="Use a subtle finish.",
+                round_name="primary",
+                client=FakeClient(blocked),
+                plan_validator=self._validator,
+            )
 
     async def test_response_rejects_omitted_findings_and_protected_mutations(self):
         omitted = _response(self.plan)
@@ -203,6 +279,7 @@ class PostRenderRepairTests(unittest.IsolatedAsyncioTestCase):
                         manifest=self.manifest,
                         image_data_urls=self.images,
                         base_plan=self.plan,
+                        base_effects=self.effects,
                         findings=(_finding(),),
                         editing_prompt="safe prompt",
                         round_name="primary",
@@ -215,6 +292,7 @@ class PostRenderRepairTests(unittest.IsolatedAsyncioTestCase):
             manifest=self.manifest,
             image_data_urls=self.images,
             base_plan=self.plan,
+            base_effects=self.effects,
             findings=(_finding(),),
             editing_prompt="safe prompt",
             round_name="primary",
@@ -229,6 +307,7 @@ class PostRenderRepairTests(unittest.IsolatedAsyncioTestCase):
             manifest=self.manifest,
             image_data_urls=self.images,
             base_plan=self.plan,
+            base_effects=self.effects,
             findings=(_finding(),),
             editing_prompt="safe prompt",
             round_name="primary",
@@ -239,6 +318,7 @@ class PostRenderRepairTests(unittest.IsolatedAsyncioTestCase):
             repaired.to_checkpoint_payload(),
             expected_request_fingerprint=repaired.request_fingerprint,
             base_plan=self.plan,
+            base_effects=self.effects,
         )
         self.assertTrue(restored.checkpoint_reused)
         self.assertEqual(restored.provider_calls, 0)
@@ -247,6 +327,7 @@ class PostRenderRepairTests(unittest.IsolatedAsyncioTestCase):
                 repaired.to_checkpoint_payload(),
                 expected_request_fingerprint="0" * 64,
                 base_plan=self.plan,
+                base_effects=self.effects,
             )
 
     def test_call_cap_contingency_gate_and_fingerprint_efficiency(self):
@@ -261,6 +342,7 @@ class PostRenderRepairTests(unittest.IsolatedAsyncioTestCase):
         first = post_render_repair_fingerprint(
             manifest=self.manifest,
             base_plan=self.plan,
+            base_effects=self.effects,
             findings=(_finding(),),
             editing_prompt="a" * 12_000,
             round_name="primary",
@@ -270,6 +352,7 @@ class PostRenderRepairTests(unittest.IsolatedAsyncioTestCase):
         same_payload = post_render_repair_fingerprint(
             manifest=self.manifest,
             base_plan=self.plan,
+            base_effects=self.effects,
             findings=(_finding(),),
             editing_prompt=("a" * 12_000) + "ignored",
             round_name="primary",
@@ -279,6 +362,7 @@ class PostRenderRepairTests(unittest.IsolatedAsyncioTestCase):
         changed = post_render_repair_fingerprint(
             manifest=self.manifest,
             base_plan=self.plan,
+            base_effects=self.effects,
             findings=(_finding(),),
             editing_prompt="a" * 12_000,
             round_name="primary",

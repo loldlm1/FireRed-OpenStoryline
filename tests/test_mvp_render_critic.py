@@ -14,6 +14,7 @@ from open_storyline.mvp.render_critic import (
 )
 from open_storyline.mvp.render_evidence import (
     EvidenceClip,
+    EffectExecutionEvidence,
     EvidenceFrame,
     EvidenceLimits,
     RenderEvidenceManifest,
@@ -174,6 +175,66 @@ class RenderCriticTests(unittest.IsolatedAsyncioTestCase):
             [1, 2],
         )
         self.assertNotIn("data:image", json.dumps(report))
+
+    async def test_effect_findings_require_final_executed_effect_evidence(self):
+        effect_execution = EffectExecutionEvidence(
+            status="executed",
+            planned_skills=("vignette",),
+            executed_skills=("vignette",),
+            planned_effects_sha256="4" * 64,
+            executed_effects_sha256="4" * 64,
+            before_effect_sha256="5" * 64,
+            after_effect_sha256="e" * 64,
+        )
+        clip = self.manifest.clips[0].model_copy(
+            update={"effect_execution": effect_execution}
+        )
+        manifest = self.manifest.model_copy(update={"clips": (clip,)})
+        response = _response()
+        response["findings"][0].update({
+            "finding_key": "effect-vignette-1",
+            "category": "effects",
+            "explanation": "The vignette obscures edge detail.",
+            "repair_objective": "Reduce the vignette intensity.",
+            "requested_capabilities": ["effect"],
+        })
+        client = FakeClient(response=response)
+        report = await review_render_evidence(
+            manifest,
+            image_data_urls=self.images,
+            client=client,
+            editing_prompt="Use a restrained finish.",
+            mode="enforce",
+        )
+        prompt = json.loads(client.calls[0]["user_prompt"])
+        self.assertEqual(prompt["effect_execution"][0]["status"], "executed")
+        self.assertEqual(
+            prompt["effect_execution"][0]["before_effect_sha256"],
+            "5" * 64,
+        )
+        self.assertEqual(report["findings"][0]["category"], "effects")
+
+        omitted = effect_execution.model_copy(update={
+            "status": "omitted",
+            "executed_skills": (),
+            "after_effect_sha256": "5" * 64,
+            "reason_code": "FFMPEGA_UNAVAILABLE",
+        })
+        omitted_clip = self.manifest.clips[0].model_copy(update={
+            "output_sha256": "5" * 64,
+            "effect_execution": omitted,
+        })
+        omitted_manifest = self.manifest.model_copy(update={
+            "clips": (omitted_clip,),
+        })
+        with self.assertRaises(RenderCriticError):
+            await review_render_evidence(
+                omitted_manifest,
+                image_data_urls=self.images,
+                client=FakeClient(response=response),
+                editing_prompt="Use a restrained finish.",
+                mode="enforce",
+            )
 
     async def test_identical_call_fingerprint_suppresses_redundant_provider_call(self):
         fingerprint = critic_call_fingerprint(

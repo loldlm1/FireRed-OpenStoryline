@@ -356,6 +356,7 @@ def compact_render_evidence_observability(manifest: dict[str, Any]) -> dict[str,
         reasons.update(selected)
         frames = _records(clip.get("frames"), limit=32)
         bursts = _records(clip.get("bursts"), limit=16)
+        effect_execution = _mapping(clip.get("effect_execution"))
         clips.append({
             "clip_index": _integer(clip.get("clip_index"), minimum=1, maximum=50),
             "frame_count": len(frames),
@@ -365,6 +366,37 @@ def compact_render_evidence_observability(manifest: dict[str, Any]) -> dict[str,
                 for frame in frames
             ),
             "selected_reasons": selected,
+            "effect_execution": {
+                "status": _token(effect_execution.get("status"), limit=20),
+                "planned_skills": [
+                    _token(item, limit=40)
+                    for item in effect_execution.get("planned_skills") or ()
+                ][:5],
+                "executed_skills": [
+                    _token(item, limit=40)
+                    for item in effect_execution.get("executed_skills") or ()
+                ][:5],
+                "reason_code": _token(
+                    effect_execution.get("reason_code"),
+                    limit=80,
+                ),
+                "before_effect_sha256": (
+                    str(effect_execution.get("before_effect_sha256") or "")
+                    if re.fullmatch(
+                        r"[a-f0-9]{64}",
+                        str(effect_execution.get("before_effect_sha256") or ""),
+                    )
+                    else ""
+                ),
+                "after_effect_sha256": (
+                    str(effect_execution.get("after_effect_sha256") or "")
+                    if re.fullmatch(
+                        r"[a-f0-9]{64}",
+                        str(effect_execution.get("after_effect_sha256") or ""),
+                    )
+                    else ""
+                ),
+            },
         })
     return {
         "version": RENDER_EVIDENCE_OBSERVABILITY_VERSION,

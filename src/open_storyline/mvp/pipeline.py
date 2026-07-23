@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Any, Sequence
+from typing import Any, Mapping, Sequence
 import asyncio
 from hashlib import sha256
 import json
@@ -44,6 +44,7 @@ from open_storyline.mvp.defects import (
 from open_storyline.mvp.ffmpega import (
     AGENTIC_FINISHING_SKILLS,
     DETERMINISTIC_SKILLS,
+    EffectsPlan,
     EffectsPlanner,
     FFMPEGAClient,
     FFMPEGAError,
@@ -55,6 +56,7 @@ from open_storyline.mvp.frame_quality import (
     build_frame_quality_report,
 )
 from open_storyline.mvp.render_evidence import (
+    EffectExecutionEvidence,
     RenderedCandidate,
     build_render_evidence,
     derive_evidence_events,
@@ -209,7 +211,58 @@ GLOBAL_ANALYSIS_CHECKPOINT_VERSION = "global_analysis_checkpoint.v1"
 CLIP_ANALYSIS_CHECKPOINT_VERSION = "clip_analysis_checkpoint.v1"
 VISUAL_REPAIR_CHECKPOINT_VERSION = "visual_repair_checkpoint.v1"
 PLAN_REPAIR_CHECKPOINT_VERSION = "plan_repair_checkpoint.v2"
-POST_RENDER_REPAIR_CHECKPOINT_VERSION = "post_render_repair_checkpoint.v1"
+POST_RENDER_REPAIR_CHECKPOINT_VERSION = "post_render_repair_checkpoint.v2"
+
+
+def _file_sha256(path: Path) -> str:
+    digest = sha256()
+    with path.open("rb") as stream:
+        for chunk in iter(lambda: stream.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def _effect_execution_evidence(
+    *,
+    plan: EffectsPlan,
+    before_path: Path,
+    after_path: Path,
+    status: str,
+    reason_code: str = "",
+) -> EffectExecutionEvidence:
+    empty_effects = EffectsPlan(effects=[])
+    executed_plan = plan if status == "executed" else empty_effects
+    return EffectExecutionEvidence(
+        status=status,
+        planned_skills=tuple(effect.skill for effect in plan.effects),
+        executed_skills=tuple(effect.skill for effect in executed_plan.effects),
+        planned_effects_sha256=checkpoint_fingerprint(plan.to_dict()),
+        executed_effects_sha256=checkpoint_fingerprint(executed_plan.to_dict()),
+        before_effect_sha256=_file_sha256(before_path),
+        after_effect_sha256=_file_sha256(after_path),
+        reason_code=str(reason_code or "")[:80],
+    )
+
+
+def _effect_execution_summary(
+    records: Mapping[int, EffectExecutionEvidence],
+) -> dict[str, Any]:
+    return {
+        "clips": len(records),
+        "statuses": {
+            status: sum(1 for item in records.values() if item.status == status)
+            for status in ("not_requested", "executed", "omitted")
+        },
+        "planned_skills": sorted({
+            skill for item in records.values() for skill in item.planned_skills
+        }),
+        "executed_skills": sorted({
+            skill for item in records.values() for skill in item.executed_skills
+        }),
+        "omission_codes": sorted({
+            item.reason_code for item in records.values() if item.reason_code
+        }),
+    }
 
 
 def _merge_agentic_render_results(
@@ -312,6 +365,8 @@ def _move_repaired_rendered_to_output(
 
     def replace_file(source: Path | None, destination: Path | None) -> Path | None:
         if source is None or destination is None:
+            return destination
+        if source.resolve() == destination.resolve():
             return destination
         source.replace(destination)
         return destination
@@ -3889,10 +3944,12 @@ class MVPJobProcessor:
             kind="render_quality_profile",
         )
         agentic_manifest["render_quality_profile"] = names.render_quality_profile
-        effects_plan = None
+        effects_plan = EffectsPlan(effects=[])
+        effect_planning_error = ""
         final_outputs = []
         qa_inputs: list[QAInput] = []
         pending_artifacts: list[tuple[Path, str]] = []
+        effect_execution_by_clip: dict[int, EffectExecutionEvidence] = {}
         ffmpega = None
         if ffmpega_enabled(self.config.ffmpega):
             await activity.stage(job_id, "planning_effects")
@@ -3908,7 +3965,10 @@ class MVPJobProcessor:
                     ),
                 )
             except (FFMPEGAError, NineRouterError) as exc:
-                effects_plan = None
+                effects_plan = EffectsPlan(effects=[])
+                effect_planning_error = str(
+                    getattr(exc, "code", "EFFECT_PLANNING_FAILED")
+                )[:80]
                 fallback_entries = merge_fallback_entries(
                     fallback_entries,
                     (FallbackEntry(
@@ -3917,10 +3977,10 @@ class MVPJobProcessor:
                         segment_id="finishing",
                         requested="ffmpega_effect_plan",
                         executed="native_ffmpeg_render",
-                        reason=str(getattr(exc, "code", "EFFECT_PLANNING_FAILED"))[:240],
+                        reason=effect_planning_error,
                     ),),
                 )
-            if effects_plan is not None and effects_plan.effects:
+            if effects_plan.effects:
                 ffmpega = FFMPEGAClient.from_config(self.config.ffmpega)
             await activity.emit_safely(
                 job_id,
@@ -3941,9 +4001,27 @@ class MVPJobProcessor:
                 message_key="activity.planning.effects_skipped",
                 progress=STAGES["planning_effects"].progress,
             )
-        for item in rendered:
+        native_agentic_result = (
+            agentic_result
+            if agentic_requested and server_mode == "render"
+            else AgenticRenderResult(
+                rendered=tuple(rendered),
+                execution={
+                    "version": "legacy_render_execution.v1",
+                    "clips": [
+                        {"clip_index": index}
+                        for index in range(1, len(rendered) + 1)
+                    ],
+                    "summary": {"clips": len(rendered)},
+                },
+            )
+        )
+        delivered_rendered: list[RenderedShort] = []
+        for clip_index, item in enumerate(rendered, start=1):
             final_video = item.video_path
-            if ffmpega is not None and effects_plan is not None:
+            effect_status = "omitted" if effect_planning_error else "not_requested"
+            effect_reason = effect_planning_error
+            if ffmpega is not None and effects_plan.effects:
                 enhanced = item.video_path.with_name(f"{item.video_path.stem}-effects.mp4")
                 try:
                     final_video = await ffmpega.apply(
@@ -3952,6 +4030,8 @@ class MVPJobProcessor:
                         plan=effects_plan,
                     )
                 except FFMPEGAError as exc:
+                    effect_status = "omitted"
+                    effect_reason = exc.code
                     fallback_entries = merge_fallback_entries(
                         fallback_entries,
                         (FallbackEntry(
@@ -3965,7 +4045,24 @@ class MVPJobProcessor:
                     )
                     enhanced.unlink(missing_ok=True)
                 else:
-                    item.video_path.unlink(missing_ok=True)
+                    effect_status = "executed"
+                    effect_reason = ""
+            effect_execution_by_clip[clip_index] = _effect_execution_evidence(
+                plan=effects_plan,
+                before_path=item.video_path,
+                after_path=final_video,
+                status=effect_status,
+                reason_code=effect_reason,
+            )
+            delivered = RenderedShort(
+                video_path=final_video,
+                subtitle_path=item.subtitle_path,
+                clip=item.clip,
+                subtitle_layout_path=item.subtitle_layout_path,
+                caption_footprint_path=item.caption_footprint_path,
+                render_quality=item.render_quality,
+            )
+            delivered_rendered.append(delivered)
             pending_artifacts.append((final_video, "video"))
             if item.subtitle_path is not None:
                 pending_artifacts.append((item.subtitle_path, "subtitles"))
@@ -3984,6 +4081,11 @@ class MVPJobProcessor:
                 expected_duration_ms=item.clip.duration_ms,
                 subtitle_path=item.subtitle_path,
             ))
+        agentic_result = AgenticRenderResult(
+            rendered=tuple(delivered_rendered),
+            execution=native_agentic_result.execution,
+        )
+        rendered = delivered_rendered
 
         render_qa_report: dict[str, Any] | None = None
         creative_conformance_report: dict[str, Any] | None = None
@@ -4190,6 +4292,7 @@ class MVPJobProcessor:
                     plan=plan_payload,
                     effects=effects_payload,
                     limits=evidence_config,
+                    effect_execution=effect_execution_by_clip,
                 )
                 evidence_hit = await load_job_checkpoint(
                     job_id=job_id,
@@ -4210,6 +4313,7 @@ class MVPJobProcessor:
                         plan=plan_payload,
                         effects=effects_payload,
                         limits=evidence_config,
+                        effect_execution=effect_execution_by_clip,
                     )
                     evidence = evidence_bundle.manifest
                     track_checkpoint("render_evidence", reused=False)
@@ -4244,6 +4348,9 @@ class MVPJobProcessor:
                     "frame_count": evidence.frame_count,
                     "burst_count": evidence.burst_count,
                     "encoded_bytes": evidence.encoded_bytes,
+                    "effects": _effect_execution_summary(
+                        effect_execution_by_clip
+                    ),
                     "selected_reasons": sorted({
                         reason
                         for clip in evidence.clips
@@ -4320,6 +4427,7 @@ class MVPJobProcessor:
                                 effects=effects_payload,
                                 limits=evidence_config,
                                 checkpoint_reused=True,
+                                effect_execution=effect_execution_by_clip,
                             )
                         critic_report = await review_render_evidence(
                             evidence,
@@ -4388,11 +4496,18 @@ class MVPJobProcessor:
                 "provider_calls": 0,
                 "rounds": 0,
                 "checkpoint_reused": False,
+                "effect_action": "preserve",
+                "effect_affected_clip_indexes": [],
+                "effect_skills": [
+                    effect.skill for effect in effects_plan.effects
+                ],
             }
             repair_records: list[dict[str, Any]] = []
             repair_directories: list[Path] = []
             original_agentic_result = agentic_result
+            original_native_agentic_result = native_agentic_result
             original_edit_plan = edit_plan
+            original_effects_plan = effects_plan
             original_critic_report = render_critic_report
             original_caption_footprints = _caption_footprints(rendered)
             original_candidate_gate = build_render_promotion_report(
@@ -4409,13 +4524,21 @@ class MVPJobProcessor:
             eligible_findings = (
                 eligible_render_findings(
                     render_critic_report or {},
-                    supported_capabilities=REFRAME_RENDER_CAPABILITIES,
+                    supported_capabilities=(
+                        REFRAME_RENDER_CAPABILITIES
+                        | (
+                            {"effect"}
+                            if effects_plan.effects
+                            and all(
+                                item.status == "executed"
+                                for item in effect_execution_by_clip.values()
+                            )
+                            else set()
+                        )
+                    ),
                 )
                 if critic_mode == "enforce"
                 else ()
-            )
-            effects_defer_repair = bool(
-                effects_plan is not None and effects_plan.effects
             )
 
             def validate_post_render_plan(
@@ -4517,12 +4640,7 @@ class MVPJobProcessor:
                     ) from exc
                 return candidate
 
-            if critic_mode == "enforce" and effects_defer_repair:
-                repair_manifest.update({
-                    "status": "deferred_effect_review",
-                    "error_code": "POST_RENDER_EFFECT_REPAIR_DEFERRED",
-                })
-            elif (
+            if (
                 critic_mode == "enforce"
                 and eligible_findings
                 and evidence is not None
@@ -4531,7 +4649,10 @@ class MVPJobProcessor:
             ):
                 repair_state = PostRenderRepairState()
                 base_plan = edit_plan
+                base_effects = effects_plan
+                base_native_result = native_agentic_result
                 base_result = agentic_result
+                base_effect_execution = dict(effect_execution_by_clip)
                 round_findings = eligible_findings
                 contingency_codes: tuple[str, ...] = ()
                 accepted: dict[str, Any] | None = None
@@ -4547,6 +4668,7 @@ class MVPJobProcessor:
                     repair_fingerprint = post_render_repair_fingerprint(
                         manifest=evidence,
                         base_plan=base_plan,
+                        base_effects=base_effects,
                         findings=round_findings,
                         editing_prompt=state["prompt"],
                         round_name=round_name,
@@ -4574,6 +4696,7 @@ class MVPJobProcessor:
                                 repair_hit.payload,
                                 expected_request_fingerprint=repair_fingerprint,
                                 base_plan=base_plan,
+                                base_effects=base_effects,
                             )
                             track_checkpoint(repair_stage, reused=True)
                         else:
@@ -4587,11 +4710,13 @@ class MVPJobProcessor:
                                     effects=effects_payload,
                                     limits=evidence_config,
                                     checkpoint_reused=True,
+                                    effect_execution=effect_execution_by_clip,
                                 )
                             proposal = await request_post_render_repair(
                                 manifest=evidence,
                                 image_data_urls=evidence_bundle.image_data_urls,
                                 base_plan=base_plan,
+                                base_effects=base_effects,
                                 findings=round_findings,
                                 editing_prompt=state["prompt"],
                                 round_name=round_name,
@@ -4603,6 +4728,7 @@ class MVPJobProcessor:
                                         base_plan=base,
                                     )
                                 ),
+                                allowed_effect_skills=AGENTIC_FINISHING_SKILLS,
                             )
                             track_checkpoint(repair_stage, reused=False)
                             await save_job_checkpoint(
@@ -4623,7 +4749,7 @@ class MVPJobProcessor:
                             )
                     except PostRenderRepairError as exc:
                         unavailable_report = {
-                            "version": "post_render_repair.v1",
+                            "version": "post_render_repair.v2",
                             "round": round_name,
                             "status": "unavailable",
                             "request_fingerprint": repair_fingerprint,
@@ -4637,6 +4763,13 @@ class MVPJobProcessor:
                                 for item in round_findings
                             ],
                             "decisions": [],
+                            "effect_action": "preserve",
+                            "base_effects_fingerprint": checkpoint_fingerprint(
+                                base_effects.to_dict()
+                            ),
+                            "candidate_effects_fingerprint": "",
+                            "effect_affected_clip_indexes": [],
+                            "candidate_effect_skills": [],
                             "error_code": exc.code,
                             "provider_calls": 0,
                             "attempts": [],
@@ -4671,7 +4804,10 @@ class MVPJobProcessor:
                     )
                     round_record = proposal.to_report_dict()
                     repair_records.append(round_record)
-                    if proposal.status != "repair" or proposal.candidate_plan is None:
+                    if proposal.status != "repair" or (
+                        proposal.candidate_plan is None
+                        and proposal.candidate_effects is None
+                    ):
                         repair_manifest["status"] = (
                             "no_change"
                             if proposal.status == "no_change"
@@ -4679,11 +4815,35 @@ class MVPJobProcessor:
                         )
                         break
 
+                    candidate_plan = proposal.candidate_plan or base_plan
+                    candidate_effects = proposal.candidate_effects or base_effects
                     changed_clip_indexes = _changed_clip_indexes(
                         base_plan,
-                        proposal.candidate_plan,
+                        candidate_plan,
                     )
                     if changed_clip_indexes != proposal.affected_clip_indexes:
+                        round_record.update({
+                            "candidate_disposition": "rejected",
+                            "error_code": "POST_RENDER_REPAIR_RESPONSE_INVALID",
+                        })
+                        repair_manifest["status"] = "rejected"
+                        break
+                    effect_changed = candidate_effects != base_effects
+                    if effect_changed != bool(proposal.effect_affected_clip_indexes):
+                        round_record.update({
+                            "candidate_disposition": "rejected",
+                            "error_code": "POST_RENDER_REPAIR_RESPONSE_INVALID",
+                        })
+                        repair_manifest["status"] = "rejected"
+                        break
+                    all_clip_indexes = tuple(
+                        int(item.get("clip_index") or 0)
+                        for item in base_result.execution.get("clips") or ()
+                    )
+                    delivery_clip_indexes = (
+                        all_clip_indexes if effect_changed else changed_clip_indexes
+                    )
+                    if not delivery_clip_indexes:
                         round_record.update({
                             "candidate_disposition": "rejected",
                             "error_code": "POST_RENDER_REPAIR_RESPONSE_INVALID",
@@ -4696,31 +4856,109 @@ class MVPJobProcessor:
                     candidate_dir.mkdir(parents=True, exist_ok=True)
                     repair_directories.append(candidate_dir)
                     try:
-                        localized_result = await asyncio.to_thread(
-                            agentic_renderer.render_plan,
-                            source=source,
-                            edit_plan=proposal.candidate_plan,
-                            selected_clips=plan.clips,
-                            visual_understanding=visual_understanding,
-                            transcript_segments=transcript.segments,
-                            destination_dir=candidate_dir,
-                            source_media=media,
-                            crop_hysteresis_ratio=(
-                                self.config.agentic_editing.crop_hysteresis_ratio
-                            ),
-                            crop_smoothing_alpha=(
-                                self.config.agentic_editing.crop_smoothing_alpha
-                            ),
-                            max_crop_velocity_ratio_per_second=(
-                                self.config.agentic_editing.max_crop_velocity_ratio_per_second
-                            ),
-                            resolved_assets=asset_result.paths,
-                            clip_indexes=changed_clip_indexes,
+                        if changed_clip_indexes:
+                            localized_result = await asyncio.to_thread(
+                                agentic_renderer.render_plan,
+                                source=source,
+                                edit_plan=candidate_plan,
+                                selected_clips=plan.clips,
+                                visual_understanding=visual_understanding,
+                                transcript_segments=transcript.segments,
+                                destination_dir=candidate_dir,
+                                source_media=media,
+                                crop_hysteresis_ratio=(
+                                    self.config.agentic_editing.crop_hysteresis_ratio
+                                ),
+                                crop_smoothing_alpha=(
+                                    self.config.agentic_editing.crop_smoothing_alpha
+                                ),
+                                max_crop_velocity_ratio_per_second=(
+                                    self.config.agentic_editing.max_crop_velocity_ratio_per_second
+                                ),
+                                resolved_assets=asset_result.paths,
+                                clip_indexes=changed_clip_indexes,
+                            )
+                            candidate_native_result = _merge_agentic_render_results(
+                                base_native_result,
+                                localized_result,
+                                affected_clip_indexes=changed_clip_indexes,
+                            )
+                        else:
+                            candidate_native_result = base_native_result
+
+                        candidate_effect_execution = dict(base_effect_execution)
+                        delivered_updates: list[RenderedShort] = []
+                        delivered_executions: list[dict[str, Any]] = []
+                        for execution, native_short in zip(
+                            candidate_native_result.execution.get("clips") or (),
+                            candidate_native_result.rendered,
+                        ):
+                            clip_index = int(execution.get("clip_index") or 0)
+                            if clip_index not in delivery_clip_indexes:
+                                continue
+                            final_video = native_short.video_path
+                            effect_status = "not_requested"
+                            effect_reason = ""
+                            previous_execution = base_effect_execution.get(clip_index)
+                            if candidate_effects.effects:
+                                if (
+                                    not effect_changed
+                                    and previous_execution is not None
+                                    and previous_execution.status == "omitted"
+                                ):
+                                    effect_status = "omitted"
+                                    effect_reason = previous_execution.reason_code
+                                else:
+                                    if ffmpega is None:
+                                        ffmpega = FFMPEGAClient.from_config(
+                                            self.config.ffmpega
+                                        )
+                                    enhanced = candidate_dir / (
+                                        f"clip-{clip_index:02d}-effects.mp4"
+                                    )
+                                    final_video = await ffmpega.apply(
+                                        source=native_short.video_path,
+                                        destination=enhanced,
+                                        plan=candidate_effects,
+                                    )
+                                    effect_status = "executed"
+                            candidate_effect_execution[clip_index] = (
+                                _effect_execution_evidence(
+                                    plan=candidate_effects,
+                                    before_path=native_short.video_path,
+                                    after_path=final_video,
+                                    status=effect_status,
+                                    reason_code=effect_reason,
+                                )
+                            )
+                            delivered_updates.append(RenderedShort(
+                                video_path=final_video,
+                                subtitle_path=native_short.subtitle_path,
+                                clip=native_short.clip,
+                                subtitle_layout_path=(
+                                    native_short.subtitle_layout_path
+                                ),
+                                caption_footprint_path=(
+                                    native_short.caption_footprint_path
+                                ),
+                                render_quality=native_short.render_quality,
+                            ))
+                            delivered_executions.append(dict(execution))
+                        localized_delivery = AgenticRenderResult(
+                            rendered=tuple(delivered_updates),
+                            execution={
+                                **candidate_native_result.execution,
+                                "clips": delivered_executions,
+                            },
                         )
-                        candidate_result = _merge_agentic_render_results(
+                        merged_delivery = _merge_agentic_render_results(
                             base_result,
-                            localized_result,
-                            affected_clip_indexes=changed_clip_indexes,
+                            localized_delivery,
+                            affected_clip_indexes=delivery_clip_indexes,
+                        )
+                        candidate_result = AgenticRenderResult(
+                            rendered=merged_delivery.rendered,
+                            execution=candidate_native_result.execution,
                         )
                         candidate_inputs = _qa_inputs_for_rendered(
                             candidate_result.rendered
@@ -4728,7 +4966,7 @@ class MVPJobProcessor:
                         candidate_qa = await generate_creative_qa_artifacts(
                             output_dir=candidate_dir,
                             inputs=candidate_inputs,
-                            edit_plan=proposal.candidate_plan.to_dict(),
+                            edit_plan=candidate_plan.to_dict(),
                             render_execution=candidate_result.execution,
                             intent_conformance=creative_conformance,
                             resolved_assets=asset_result.paths,
@@ -4768,7 +5006,7 @@ class MVPJobProcessor:
                                 candidate_result.rendered
                             ),
                         )
-                        candidate_plan_payload = proposal.candidate_plan.to_dict()
+                        candidate_plan_payload = candidate_plan.to_dict()
                         execution_clips = {
                             int(item.get("clip_index") or 0): item
                             for item in candidate_result.execution.get("clips") or []
@@ -4795,7 +5033,7 @@ class MVPJobProcessor:
                                     quality_clip=quality_clips.get(item.clip_index),
                                     duration_ms=int(item.expected_duration_ms),
                                     has_subtitles=item.subtitle_path is not None,
-                                    effect_count=0,
+                                    effect_count=len(candidate_effects.effects),
                                 ),
                             )
                             for item in candidate_inputs
@@ -4806,14 +5044,15 @@ class MVPJobProcessor:
                             source_sha256=source_hash,
                             render_execution=candidate_result.execution,
                             plan=candidate_plan_payload,
-                            effects={"effects": []},
+                            effects=candidate_effects.to_dict(),
                             limits=evidence_config,
+                            effect_execution=candidate_effect_execution,
                         )
                         candidate_evidence = candidate_evidence_bundle.manifest
                         review_clips = tuple(
                             clip
                             for clip in candidate_evidence.clips
-                            if clip.clip_index in changed_clip_indexes
+                            if clip.clip_index in delivery_clip_indexes
                         )
                         candidate_review_evidence = candidate_evidence.model_copy(
                             update={
@@ -4891,7 +5130,7 @@ class MVPJobProcessor:
                             item
                             for item in original_critic_report.get("findings") or []
                             if int(item.get("clip_index") or 0)
-                            in changed_clip_indexes
+                            in delivery_clip_indexes
                         ]
                         original_affected_critic = {
                             **original_critic_report,
@@ -4909,7 +5148,7 @@ class MVPJobProcessor:
                             item
                             for item in original_critic_report.get("findings") or []
                             if int(item.get("clip_index") or 0)
-                            not in changed_clip_indexes
+                            not in delivery_clip_indexes
                         ]
                         merged_critic_findings = [
                             *unchanged_findings,
@@ -4946,7 +5185,10 @@ class MVPJobProcessor:
                             "localized_render_clip_indexes": list(
                                 changed_clip_indexes
                             ),
-                            "reviewed_clip_indexes": list(changed_clip_indexes),
+                            "reviewed_clip_indexes": list(delivery_clip_indexes),
+                            "effect_affected_clip_indexes": list(
+                                proposal.effect_affected_clip_indexes
+                            ),
                             "candidate_gate": {
                                 "decision": candidate_gate["decision"],
                                 "blocker_codes": candidate_gate["blocker_codes"],
@@ -4960,7 +5202,11 @@ class MVPJobProcessor:
                             and comparison["demonstrated"]
                         ):
                             accepted = {
-                                "plan": proposal.candidate_plan,
+                                "plan": candidate_plan,
+                                "effects": candidate_effects,
+                                "effect_execution": candidate_effect_execution,
+                                "native_result": candidate_native_result,
+                                "delivery_clip_indexes": delivery_clip_indexes,
                                 "result": candidate_result,
                                 "qa": candidate_qa,
                                 "frame_quality": candidate_frame_quality,
@@ -4975,11 +5221,14 @@ class MVPJobProcessor:
                             contingency_codes = new_blocker_codes
                             round_findings = objective_findings_for_contingency(
                                 contingency_codes,
-                                clip_indexes=changed_clip_indexes,
+                                clip_indexes=delivery_clip_indexes,
                                 manifest=candidate_evidence,
                             )
-                            base_plan = proposal.candidate_plan
+                            base_plan = candidate_plan
+                            base_effects = candidate_effects
+                            base_native_result = candidate_native_result
                             base_result = candidate_result
+                            base_effect_execution = candidate_effect_execution
                             evidence = candidate_evidence
                             evidence_bundle = candidate_evidence_bundle
                             continue
@@ -5010,13 +5259,19 @@ class MVPJobProcessor:
                         original_edit_plan,
                         accepted["plan"],
                     )
+                    final_delivery_indexes = tuple(
+                        accepted["delivery_clip_indexes"]
+                    )
                     agentic_result = _move_repaired_rendered_to_output(
                         original_agentic_result,
                         accepted["result"],
-                        affected_clip_indexes=final_changed_indexes,
+                        affected_clip_indexes=final_delivery_indexes,
                     )
                     rendered = list(agentic_result.rendered)
                     edit_plan = accepted["plan"]
+                    effects_plan = accepted["effects"]
+                    effects_payload = effects_plan.to_dict()
+                    effect_execution_by_clip = accepted["effect_execution"]
                     qa_inputs = _qa_inputs_for_rendered(rendered)
                     render_qa_report = accepted["qa"].render_qa
                     creative_conformance_report = accepted["qa"].conformance
@@ -5082,6 +5337,9 @@ class MVPJobProcessor:
                         "frame_count": evidence.frame_count,
                         "burst_count": evidence.burst_count,
                         "encoded_bytes": evidence.encoded_bytes,
+                        "effects": _effect_execution_summary(
+                            effect_execution_by_clip
+                        ),
                     })
                     critic_manifest.update({
                         "status": render_critic_report.get(
@@ -5114,6 +5372,19 @@ class MVPJobProcessor:
                     repair_manifest.update({
                         "selected_candidate": "repaired",
                         "affected_clip_indexes": list(final_changed_indexes),
+                        "effect_affected_clip_indexes": list(
+                            final_delivery_indexes
+                            if effects_plan != original_effects_plan
+                            else ()
+                        ),
+                        "effect_action": (
+                            "replace"
+                            if effects_plan != original_effects_plan
+                            else "preserve"
+                        ),
+                        "effect_skills": [
+                            effect.skill for effect in effects_plan.effects
+                        ],
                         "improvement": accepted["comparison"],
                     })
                     agentic_manifest["qa"] = qa_manifest
@@ -5122,7 +5393,7 @@ class MVPJobProcessor:
 
             repair_manifest["rounds"] = len(repair_records)
             post_render_repair_report = {
-                "version": "post_render_repair.v1",
+                "version": "post_render_repair.v2",
                 **repair_manifest,
                 "round_records": repair_records,
             }
@@ -5208,6 +5479,15 @@ class MVPJobProcessor:
                 ),
                 retryable=False,
             )
+            final_video_paths = {
+                path.resolve()
+                for path, kind in pending_artifacts
+                if kind == "video" and path.is_file()
+            }
+            for native_short in original_native_agentic_result.rendered:
+                native_path = native_short.video_path
+                if native_path.is_file() and native_path.resolve() not in final_video_paths:
+                    native_path.unlink()
             enforce_render_promotion(promotion_report)
 
         if agentic_requested:

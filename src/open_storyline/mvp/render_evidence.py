@@ -4,7 +4,7 @@ from base64 import b64decode
 from dataclasses import dataclass
 from hashlib import sha256
 from pathlib import Path
-from typing import Any, Iterable, Mapping, Sequence
+from typing import Any, Iterable, Literal, Mapping, Sequence
 import json
 import os
 import re
@@ -64,6 +64,46 @@ class EvidenceLimits(BaseModel):
     timeout_per_frame: float = Field(120.0, gt=0, le=300)
 
 
+class EffectExecutionEvidence(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True, frozen=True)
+
+    status: Literal["not_requested", "executed", "omitted"]
+    planned_skills: tuple[str, ...] = Field(default=(), max_length=5)
+    executed_skills: tuple[str, ...] = Field(default=(), max_length=5)
+    planned_effects_sha256: str = Field(pattern=r"^[a-f0-9]{64}$")
+    executed_effects_sha256: str = Field(pattern=r"^[a-f0-9]{64}$")
+    before_effect_sha256: str = Field(pattern=r"^[a-f0-9]{64}$")
+    after_effect_sha256: str = Field(pattern=r"^[a-f0-9]{64}$")
+    reason_code: str = Field(default="", max_length=80, pattern=r"^[A-Z0-9_]*$")
+
+    @model_validator(mode="after")
+    def validate_execution(self) -> "EffectExecutionEvidence":
+        if len(set(self.planned_skills)) != len(self.planned_skills):
+            raise ValueError("planned effect skills must be unique")
+        if len(set(self.executed_skills)) != len(self.executed_skills):
+            raise ValueError("executed effect skills must be unique")
+        if self.status == "executed" and (
+            not self.executed_skills
+            or self.executed_skills != self.planned_skills
+            or self.reason_code
+        ):
+            raise ValueError("executed effect evidence is inconsistent")
+        if self.status == "omitted" and (
+            self.executed_skills
+            or self.before_effect_sha256 != self.after_effect_sha256
+            or not self.reason_code
+        ):
+            raise ValueError("omitted effect evidence is inconsistent")
+        if self.status == "not_requested" and (
+            self.planned_skills
+            or self.executed_skills
+            or self.before_effect_sha256 != self.after_effect_sha256
+            or self.reason_code
+        ):
+            raise ValueError("unrequested effect evidence is inconsistent")
+        return self
+
+
 class EvidenceFrame(BaseModel):
     model_config = ConfigDict(extra="forbid", strict=True, frozen=True)
 
@@ -117,6 +157,7 @@ class EvidenceClip(BaseModel):
     clip_index: int = Field(ge=1, le=50)
     source_artifact: str = Field(min_length=1, max_length=120)
     output_sha256: str = Field(pattern=r"^[a-f0-9]{64}$")
+    effect_execution: EffectExecutionEvidence | None = None
     duration_ms: int = Field(gt=0, le=86_400_000)
     frames: tuple[EvidenceFrame, ...] = Field(min_length=1, max_length=32)
     bursts: tuple[EvidenceBurst, ...] = Field(default=(), max_length=16)
@@ -128,6 +169,11 @@ class EvidenceClip(BaseModel):
             raise ValueError("evidence clip artifact is invalid")
         if len({frame.evidence_id for frame in self.frames}) != len(self.frames):
             raise ValueError("evidence frame IDs must be unique")
+        if (
+            self.effect_execution is not None
+            and self.effect_execution.after_effect_sha256 != self.output_sha256
+        ):
+            raise ValueError("effect evidence does not match the rendered output")
         frame_ids = {frame.evidence_id for frame in self.frames}
         for frame in self.frames:
             if frame.clip_index != self.clip_index:
@@ -245,6 +291,7 @@ def evidence_fingerprint(
     plan: Mapping[str, Any],
     effects: Mapping[str, Any],
     limits: EvidenceLimits,
+    effect_execution: Mapping[int, Mapping[str, Any] | EffectExecutionEvidence] | None = None,
 ) -> str:
     candidate_inputs = []
     for candidate in sorted(candidates, key=lambda item: item.clip_index):
@@ -270,6 +317,14 @@ def evidence_fingerprint(
         "render_execution_sha256": _hash_json(render_execution),
         "plan_sha256": _hash_json(plan),
         "effects_sha256": _hash_json(effects),
+        "effect_execution": {
+            str(index): (
+                item.model_dump(mode="json")
+                if isinstance(item, EffectExecutionEvidence)
+                else dict(item)
+            )
+            for index, item in sorted((effect_execution or {}).items())
+        },
         "candidates": candidate_inputs,
         "sampler_version": RENDER_EVIDENCE_SAMPLER_VERSION,
         "limits": limits.model_dump(mode="json"),
@@ -464,6 +519,7 @@ def build_render_evidence(
     effects: Mapping[str, Any],
     limits: EvidenceLimits | None = None,
     checkpoint_reused: bool = False,
+    effect_execution: Mapping[int, Mapping[str, Any] | EffectExecutionEvidence] | None = None,
 ) -> RenderEvidenceBundle:
     limits = limits or EvidenceLimits()
     if not candidates:
@@ -494,6 +550,7 @@ def build_render_evidence(
         plan=plan,
         effects=effects,
         limits=limits,
+        effect_execution=effect_execution,
     )
     image_data_urls: dict[str, str] = {}
     clips: list[EvidenceClip] = []
@@ -556,10 +613,19 @@ def build_render_evidence(
                     reason=reason,
                     frame_ids=frame_ids[:8],
                 ))
+        raw_effect_execution = (effect_execution or {}).get(candidate.clip_index)
+        parsed_effect_execution = (
+            raw_effect_execution
+            if isinstance(raw_effect_execution, EffectExecutionEvidence)
+            else EffectExecutionEvidence.model_validate(raw_effect_execution)
+            if raw_effect_execution is not None
+            else None
+        )
         clips.append(EvidenceClip(
             clip_index=candidate.clip_index,
             source_artifact=candidate.source_artifact,
             output_sha256=str(candidate_input["output_sha256"]),
+            effect_execution=parsed_effect_execution,
             duration_ms=candidate.duration_ms,
             frames=tuple(frames),
             bursts=tuple(bursts),
@@ -592,6 +658,7 @@ def manifest_from_checkpoint(payload: Mapping[str, Any]) -> RenderEvidenceManife
 __all__ = [
     "EvidenceBurst",
     "EvidenceClip",
+    "EffectExecutionEvidence",
     "EvidenceEvent",
     "EvidenceFrame",
     "EvidenceLimits",

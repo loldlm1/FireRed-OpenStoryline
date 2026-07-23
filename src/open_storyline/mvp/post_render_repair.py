@@ -9,6 +9,8 @@ import re
 from pydantic import ValidationError
 
 from open_storyline.mvp.edit_plan import EditPlan, validate_edit_plan
+from open_storyline.mvp.ffmpega import EffectsPlan, validate_effects
+from open_storyline.mvp.ffmpega_contracts import AGENTIC_FINISHING_SKILLS
 from open_storyline.mvp.prompts import (
     POST_RENDER_REPAIR_SYSTEM_PROMPT,
     POST_RENDER_REPAIR_SYSTEM_PROMPT_VERSION,
@@ -17,12 +19,12 @@ from open_storyline.mvp.render_evidence import RenderEvidenceManifest
 from open_storyline.mvp.security import sanitize_text
 from open_storyline.mvp.structured_outputs import (
     POST_RENDER_REPAIR_SCHEMA,
-    PostRenderRepairResponseWire,
+    PostRenderRepairResponseV2Wire,
     structured_output,
 )
 
 
-POST_RENDER_REPAIR_VERSION = "post_render_repair.v1"
+POST_RENDER_REPAIR_VERSION = "post_render_repair.v2"
 POST_RENDER_REPAIR_PROMPT_VERSION = POST_RENDER_REPAIR_SYSTEM_PROMPT_VERSION
 MAX_POST_RENDER_REPAIR_ROUNDS = 2
 _MAX_EDITING_PROMPT_CHARS = 12_000
@@ -81,6 +83,11 @@ class PostRenderRepairProposal:
     finding_ids: tuple[str, ...]
     decisions: tuple[dict[str, Any], ...]
     candidate_plan: EditPlan | None
+    effect_action: str
+    base_effects_fingerprint: str
+    candidate_effects_fingerprint: str
+    effect_affected_clip_indexes: tuple[int, ...]
+    candidate_effects: EffectsPlan | None
     provider_calls: int
     attempts: tuple[dict[str, Any], ...]
     no_op: bool = False
@@ -103,6 +110,15 @@ class PostRenderRepairProposal:
             "affected_clip_indexes": list(self.affected_clip_indexes),
             "finding_ids": list(self.finding_ids),
             "decisions": list(self.decisions),
+            "effect_action": self.effect_action,
+            "base_effects_fingerprint": self.base_effects_fingerprint,
+            "candidate_effects_fingerprint": self.candidate_effects_fingerprint,
+            "effect_affected_clip_indexes": list(
+                self.effect_affected_clip_indexes
+            ),
+            "candidate_effect_skills": [
+                effect.skill for effect in (self.candidate_effects.effects if self.candidate_effects else ())
+            ],
             "provider_calls": self.provider_calls,
             "attempts": list(self.attempts),
             "no_op": self.no_op,
@@ -118,6 +134,11 @@ class PostRenderRepairProposal:
                 if self.candidate_plan is not None
                 else {}
             ),
+            **(
+                {"candidate_effects": self.candidate_effects.to_dict()}
+                if self.candidate_effects is not None
+                else {}
+            ),
         }
 
 
@@ -130,6 +151,10 @@ def _hash_json(value: Any) -> str:
 
 
 def _plan_fingerprint(plan: EditPlan) -> str:
+    return _hash_json(plan.to_dict())
+
+
+def _effects_fingerprint(plan: EffectsPlan) -> str:
     return _hash_json(plan.to_dict())
 
 
@@ -250,6 +275,7 @@ def post_render_repair_fingerprint(
     *,
     manifest: RenderEvidenceManifest,
     base_plan: EditPlan,
+    base_effects: EffectsPlan,
     findings: Sequence[Mapping[str, Any]],
     editing_prompt: str,
     round_name: str,
@@ -265,6 +291,7 @@ def post_render_repair_fingerprint(
         "response_schema_sha256": structured_output(POST_RENDER_REPAIR_SCHEMA).fingerprint,
         "candidate_fingerprint": manifest.candidate_fingerprint,
         "base_plan_fingerprint": _plan_fingerprint(base_plan),
+        "base_effects_fingerprint": _effects_fingerprint(base_effects),
         "findings": [
             {
                 "finding_id": item.get("finding_id"),
@@ -287,6 +314,7 @@ def build_post_render_repair_prompt(
     *,
     manifest: RenderEvidenceManifest,
     base_plan: EditPlan,
+    base_effects: EffectsPlan,
     findings: Sequence[Mapping[str, Any]],
     editing_prompt: str,
     round_name: str,
@@ -314,12 +342,16 @@ def build_post_render_repair_prompt(
         "findings": list(findings),
         "rendered_evidence": evidence,
         "current_clips": clips,
+        "current_effect_plan": base_effects.to_dict(),
+        "allowed_effect_skills": sorted(AGENTIC_FINISHING_SKILLS),
         "immutable_constraints": {
             "source_duration_ms": base_plan.source_duration_ms,
             "source_bounds_must_not_change": True,
             "unaffected_clips_must_not_change": True,
             "asset_requests_must_not_change": True,
             "intent_decisions_must_not_change": True,
+            "effect_plan_must_use_registered_typed_skills": True,
+            "effect_plan_is_global_across_output_clips": True,
             "no_commands_paths_urls_or_filters": True,
         },
     })
@@ -377,11 +409,21 @@ def _validated_response(
     raw: Mapping[str, Any],
     *,
     base_plan: EditPlan,
+    base_effects: EffectsPlan,
     findings: Sequence[Mapping[str, Any]],
     plan_validator: Callable[[dict[str, Any], tuple[int, ...]], EditPlan],
-) -> tuple[str, tuple[dict[str, Any], ...], tuple[int, ...], EditPlan | None, bool]:
+    allowed_effect_skills: frozenset[str],
+) -> tuple[
+    str,
+    tuple[dict[str, Any], ...],
+    tuple[int, ...],
+    EditPlan | None,
+    tuple[int, ...],
+    EffectsPlan | None,
+    bool,
+]:
     try:
-        response = PostRenderRepairResponseWire.model_validate(raw)
+        response = PostRenderRepairResponseV2Wire.model_validate(raw)
     except ValidationError as exc:
         raise PostRenderRepairError(
             "POST_RENDER_REPAIR_RESPONSE_INVALID",
@@ -390,7 +432,8 @@ def _validated_response(
     finding_map = {str(item["finding_id"]): item for item in findings}
     decisions = []
     seen: set[str] = set()
-    affected: set[int] = set()
+    clip_affected: set[int] = set()
+    effect_affected: set[int] = set()
     for item in response.decisions:
         finding = finding_map.get(item.finding_id)
         indexes = tuple(sorted(set(item.affected_clip_indexes)))
@@ -401,20 +444,39 @@ def _validated_response(
             )
         seen.add(item.finding_id)
         expected_index = int(finding["clip_index"])
+        if item.decision == "no_change" and (
+            item.target != "none" or indexes
+        ):
+            raise PostRenderRepairError(
+                "POST_RENDER_REPAIR_RESPONSE_INVALID",
+                "no-change decisions cannot declare a repair target",
+            )
         if item.decision == "repair" and indexes != (expected_index,):
             raise PostRenderRepairError(
                 "POST_RENDER_REPAIR_RESPONSE_INVALID",
                 "a repair decision must stay inside its finding clip",
             )
-        if item.decision == "no_change" and indexes:
+        if item.decision == "repair" and item.target == "clip_plan":
+            clip_affected.update(indexes)
+        elif item.decision == "repair" and item.target == "effect_plan":
+            if (
+                str(finding.get("category") or "") != "effects"
+                and "effect" not in set(finding.get("requested_capabilities") or ())
+            ):
+                raise PostRenderRepairError(
+                    "POST_RENDER_REPAIR_RESPONSE_INVALID",
+                    "effect repair must be grounded in an effect finding",
+                )
+            effect_affected.update(indexes)
+        elif item.decision == "repair":
             raise PostRenderRepairError(
                 "POST_RENDER_REPAIR_RESPONSE_INVALID",
-                "no-change decisions cannot declare affected clips",
+                "repair decisions require a typed clip or effect target",
             )
-        affected.update(indexes)
         decisions.append({
             "finding_id": item.finding_id,
             "decision": item.decision,
+            "target": item.target,
             "reason": sanitize_text(item.reason, limit=320),
             "affected_clip_indexes": list(indexes),
         })
@@ -424,45 +486,93 @@ def _validated_response(
             "repair decisions omitted one or more supplied findings",
         )
     returned_indexes = tuple(sorted(clip.clip_index for clip in response.clips))
-    affected_indexes = tuple(sorted(affected))
+    affected_indexes = tuple(sorted(clip_affected))
+    effect_affected_indexes = tuple(sorted(effect_affected))
     if len(set(returned_indexes)) != len(returned_indexes):
         raise PostRenderRepairError(
             "POST_RENDER_REPAIR_RESPONSE_INVALID",
             "post-render repair returned duplicate clip replacements",
         )
+    try:
+        candidate_effects = validate_effects(
+            response.effect_plan.model_dump(mode="json"),
+            allowed_skills=allowed_effect_skills,
+        )
+    except Exception as exc:
+        raise PostRenderRepairError(
+            "POST_RENDER_REPAIR_RESPONSE_INVALID",
+            "post-render effect repair failed the typed allowlist",
+        ) from exc
+    effect_changed = candidate_effects != base_effects
+    if response.effect_action == "preserve" and effect_changed:
+        raise PostRenderRepairError(
+            "POST_RENDER_REPAIR_RESPONSE_INVALID",
+            "preserved effect plans must match the current plan",
+        )
+    if response.effect_action == "replace" and (
+        not effect_affected_indexes or not effect_changed
+    ):
+        raise PostRenderRepairError(
+            "POST_RENDER_REPAIR_RESPONSE_INVALID",
+            "effect replacement requires a material effect repair decision",
+        )
+    if effect_affected_indexes and response.effect_action != "replace":
+        raise PostRenderRepairError(
+            "POST_RENDER_REPAIR_RESPONSE_INVALID",
+            "effect repair decisions require a replacement effect plan",
+        )
+    if not effect_affected_indexes and response.effect_action != "preserve":
+        raise PostRenderRepairError(
+            "POST_RENDER_REPAIR_RESPONSE_INVALID",
+            "an unrelated response cannot replace the effect plan",
+        )
     if response.status == "no_change":
-        if affected_indexes or response.clips or any(
+        if affected_indexes or effect_affected_indexes or response.clips or any(
             item["decision"] != "no_change" for item in decisions
         ):
             raise PostRenderRepairError(
                 "POST_RENDER_REPAIR_RESPONSE_INVALID",
                 "no-change response contains a repair mutation",
             )
-        return response.status, tuple(decisions), (), None, False
-    if not affected_indexes or returned_indexes != affected_indexes:
+        return response.status, tuple(decisions), (), None, (), None, False
+    if not affected_indexes and not effect_affected_indexes:
+        raise PostRenderRepairError(
+            "POST_RENDER_REPAIR_RESPONSE_INVALID",
+            "repair response did not declare a material repair target",
+        )
+    if returned_indexes != affected_indexes:
         raise PostRenderRepairError(
             "POST_RENDER_REPAIR_RESPONSE_INVALID",
             "repair response must replace exactly the affected clips",
         )
-    try:
-        candidate = plan_validator({
-            "requested_capabilities": response.requested_capabilities,
-            "clips": [clip.model_dump(mode="json") for clip in response.clips],
-        }, affected_indexes)
-    except PostRenderRepairError:
-        raise
-    except Exception as exc:
-        raise PostRenderRepairError(
-            "POST_RENDER_REPAIR_RESPONSE_INVALID",
-            "post-render repair plan failed local validation",
-        ) from exc
-    _validate_candidate(base_plan, candidate, affected_indexes)
-    no_op = candidate == base_plan
+    candidate = None
+    if affected_indexes:
+        try:
+            candidate = plan_validator({
+                "requested_capabilities": response.requested_capabilities,
+                "clips": [clip.model_dump(mode="json") for clip in response.clips],
+            }, affected_indexes)
+        except PostRenderRepairError:
+            raise
+        except Exception as exc:
+            raise PostRenderRepairError(
+                "POST_RENDER_REPAIR_RESPONSE_INVALID",
+                "post-render repair plan failed local validation",
+            ) from exc
+        _validate_candidate(base_plan, candidate, affected_indexes)
+        if candidate == base_plan:
+            raise PostRenderRepairError(
+                "POST_RENDER_REPAIR_RESPONSE_INVALID",
+                "clip repair did not materially change the plan",
+            )
+    no_op = candidate is None and not effect_changed
     return (
         "no_change" if no_op else response.status,
         tuple(decisions),
         affected_indexes,
-        None if no_op else candidate,
+        candidate,
+        effect_affected_indexes,
+        candidate_effects if effect_changed else None,
         no_op,
     )
 
@@ -472,11 +582,13 @@ async def request_post_render_repair(
     manifest: RenderEvidenceManifest,
     image_data_urls: Mapping[str, str],
     base_plan: EditPlan,
+    base_effects: EffectsPlan,
     findings: Sequence[Mapping[str, Any]],
     editing_prompt: str,
     round_name: str,
     client: Any,
     plan_validator: Callable[[dict[str, Any], tuple[int, ...]], EditPlan],
+    allowed_effect_skills: frozenset[str] = AGENTIC_FINISHING_SKILLS,
 ) -> PostRenderRepairProposal:
     if round_name not in {"primary", "contingency"} or not findings:
         raise PostRenderRepairError(
@@ -488,6 +600,7 @@ async def request_post_render_repair(
     request_fingerprint = post_render_repair_fingerprint(
         manifest=manifest,
         base_plan=base_plan,
+        base_effects=base_effects,
         findings=findings,
         editing_prompt=editing_prompt,
         round_name=round_name,
@@ -505,6 +618,7 @@ async def request_post_render_repair(
                 )
             ordered_urls.append(value)
     base_fingerprint = _plan_fingerprint(base_plan)
+    base_effects_fingerprint = _effects_fingerprint(base_effects)
     try:
         raw = await client.complete_structured(
             schema_name=POST_RENDER_REPAIR_SCHEMA,
@@ -512,6 +626,7 @@ async def request_post_render_repair(
             user_prompt=build_post_render_repair_prompt(
                 manifest=manifest,
                 base_plan=base_plan,
+                base_effects=base_effects,
                 findings=findings,
                 editing_prompt=editing_prompt,
                 round_name=round_name,
@@ -519,11 +634,21 @@ async def request_post_render_repair(
             image_data_urls=tuple(ordered_urls),
             reasoning_effort=reasoning_effort,
         )
-        status, decisions, affected, candidate, no_op = _validated_response(
+        (
+            status,
+            decisions,
+            affected,
+            candidate,
+            effect_affected,
+            candidate_effects,
+            no_op,
+        ) = _validated_response(
             raw,
             base_plan=base_plan,
+            base_effects=base_effects,
             findings=findings,
             plan_validator=plan_validator,
+            allowed_effect_skills=allowed_effect_skills,
         )
         return PostRenderRepairProposal(
             round_name=round_name,
@@ -537,6 +662,15 @@ async def request_post_render_repair(
             finding_ids=tuple(str(item["finding_id"]) for item in findings),
             decisions=decisions,
             candidate_plan=candidate,
+            effect_action="replace" if candidate_effects is not None else "preserve",
+            base_effects_fingerprint=base_effects_fingerprint,
+            candidate_effects_fingerprint=(
+                _effects_fingerprint(candidate_effects)
+                if candidate_effects is not None
+                else ""
+            ),
+            effect_affected_clip_indexes=effect_affected,
+            candidate_effects=candidate_effects,
             provider_calls=1,
             attempts=_attempts(client),
             no_op=no_op,
@@ -554,6 +688,11 @@ async def request_post_render_repair(
             finding_ids=tuple(str(item["finding_id"]) for item in findings),
             decisions=(),
             candidate_plan=None,
+            effect_action="preserve",
+            base_effects_fingerprint=base_effects_fingerprint,
+            candidate_effects_fingerprint="",
+            effect_affected_clip_indexes=(),
+            candidate_effects=None,
             provider_calls=1,
             attempts=_attempts(client),
             error_code=str(
@@ -567,6 +706,8 @@ def post_render_repair_from_checkpoint(
     *,
     expected_request_fingerprint: str,
     base_plan: EditPlan,
+    base_effects: EffectsPlan,
+    allowed_effect_skills: frozenset[str] = AGENTIC_FINISHING_SKILLS,
 ) -> PostRenderRepairProposal:
     report = payload.get("report")
     if not isinstance(report, Mapping):
@@ -596,6 +737,41 @@ def post_render_repair_from_checkpoint(
                 "POST_RENDER_REPAIR_RESPONSE_INVALID",
                 "post-render repair checkpoint plan fingerprint is invalid",
             )
+    candidate_effects = None
+    effect_affected = tuple(sorted({
+        int(item) for item in report.get("effect_affected_clip_indexes") or ()
+    }))
+    if report.get("effect_action") == "replace":
+        try:
+            candidate_effects = validate_effects(
+                payload.get("candidate_effects"),
+                allowed_skills=allowed_effect_skills,
+            )
+        except Exception as exc:
+            raise PostRenderRepairError(
+                "POST_RENDER_REPAIR_RESPONSE_INVALID",
+                "post-render repair checkpoint effects are invalid",
+            ) from exc
+        if (
+            not effect_affected
+            or candidate_effects == base_effects
+            or _effects_fingerprint(candidate_effects)
+            != report.get("candidate_effects_fingerprint")
+        ):
+            raise PostRenderRepairError(
+                "POST_RENDER_REPAIR_RESPONSE_INVALID",
+                "post-render repair checkpoint effect fingerprint is invalid",
+            )
+    elif report.get("effect_action") != "preserve" or effect_affected:
+        raise PostRenderRepairError(
+            "POST_RENDER_REPAIR_RESPONSE_INVALID",
+            "post-render repair checkpoint effect action is invalid",
+        )
+    if report.get("base_effects_fingerprint") != _effects_fingerprint(base_effects):
+        raise PostRenderRepairError(
+            "POST_RENDER_REPAIR_RESPONSE_INVALID",
+            "post-render repair checkpoint base effects do not match",
+        )
     return PostRenderRepairProposal(
         round_name=str(report.get("round") or ""),
         status=str(report.get("status") or "unavailable"),
@@ -608,6 +784,13 @@ def post_render_repair_from_checkpoint(
             dict(item) for item in report.get("decisions") or () if isinstance(item, Mapping)
         ),
         candidate_plan=candidate,
+        effect_action=str(report.get("effect_action") or "preserve"),
+        base_effects_fingerprint=str(report.get("base_effects_fingerprint") or ""),
+        candidate_effects_fingerprint=str(
+            report.get("candidate_effects_fingerprint") or ""
+        ),
+        effect_affected_clip_indexes=effect_affected,
+        candidate_effects=candidate_effects,
         provider_calls=0,
         attempts=(),
         no_op=report.get("no_op") is True,

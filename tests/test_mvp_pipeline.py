@@ -1,6 +1,7 @@
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from types import SimpleNamespace
+from contextlib import ExitStack
 import base64
 import json
 import os
@@ -24,7 +25,7 @@ from open_storyline.mvp.edit_plan import (
 from open_storyline.mvp.frame_sampling import FrameManifest, SampledFrame
 from open_storyline.mvp.creative_qa import CreativeQAArtifacts
 from open_storyline.mvp.fallbacks import compile_baseline_plan
-from open_storyline.mvp.ffmpega import FFMPEGAError
+from open_storyline.mvp.ffmpega import EffectsPlan, FFMPEGAError, validate_effects
 from open_storyline.mvp.ninerouter import NineRouterAttempt, NineRouterError
 from open_storyline.mvp.pipeline import MVPJobProcessor
 from open_storyline.mvp.preflight import PreflightFinding, PreflightReport, build_preflight
@@ -429,6 +430,29 @@ class FakeFailingEffectsPlanner:
 
     async def plan(self, *_args, **_kwargs):
         raise FFMPEGAError("FFMPEGA_PLAN_INVALID", "synthetic optional failure")
+
+
+class FakeEffectsPlanner:
+    def __init__(self, _client):
+        pass
+
+    async def plan(self, *_args, **_kwargs):
+        return validate_effects({
+            "effects": [{"skill": "vignette", "params": {"intensity": 0.8}}],
+        })
+
+
+class FakeFFMPEGAClient:
+    def __init__(self):
+        self.calls = []
+
+    async def apply(self, *, source, destination, plan):
+        self.calls.append(plan.to_dict())
+        destination.write_bytes(
+            Path(source).read_bytes()
+            + json.dumps(plan.to_dict(), sort_keys=True).encode("utf-8")
+        )
+        return Path(destination)
 
 
 class FakePredictiveRepairEditPlanner:
@@ -1822,10 +1846,18 @@ class MVPAgenticPipelineTests(unittest.IsolatedAsyncioTestCase):
                 decisions=({
                     "finding_id": finding["finding_id"],
                     "decision": "repair",
+                    "target": "clip_plan",
                     "reason": "Use fit layout.",
                     "affected_clip_indexes": [1],
                 },),
                 candidate_plan=repaired_plan,
+                effect_action="preserve",
+                base_effects_fingerprint=checkpoint_fingerprint(
+                    EffectsPlan(effects=[]).to_dict()
+                ),
+                candidate_effects_fingerprint="",
+                effect_affected_clip_indexes=(),
+                candidate_effects=None,
                 provider_calls=1,
                 attempts=(),
             )
@@ -1876,6 +1908,177 @@ class MVPAgenticPipelineTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(
                 (root / "output" / "short-01.mp4").read_bytes(),
                 b"repaired-agentic-render",
+            )
+            FakeAgenticRepairRenderer.render_clip_indexes = []
+
+    async def test_enforced_effect_repair_reuses_native_render_and_promotes_typed_finish(self):
+        with TemporaryDirectory() as directory:
+            FakeAgenticRepairRenderer.render_clip_indexes = []
+            root = Path(directory)
+            store = FakeStore(
+                root,
+                server_request={
+                    "max_clips": 1,
+                    "edit_mode": "agentic",
+                    "asset_policy": "off",
+                },
+            )
+            processor = object.__new__(MVPJobProcessor)
+            processor.config = config("render")
+            processor.config.ffmpega.enabled = True
+            processor.config.agentic_editing.creative_qa_enabled = True
+            processor.config.agentic_editing.post_render_review_mode = "enforce"
+            processor.stt = FakeSTT()
+            checkpoints = FakeCheckpointStore()
+            effect_client = FakeFFMPEGAClient()
+            evidence_bundle = fake_render_evidence_bundle()
+            finding = {
+                "finding_id": "finding-" + "9" * 24,
+                "finding_fingerprint": "a" * 64,
+                "defect_code": "RENDER_CRITIC_FINDING",
+                "category": "effects",
+                "severity": "warning",
+                "classification": "creative",
+                "confidence": 0.95,
+                "clip_index": 1,
+                "start_ms": 0,
+                "end_ms": 2_000,
+                "evidence_ids": ["ev-" + "a" * 24],
+                "repair_objective": "Reduce the vignette intensity.",
+                "requested_capabilities": ["effect"],
+                "repairable": True,
+            }
+            initial_critic = {
+                "version": "render_critic.v1",
+                "status": "review",
+                "scope": "rendered_evidence_only",
+                "non_mutating": True,
+                "summary": "effect review",
+                "call_fingerprint": "2" * 64,
+                "candidate_fingerprint": evidence_bundle.manifest.candidate_fingerprint,
+                "provider_calls": 1,
+                "finding_count": 1,
+                "findings": [finding],
+                "mode": "enforce",
+                "attempts": [],
+            }
+            repaired_critic = {
+                **initial_critic,
+                "status": "pass",
+                "summary": "effect repaired",
+                "finding_count": 0,
+                "findings": [],
+            }
+            scene_report = build_scene_boundaries(
+                [], source_duration_ms=30_000, threshold=0.35
+            )
+            frame_manifest = FrameManifest(
+                source_duration_ms=30_000,
+                source_width=1920,
+                source_height=1080,
+                frames=(SampledFrame(
+                    id="frame-001",
+                    timestamp_ms=250,
+                    scene_id="scene-001",
+                    width=512,
+                    height=288,
+                    extraction_reason="scene_opening",
+                    encoded_bytes=4,
+                    data_url="data:image/jpeg;base64,ZmFrZQ==",
+                ),),
+            )
+            base_plan = build_shadow_edit_plan(
+                [ShortCandidate(0, 20_000, "Title", "Hook", "Reason", 0.9)],
+                source_duration_ms=30_000,
+            )
+            base_effects = validate_effects({
+                "effects": [{
+                    "skill": "vignette",
+                    "params": {"intensity": 0.8},
+                }],
+            })
+            repaired_effects = validate_effects({
+                "effects": [{
+                    "skill": "vignette",
+                    "params": {"intensity": 0.25},
+                }],
+            })
+            proposal = PostRenderRepairProposal(
+                round_name="primary",
+                status="repair",
+                request_fingerprint="r" * 64,
+                base_plan_fingerprint=checkpoint_fingerprint(base_plan.to_dict()),
+                candidate_plan_fingerprint="",
+                affected_clip_indexes=(),
+                finding_ids=(finding["finding_id"],),
+                decisions=({
+                    "finding_id": finding["finding_id"],
+                    "decision": "repair",
+                    "target": "effect_plan",
+                    "reason": "Reduce the vignette.",
+                    "affected_clip_indexes": [1],
+                },),
+                candidate_plan=None,
+                effect_action="replace",
+                base_effects_fingerprint=checkpoint_fingerprint(base_effects.to_dict()),
+                candidate_effects_fingerprint=checkpoint_fingerprint(
+                    repaired_effects.to_dict()
+                ),
+                effect_affected_clip_indexes=(1,),
+                candidate_effects=repaired_effects,
+                provider_calls=1,
+                attempts=(),
+            )
+
+            with ExitStack() as stack:
+                stack.enter_context(patch("open_storyline.mvp.pipeline.probe_media", return_value=MediaInfo(30_000, 1920, 1080, True)))
+                stack.enter_context(patch("open_storyline.mvp.pipeline.extract_audio_for_stt", side_effect=lambda _source, target: target))
+                stack.enter_context(patch("open_storyline.mvp.pipeline.detect_scene_boundaries", return_value=scene_report))
+                stack.enter_context(patch("open_storyline.mvp.pipeline.sample_frames", return_value=frame_manifest))
+                stack.enter_context(patch("open_storyline.mvp.pipeline.VisualUnderstandingPlanner", FakeVisualPlanner))
+                stack.enter_context(patch("open_storyline.mvp.pipeline.AgenticEditPlanner", FakeEditPlanner))
+                stack.enter_context(patch("open_storyline.mvp.pipeline.NineRouterClient.from_config", return_value=FakeRemoteClient()))
+                stack.enter_context(patch("open_storyline.mvp.pipeline.ShortsPlanner", FakePlanner))
+                stack.enter_context(patch("open_storyline.mvp.pipeline.AgenticShortRenderer", FakeAgenticRepairRenderer))
+                stack.enter_context(patch("open_storyline.mvp.pipeline.CPUShortRenderer", side_effect=AssertionError("legacy renderer called")))
+                stack.enter_context(patch("open_storyline.mvp.pipeline.EffectsPlanner", FakeEffectsPlanner))
+                stack.enter_context(patch("open_storyline.mvp.pipeline.FFMPEGAClient.from_config", return_value=effect_client))
+                stack.enter_context(patch("open_storyline.mvp.pipeline.CheckpointStore", return_value=checkpoints))
+                stack.enter_context(patch("open_storyline.mvp.pipeline.evidence_fingerprint", return_value="5" * 64))
+                stack.enter_context(patch("open_storyline.mvp.pipeline.critic_call_fingerprint", return_value="2" * 64))
+                stack.enter_context(patch("open_storyline.mvp.pipeline.post_render_repair_fingerprint", return_value="r" * 64))
+                stack.enter_context(patch("open_storyline.mvp.pipeline.build_render_evidence", return_value=evidence_bundle))
+                critic_call = stack.enter_context(patch("open_storyline.mvp.pipeline.review_render_evidence", side_effect=[initial_critic, repaired_critic]))
+                repair_call = stack.enter_context(patch("open_storyline.mvp.pipeline.request_post_render_repair", return_value=proposal))
+                stack.enter_context(patch("open_storyline.mvp.pipeline.generate_creative_qa_artifacts", side_effect=fake_creative_qa_artifacts))
+                stack.enter_context(patch("open_storyline.mvp.pipeline.build_frame_quality_report", return_value={
+                    "version": "frame_quality_qa.v1",
+                    "status": "pass",
+                    "findings": [],
+                }))
+                result = await processor("f" * 32, store)
+
+            repair_report = json.loads(
+                (root / "output" / "post_render_repair.json").read_text(
+                    encoding="utf-8"
+                )
+            )
+            manifest = json.loads(
+                (root / "output" / "manifest.json").read_text(encoding="utf-8")
+            )
+            self.assertEqual(repair_call.await_count, 1)
+            self.assertEqual(critic_call.await_count, 2)
+            self.assertEqual(FakeAgenticRepairRenderer.render_clip_indexes, [(1,)])
+            self.assertEqual(len(effect_client.calls), 2)
+            self.assertEqual(repair_report["effect_action"], "replace")
+            self.assertEqual(repair_report["effect_skills"], ["vignette"])
+            self.assertEqual(
+                manifest["effects"]["effects"][0]["params"]["intensity"],
+                0.25,
+            )
+            self.assertEqual(
+                result["outcome"]["post_render_repair"]["effect_action"],
+                "replace",
             )
             FakeAgenticRepairRenderer.render_clip_indexes = []
 
@@ -2030,7 +2233,38 @@ class MVPAgenticPipelineTests(unittest.IsolatedAsyncioTestCase):
             processor.config = config("render")
             processor.config.ffmpega.enabled = True
             processor.config.agentic_editing.render_promotion_mode = "off"
+            processor.config.agentic_editing.creative_qa_enabled = True
+            processor.config.agentic_editing.post_render_review_mode = "enforce"
             processor.stt = FakeSTT()
+            evidence_bundle = fake_render_evidence_bundle()
+            critic_report = {
+                "version": "render_critic.v1",
+                "status": "review",
+                "scope": "rendered_evidence_only",
+                "non_mutating": True,
+                "summary": "the requested effect was omitted",
+                "call_fingerprint": "2" * 64,
+                "candidate_fingerprint": evidence_bundle.manifest.candidate_fingerprint,
+                "provider_calls": 1,
+                "finding_count": 1,
+                "findings": [{
+                    "finding_id": "finding-" + "6" * 24,
+                    "finding_fingerprint": "7" * 64,
+                    "category": "effects",
+                    "severity": "warning",
+                    "classification": "creative",
+                    "confidence": 0.9,
+                    "clip_index": 1,
+                    "start_ms": 0,
+                    "end_ms": 2_000,
+                    "evidence_ids": ["ev-" + "a" * 24],
+                    "repair_objective": "Restore the effect when execution is healthy.",
+                    "requested_capabilities": ["effect"],
+                    "repairable": True,
+                }],
+                "mode": "enforce",
+                "attempts": [],
+            }
             scene_report = build_scene_boundaries(
                 [], source_duration_ms=30_000, threshold=0.35
             )
@@ -2050,18 +2284,23 @@ class MVPAgenticPipelineTests(unittest.IsolatedAsyncioTestCase):
                 ),),
             )
 
-            with (
-                patch("open_storyline.mvp.pipeline.probe_media", return_value=MediaInfo(30_000, 1920, 1080, True)),
-                patch("open_storyline.mvp.pipeline.extract_audio_for_stt", side_effect=lambda _source, target: target),
-                patch("open_storyline.mvp.pipeline.detect_scene_boundaries", return_value=scene_report),
-                patch("open_storyline.mvp.pipeline.sample_frames", return_value=frame_manifest),
-                patch("open_storyline.mvp.pipeline.VisualUnderstandingPlanner", FakeVisualPlanner),
-                patch("open_storyline.mvp.pipeline.AgenticEditPlanner", FakeEditPlanner),
-                patch("open_storyline.mvp.pipeline.NineRouterClient.from_config", return_value=FakeRemoteClient()),
-                patch("open_storyline.mvp.pipeline.ShortsPlanner", FakePlanner),
-                patch("open_storyline.mvp.pipeline.AgenticShortRenderer", FakeAgenticRenderer),
-                patch("open_storyline.mvp.pipeline.EffectsPlanner", FakeFailingEffectsPlanner),
-            ):
+            with ExitStack() as stack:
+                stack.enter_context(patch("open_storyline.mvp.pipeline.probe_media", return_value=MediaInfo(30_000, 1920, 1080, True)))
+                stack.enter_context(patch("open_storyline.mvp.pipeline.extract_audio_for_stt", side_effect=lambda _source, target: target))
+                stack.enter_context(patch("open_storyline.mvp.pipeline.detect_scene_boundaries", return_value=scene_report))
+                stack.enter_context(patch("open_storyline.mvp.pipeline.sample_frames", return_value=frame_manifest))
+                stack.enter_context(patch("open_storyline.mvp.pipeline.VisualUnderstandingPlanner", FakeVisualPlanner))
+                stack.enter_context(patch("open_storyline.mvp.pipeline.AgenticEditPlanner", FakeEditPlanner))
+                stack.enter_context(patch("open_storyline.mvp.pipeline.NineRouterClient.from_config", return_value=FakeRemoteClient()))
+                stack.enter_context(patch("open_storyline.mvp.pipeline.ShortsPlanner", FakePlanner))
+                stack.enter_context(patch("open_storyline.mvp.pipeline.AgenticShortRenderer", FakeAgenticRenderer))
+                stack.enter_context(patch("open_storyline.mvp.pipeline.EffectsPlanner", FakeFailingEffectsPlanner))
+                stack.enter_context(patch("open_storyline.mvp.pipeline.evidence_fingerprint", return_value="5" * 64))
+                stack.enter_context(patch("open_storyline.mvp.pipeline.critic_call_fingerprint", return_value="2" * 64))
+                stack.enter_context(patch("open_storyline.mvp.pipeline.build_render_evidence", return_value=evidence_bundle))
+                critic_call = stack.enter_context(patch("open_storyline.mvp.pipeline.review_render_evidence", return_value=critic_report))
+                repair_call = stack.enter_context(patch("open_storyline.mvp.pipeline.request_post_render_repair"))
+                stack.enter_context(patch("open_storyline.mvp.pipeline.generate_creative_qa_artifacts", side_effect=fake_creative_qa_artifacts))
                 result = await processor("2" * 32, store)
 
             registered = {name for name, _kind in store.registered}
@@ -2072,6 +2311,8 @@ class MVPAgenticPipelineTests(unittest.IsolatedAsyncioTestCase):
             effect = next(item for item in limitations if item["code"] == "EFFECT_OMITTED")
             self.assertEqual(effect["requested"], "ffmpega_effect_plan")
             self.assertEqual(effect["executed"], "native_ffmpeg_render")
+            self.assertEqual(critic_call.await_count, 1)
+            self.assertEqual(repair_call.await_count, 0)
 
     async def test_render_mode_generates_only_requested_assets_and_inserts_them(self):
         with TemporaryDirectory() as directory:

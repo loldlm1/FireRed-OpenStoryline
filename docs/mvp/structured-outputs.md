@@ -15,7 +15,8 @@ Registered boundaries are:
 - `edit_plan_repair.v1`
 - `semantic_qa.v1`
 - `render_critic.v1`
-- `post_render_repair.v1`
+- `post_render_repair.v1` (read-only compatibility)
+- `post_render_repair.v2`
 - `ffmpega_agentic_finishing.v1`
 - `ffmpega_deterministic_effects.v1`
 
@@ -49,13 +50,17 @@ trigger these calls. Returning the setting to `off` is the repair rollback and
 does not disable the defect registry or strict schema transport.
 
 `OPENSTORYLINE_POST_RENDER_REVIEW_MODE=enforce` additionally enables the
-strict `post_render_repair.v1` boundary after a rendered-evidence critic
-finding. The model can return only typed replacement plans for affected clips.
-Deterministic code preserves source bounds and protected intent, rerenders only
-those clips, repeats technical QA, and promotes the candidate only when the
-critic score improves without a new authoritative blocker. One primary request
-is allowed; one contingency request is allowed only for a new objective defect.
-Effect-bearing repairs remain disabled until the effect-aware rollout stage.
+strict `post_render_repair.v2` boundary after a rendered-evidence critic
+finding. `post_render_repair.v1` remains readable for historical artifacts but
+is not emitted for new requests. The model can return only typed replacement
+plans for affected clips or a typed replacement for the allowlisted FFMPEGA
+finishing plan. Deterministic code preserves source bounds and protected
+intent, rerenders only affected clips, applies finishing only through the
+typed sidecar contract, repeats technical QA, and promotes a candidate only
+when the rendered critic shows improvement without a new authoritative blocker.
+One primary request is allowed; one contingency request is allowed only for a
+new objective defect. Sidecar failure records an omitted effect and does not
+trigger another semantic request.
 
 The deploy wrapper runs Responses-based strict acceptance and extra-field
 rejection probes whenever `json_schema` mode is selected. A failed probe blocks

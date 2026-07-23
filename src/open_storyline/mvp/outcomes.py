@@ -553,6 +553,21 @@ def _post_render_repair_summary(value: Any) -> dict[str, Any]:
             _metric_int(item, 50)
             for item in source.get("affected_clip_indexes") or ()
         ][:8],
+        "effect_action": (
+            str(source.get("effect_action") or "preserve")[:20]
+            if str(source.get("effect_action") or "preserve")
+            in {"preserve", "replace"}
+            else "preserve"
+        ),
+        "effect_affected_clip_indexes": [
+            _metric_int(item, 50)
+            for item in source.get("effect_affected_clip_indexes") or ()
+        ][:8],
+        "effect_skills": [
+            str(item)[:40]
+            for item in source.get("effect_skills") or ()
+            if re.fullmatch(r"[a-z][a-z0-9_]{0,39}", str(item))
+        ][:5],
         "error_code": str(source.get("error_code") or "")[:80],
         "improvement": compact_improvement,
     }

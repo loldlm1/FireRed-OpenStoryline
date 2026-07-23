@@ -130,6 +130,14 @@ def build_render_critic_prompt(
         ),
         "editing_prompt": _bounded_editing_prompt(editing_prompt),
         "evidence": evidence,
+        "effect_execution": [
+            {
+                "clip_index": clip.clip_index,
+                **clip.effect_execution.model_dump(mode="json"),
+            }
+            for clip in manifest.clips
+            if clip.effect_execution is not None
+        ],
         "constraints": {
             "scope": "rendered_evidence_only",
             "non_mutating": True,
@@ -209,6 +217,23 @@ def _validate_response(
             raise RenderCriticError(
                 "RENDER_CRITIC_EVIDENCE_INVALID",
                 "critic requested an unsupported capability",
+            )
+        effect_evidence = next(
+            (
+                clip.effect_execution
+                for clip in manifest.clips
+                if clip.clip_index == item.clip_index
+            ),
+            None,
+        )
+        if item.category == "effects" and item.repairable and (
+            "effect" not in item.requested_capabilities
+            or effect_evidence is None
+            or effect_evidence.status != "executed"
+        ):
+            raise RenderCriticError(
+                "RENDER_CRITIC_EVIDENCE_INVALID",
+                "repairable effect findings require executed effect evidence",
             )
         evidence_ids = tuple(dict.fromkeys(item.evidence_ids))
         if len(evidence_ids) != len(item.evidence_ids) or not evidence_ids:

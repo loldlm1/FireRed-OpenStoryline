@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from pathlib import Path
 from tempfile import TemporaryDirectory
+from hashlib import sha256
 import json
 import shutil
 import subprocess
@@ -14,6 +15,7 @@ from open_storyline.mvp.render_evidence import (
     EvidenceEvent,
     EvidenceFrame,
     EvidenceLimits,
+    EffectExecutionEvidence,
     RenderEvidenceError,
     RenderEvidenceManifest,
     RenderedCandidate,
@@ -144,6 +146,15 @@ class RenderEvidenceSamplingTests(unittest.TestCase):
             plan=_candidate_plan(),
             effects={"effects": [{"skill": "sharpen"}]},
             limits=EvidenceLimits(max_frames_per_clip=10, max_frames_total=10),
+            effect_execution={1: EffectExecutionEvidence(
+                status="executed",
+                planned_skills=("sharpen",),
+                executed_skills=("sharpen",),
+                planned_effects_sha256="1" * 64,
+                executed_effects_sha256="1" * 64,
+                before_effect_sha256=sha256(self.video.read_bytes()).hexdigest(),
+                after_effect_sha256=sha256(self.video.read_bytes()).hexdigest(),
+            )},
         )
         clip = bundle.manifest.clips[0]
         reasons = {reason for frame in clip.frames for reason in frame.purpose}
@@ -151,6 +162,11 @@ class RenderEvidenceSamplingTests(unittest.TestCase):
         self.assertGreaterEqual(len(clip.bursts), 2)
         self.assertLessEqual(bundle.manifest.frame_count, 10)
         self.assertLess(bundle.manifest.frame_count, 100)
+        self.assertEqual(clip.effect_execution.status, "executed")
+        self.assertEqual(
+            clip.effect_execution.after_effect_sha256,
+            clip.output_sha256,
+        )
 
     def test_repeated_identical_events_do_not_duplicate_bursts(self):
         events = (
