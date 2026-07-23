@@ -108,6 +108,15 @@ playback and download registration, truthful creative limitations, technical
 withholding, repair checkpoint reuse, call counts, tokens, cost, latency, and
 the absence of new defects.
 
+The enforce canary also verifies the one-or-many output contract. A single input
+session may produce one or several bounded output clips; deterministic artifact
+and promotion checks operate per clip and never assume exactly one output. A
+canary that exposes several short speech pauses must keep those pauses visible
+as a pacing warning, while only a sustained silent interval may be a technical
+promotion blocker. This prevents cumulative natural pauses from being
+misclassified as an unplayable backend failure without weakening the technical
+gate for genuinely silent output.
+
 The review scorecard must also report candidate-comparison calls, completed
 preferences, ties, skipped no-call decisions, checkpoint reuse, and invariant
 violations. A comparison provider failure is reportable and falls back to the

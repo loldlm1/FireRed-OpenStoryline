@@ -263,6 +263,43 @@ class CreativeQATests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(metrics["subtitle_cues"], 2)
         self.assertGreaterEqual(metrics["longest_visual_hold_ms"], 8000)
 
+    def test_cumulative_short_speech_pauses_are_not_technical_blockers(self):
+        media = {
+            "duration_ms": 22_800,
+            "width": 1080,
+            "height": 1920,
+            "video_codec": "h264",
+            "audio_codec": "aac",
+            "has_audio": True,
+        }
+        silence = [
+            {"start": 3.946, "end": 5.858, "duration": 1.913},
+            {"start": 7.147, "end": 9.342, "duration": 2.194},
+            {"start": 15.066, "end": 17.110, "duration": 2.045},
+            {"start": 20.770, "end": 22.800, "duration": 2.030},
+        ]
+        with patch("open_storyline.mvp.creative_qa._probe", return_value=media), patch(
+            "open_storyline.mvp.creative_qa._detect",
+            side_effect=(([], None), ([], None), (silence, None)),
+        ):
+            report = build_render_qa_report(
+                [QAInput(1, Path("short-01.mp4"), 22_800)],
+                expected_width=1080,
+                expected_height=1920,
+                strict=True,
+            )
+
+        finding = next(
+            item for item in report["findings"] if item["code"] == "long_silence_detected"
+        )
+        self.assertEqual(report["status"], "warning")
+        self.assertEqual(finding["severity"], "warning")
+        self.assertAlmostEqual(
+            finding["details"]["longest_segment_seconds"],
+            2.194,
+            places=3,
+        )
+
     async def test_semantic_review_is_bounded_non_mutating_and_failure_is_non_blocking(self):
         frame = SampledFrame(
             id="frame-001",
