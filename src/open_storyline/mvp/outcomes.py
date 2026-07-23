@@ -14,6 +14,7 @@ from open_storyline.mvp.defects import (
     defect_public_metadata,
 )
 from open_storyline.mvp.fallbacks import FallbackEntry
+from open_storyline.mvp.repair import MAX_REPAIR_CLIPS
 
 
 OUTCOME_REPORT_VERSION = "outcome_report.v2"
@@ -337,8 +338,11 @@ def _compact_repair_metrics(value: Any) -> dict[str, Any]:
         "strict_schema_valid": _metric_int(source.get("strict_schema_valid"), 3),
         "semantic_valid": _metric_int(source.get("semantic_valid"), 3),
         "successful_repairs": _metric_int(source.get("successful_repairs"), 3),
-        "visual_calls": _metric_int(source.get("visual_calls"), 1),
-        "visual_successes": _metric_int(source.get("visual_successes"), 1),
+        "visual_calls": _metric_int(source.get("visual_calls"), MAX_REPAIR_CLIPS),
+        "visual_successes": _metric_int(
+            source.get("visual_successes"),
+            MAX_REPAIR_CLIPS,
+        ),
         "plan_calls": _metric_int(source.get("plan_calls"), 2),
         "plan_successes": _metric_int(source.get("plan_successes"), 2),
         "primary_calls": _metric_int(source.get("primary_calls"), 1),

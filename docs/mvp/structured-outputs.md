@@ -43,7 +43,8 @@ Registry-driven semantic repair is independently controlled by
 `OPENSTORYLINE_LLM_DEFECT_REPAIR_MODE`. `off` bypasses eligibility and makes no
 repair call. `report` evaluates the same evidence and records only a redacted
 would-call contract. `enforce` may make at most one visual-understanding repair
-and one primary plus at most one contingency pre-render edit-plan batch. The
+per affected clip (bounded to the eight-clip repair limit) and one primary plus
+at most one contingency pre-render edit-plan batch. The
 contingency is reserved for a genuinely new authoritative defect after primary
 revalidation. Advisory-only,
 post-render, provider, media, security, unknown, and FFMPEGA findings cannot

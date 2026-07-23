@@ -251,6 +251,36 @@ class RepairEligibilityTests(unittest.TestCase):
             budget=RepairBudget(plan_attempts_used=2),
         ).eligible)
 
+    def test_visual_budget_is_bounded_independently_per_clip(self):
+        clip_one = make_repair_finding(
+            "VISUAL_RESPONSE_INVALID",
+            clip_index=1,
+            objective=True,
+            values={"observed": "invalid", "count": 1},
+        )
+        clip_two = make_repair_finding(
+            "VISUAL_RESPONSE_INVALID",
+            clip_index=2,
+            objective=True,
+            values={"observed": "invalid", "count": 1},
+        )
+        budget = RepairBudget(
+            visual_attempts_used_by_clip={1: 1, 2: 0},
+        )
+
+        self.assertFalse(repair_disposition(
+            clip_one,
+            stage=RepairStage.VISUAL_UNDERSTANDING,
+            mode=RepairMode.ENFORCE,
+            budget=budget,
+        ).call_allowed)
+        self.assertTrue(repair_disposition(
+            clip_two,
+            stage=RepairStage.VISUAL_UNDERSTANDING,
+            mode=RepairMode.ENFORCE,
+            budget=budget,
+        ).call_allowed)
+
     def test_plan_repair_state_requires_matching_outbound_attempt_before_fallback(self):
         finding = make_repair_finding(
             "COMPOSITION_CROP_TARGET_TOO_WIDE",

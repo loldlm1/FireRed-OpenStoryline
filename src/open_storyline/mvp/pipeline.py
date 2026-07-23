@@ -162,6 +162,7 @@ from open_storyline.mvp.repair import (
     evaluate_repair_quality_floor,
     authoritative_plan_fingerprint,
     make_repair_finding,
+    repair_disposition,
     predict_plan_findings,
     repair_findings_from_preflight,
     repair_findings_from_visual_coverage,
@@ -966,7 +967,10 @@ class MVPJobProcessor:
         edit_planner_attempts: list[dict[str, Any]] = []
         remote_client = NineRouterClient.from_config(self.config.ninerouter)
         repair_mode = resolve_repair_mode() if agentic_requested else RepairMode.OFF
-        visual_repair_attempts_used = 0
+        # Visual understanding is analyzed per clip. Keep the bounded repair
+        # budget per clip so one malformed response does not consume another
+        # clip's only useful repair call.
+        visual_repair_attempts_used_by_clip: dict[int, int] = {}
         repair_checkpoint_reports: dict[str, dict[str, Any]] = {}
         repair_stage_records: dict[str, dict[str, Any]] = {}
         predictive_repair_findings: tuple[Any, ...] = ()
@@ -1026,12 +1030,15 @@ class MVPJobProcessor:
             frame_manifest: FrameManifest,
             scene_report: SceneBoundaryReport,
         ) -> dict[str, Any]:
-            nonlocal visual_repair_attempts_used
             clip_match = re.match(
                 r"clip-(\d{2})-",
                 frame_manifest.frames[0].id if frame_manifest.frames else "",
             )
             clip_index = int(clip_match.group(1)) if clip_match else 1
+            visual_attempts_used = visual_repair_attempts_used_by_clip.get(
+                clip_index,
+                0,
+            )
             finding = make_repair_finding(
                 str(error.code),
                 clip_index=clip_index,
@@ -1051,24 +1058,76 @@ class MVPJobProcessor:
                     text=transcript_text,
                 ),
             ) if transcript_text else ()
-            request, dispositions = build_repair_batch(
-                stage=RepairStage.VISUAL_UNDERSTANDING,
-                mode=repair_mode,
-                findings=(finding,),
-                budget=RepairBudget(
-                    visual_attempts_used=visual_repair_attempts_used,
-                ),
-                candidate_clips={clip_index: invalid_response},
-                available_capabilities=("visual_understanding",),
-                catalog_context={},
-                immutable_constraints={
-                    "source_duration_ms": frame_manifest.source_duration_ms,
-                    "frame_ids": [frame.id for frame in frame_manifest.frames],
-                    "scene_ids": [scene.id for scene in scene_report.scenes],
-                },
-                editing_prompt=str(user_payload.get("editing_context") or ""),
-                transcript_excerpts=excerpts,
+            budget = RepairBudget(
+                visual_attempts_used=visual_attempts_used,
+                visual_attempts_used_by_clip=visual_repair_attempts_used_by_clip,
             )
+            try:
+                request, dispositions = build_repair_batch(
+                    stage=RepairStage.VISUAL_UNDERSTANDING,
+                    mode=repair_mode,
+                    findings=(finding,),
+                    budget=budget,
+                    candidate_clips={clip_index: invalid_response},
+                    available_capabilities=("visual_understanding",),
+                    catalog_context={},
+                    immutable_constraints={
+                        "source_duration_ms": frame_manifest.source_duration_ms,
+                        "frame_ids": [frame.id for frame in frame_manifest.frames],
+                        "scene_ids": [scene.id for scene in scene_report.scenes],
+                    },
+                    editing_prompt=str(user_payload.get("editing_context") or ""),
+                    transcript_excerpts=excerpts,
+                )
+            except RepairContractError as exc:
+                if exc.code != "REPAIR_NOT_ELIGIBLE":
+                    raise
+                # Preserve the validator's typed failure when this clip has
+                # already consumed its one semantic repair opportunity.
+                disposition = repair_disposition(
+                    finding,
+                    stage=RepairStage.VISUAL_UNDERSTANDING,
+                    mode=repair_mode,
+                    budget=budget,
+                    available_capabilities=("visual_understanding",),
+                )
+                repair_checkpoint_reports["visual_repair"] = {
+                    "version": REPAIR_REPORT_VERSION,
+                    "stage": RepairStage.VISUAL_UNDERSTANDING.value,
+                    "mode": repair_mode.value,
+                    "repair_round": "visual",
+                    "affected_clip_ids": [clip_index],
+                    "objective_codes": [finding.code],
+                    "evidence_types": [
+                        item.evidence_type for item in finding.evidence
+                    ],
+                    "would_call": disposition.would_call,
+                    "call_allowed": disposition.call_allowed,
+                    "reason": disposition.reason,
+                }
+                repair_stage_records["visual_repair"] = {
+                    "stage": RepairStage.VISUAL_UNDERSTANDING.value,
+                    "status": "rejected",
+                    "request": repair_checkpoint_reports["visual_repair"],
+                    "dispositions": [disposition.to_dict()],
+                    "resolution": compute_repair_resolution(
+                        (finding.code,), (finding.code,)
+                    ).to_dict(),
+                    "quality_floor": {
+                        "accepted": False,
+                        "violation_codes": [finding.code],
+                    },
+                    "attempts": [],
+                    "checkpoint_reused": False,
+                    "repair_round": "visual",
+                    "provider_outcome": exc.code,
+                    "schema_valid": False,
+                    "semantic_valid": False,
+                    "candidate_disposition": "rejected",
+                    "checkpoint_fingerprint": "",
+                }
+                await persist_partial_repair_report()
+                raise error
             report = compact_repair_observability({
                 **request.to_report_dict(),
                 "model": getattr(remote_client, "model", "unknown"),
@@ -1113,7 +1172,7 @@ class MVPJobProcessor:
                         except (TypeError, ValueError, VisualUnderstandingError):
                             hit = None
                         else:
-                            visual_repair_attempts_used = 1
+                            visual_repair_attempts_used_by_clip[clip_index] = 1
                             track_checkpoint("visual_repair", reused=True)
                             repair_stage_records["visual_repair"] = {
                                 "stage": RepairStage.VISUAL_UNDERSTANDING.value,
@@ -1148,7 +1207,7 @@ class MVPJobProcessor:
                             await persist_partial_repair_report()
                             return validated.to_dict()
                 else:
-                    visual_repair_attempts_used = 1
+                    visual_repair_attempts_used_by_clip[clip_index] = 1
                     track_checkpoint("visual_repair", reused=True)
                     cached_status = str(hit.payload.get("status") or "failed")
                     repair_stage_records["visual_repair"] = {
@@ -1185,7 +1244,7 @@ class MVPJobProcessor:
                     await persist_partial_repair_report()
                     raise error
             track_checkpoint("visual_repair", reused=False)
-            visual_repair_attempts_used += 1
+            visual_repair_attempts_used_by_clip[clip_index] = visual_attempts_used + 1
             repair_checkpoint_reports["visual_repair"] = report
             if repair_mode is RepairMode.REPORT:
                 await save_job_checkpoint(
