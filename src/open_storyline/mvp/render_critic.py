@@ -66,6 +66,7 @@ def critic_call_fingerprint(
     manifest: RenderEvidenceManifest,
     *,
     editing_prompt: str,
+    narrative_context: Mapping[str, Any] | None = None,
     model: str = "unknown",
     reasoning_effort: str = "unknown",
 ) -> str:
@@ -83,6 +84,7 @@ def critic_call_fingerprint(
         "editing_prompt_sha256": sha256(
             _bounded_editing_prompt(editing_prompt).encode("utf-8")
         ).hexdigest(),
+        "narrative_context_sha256": _hash_json(narrative_context or {}),
     })
 
 
@@ -107,6 +109,7 @@ def build_render_critic_prompt(
     manifest: RenderEvidenceManifest,
     *,
     editing_prompt: str,
+    narrative_context: Mapping[str, Any] | None = None,
 ) -> str:
     evidence = []
     for clip in manifest.clips:
@@ -129,6 +132,7 @@ def build_render_critic_prompt(
             "transitions, effects, visual hierarchy, and relevance."
         ),
         "editing_prompt": _bounded_editing_prompt(editing_prompt),
+        "narrative_context": narrative_context or {},
         "evidence": evidence,
         "effect_execution": [
             {
@@ -346,6 +350,7 @@ async def review_render_evidence(
     image_data_urls: Mapping[str, str],
     client: Any,
     editing_prompt: str,
+    narrative_context: Mapping[str, Any] | None = None,
     mode: str = "report",
     previous_call_fingerprint: str | None = None,
 ) -> dict[str, Any]:
@@ -354,6 +359,7 @@ async def review_render_evidence(
     call_fingerprint = critic_call_fingerprint(
         manifest,
         editing_prompt=editing_prompt,
+        narrative_context=narrative_context,
         model=getattr(client, "model", "unknown"),
         reasoning_effort=getattr(client, "reasoning_effort", "unknown"),
     )
@@ -392,6 +398,7 @@ async def review_render_evidence(
             user_prompt=build_render_critic_prompt(
                 manifest,
                 editing_prompt=editing_prompt,
+                narrative_context=narrative_context,
             ),
             image_data_urls=tuple(ordered_urls),
         )

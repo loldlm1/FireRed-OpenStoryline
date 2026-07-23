@@ -573,6 +573,30 @@ def _post_render_repair_summary(value: Any) -> dict[str, Any]:
     }
 
 
+def _candidate_comparison_summary(value: Any) -> dict[str, Any]:
+    source = value if isinstance(value, dict) else {}
+    status = str(source.get("status") or "disabled")[:20]
+    if status not in {"disabled", "skipped", "completed", "unavailable"}:
+        status = "unavailable"
+    selection = str(source.get("selection") or "tie")[:12]
+    if selection not in {"original", "repaired", "tie"}:
+        selection = "tie"
+    return {
+        "version": str(source.get("version") or "")[:80],
+        "status": status,
+        "selection": selection,
+        "confidence": _metric_float(source.get("confidence"), 1),
+        "uncertainty": str(source.get("uncertainty") or "high")[:12],
+        "provider_calls": _metric_int(source.get("provider_calls"), 1),
+        "checkpoint_reused": source.get("checkpoint_reused") is True,
+        "call_fingerprint": (
+            str(source.get("call_fingerprint") or "")
+            if _HASH.fullmatch(str(source.get("call_fingerprint") or ""))
+            else ""
+        ),
+    }
+
+
 def repair_defect_lifecycle(repair: dict[str, Any]) -> list[dict[str, Any]]:
     records: dict[str, dict[str, Any]] = {}
 
@@ -677,6 +701,7 @@ def build_completed_outcome_report(
     semantic_review: dict[str, Any] | None = None,
     render_critic: dict[str, Any] | None = None,
     post_render_repair: dict[str, Any] | None = None,
+    candidate_comparison: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     fallbacks = tuple(fallback_entries)
     promotion = promotion_report if isinstance(promotion_report, dict) else {}
@@ -784,6 +809,7 @@ def build_completed_outcome_report(
         "semantic_qa": _semantic_qa_summary(semantic_review),
         "creative_review": _render_critic_summary(render_critic),
         "post_render_repair": _post_render_repair_summary(post_render_repair),
+        "candidate_comparison": _candidate_comparison_summary(candidate_comparison),
         "delivery": {
             "policy": delivery_policy,
             "decision": delivery_decision,

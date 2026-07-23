@@ -484,8 +484,8 @@ class KamalConfigTests(unittest.TestCase):
             OPENSTORYLINE_STRUCTURED_OUTPUT_BOUNDARIES=(
                 "shorts_selection.v1,visual_understanding.v1,edit_plan.v1,"
                 "edit_plan_repair.v1,semantic_qa.v1,render_critic.v1,"
-                "post_render_repair.v1,ffmpega_agentic_finishing.v1,"
-                "ffmpega_deterministic_effects.v1,post_render_repair.v2"
+                "post_render_repair.v1,post_render_repair.v2,candidate_comparison.v1,"
+                "ffmpega_agentic_finishing.v1,ffmpega_deterministic_effects.v1"
             ),
             OPENSTORYLINE_LLM_DEFECT_REPAIR_MODE="enforce",
             OPENSTORYLINE_AGENTIC_EDITING_MODE="render",
@@ -508,8 +508,8 @@ class KamalConfigTests(unittest.TestCase):
             "OPENSTORYLINE_STRUCTURED_OUTPUT_BOUNDARIES": (
                 "shorts_selection.v1,visual_understanding.v1,edit_plan.v1,"
                 "edit_plan_repair.v1,semantic_qa.v1,render_critic.v1,"
-                "post_render_repair.v1,ffmpega_agentic_finishing.v1,"
-                "ffmpega_deterministic_effects.v1,post_render_repair.v2"
+                "post_render_repair.v1,post_render_repair.v2,candidate_comparison.v1,"
+                "ffmpega_agentic_finishing.v1,ffmpega_deterministic_effects.v1"
             ),
             "OPENSTORYLINE_AGENTIC_EDITING_MODE": "render",
         }
@@ -538,8 +538,8 @@ class KamalConfigTests(unittest.TestCase):
             OPENSTORYLINE_STRUCTURED_OUTPUT_BOUNDARIES=(
                 "shorts_selection.v1,visual_understanding.v1,edit_plan.v1,"
                 "edit_plan_repair.v1,semantic_qa.v1,render_critic.v1,"
-                "post_render_repair.v1,ffmpega_agentic_finishing.v1,"
-                "ffmpega_deterministic_effects.v1,post_render_repair.v2"
+                "post_render_repair.v1,post_render_repair.v2,candidate_comparison.v1,"
+                "ffmpega_agentic_finishing.v1,ffmpega_deterministic_effects.v1"
             ),
             OPENSTORYLINE_LLM_DEFECT_REPAIR_MODE="report",
             OPENSTORYLINE_AGENTIC_EDITING_MODE="shadow",
@@ -566,8 +566,8 @@ class KamalConfigTests(unittest.TestCase):
             "OPENSTORYLINE_STRUCTURED_OUTPUT_BOUNDARIES": (
                 "shorts_selection.v1,visual_understanding.v1,edit_plan.v1,"
                 "edit_plan_repair.v1,semantic_qa.v1,render_critic.v1,"
-                "post_render_repair.v1,ffmpega_agentic_finishing.v1,"
-                "ffmpega_deterministic_effects.v1,post_render_repair.v2"
+                "post_render_repair.v1,post_render_repair.v2,candidate_comparison.v1,"
+                "ffmpega_agentic_finishing.v1,ffmpega_deterministic_effects.v1"
             ),
             "OPENSTORYLINE_LLM_DEFECT_REPAIR_MODE": "enforce",
             "OPENSTORYLINE_AGENTIC_EDITING_MODE": "render",
@@ -586,7 +586,7 @@ class KamalConfigTests(unittest.TestCase):
                 **complete,
                 "OPENSTORYLINE_STRUCTURED_OUTPUT_BOUNDARIES": complete[
                     "OPENSTORYLINE_STRUCTURED_OUTPUT_BOUNDARIES"
-                ].replace(",post_render_repair.v2", ""),
+                ].replace(",post_render_repair.v2,candidate_comparison.v1", ""),
             },
             OPENSTORYLINE_POST_RENDER_REVIEW_MODE="enforce",
         )

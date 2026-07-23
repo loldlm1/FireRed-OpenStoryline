@@ -15,6 +15,7 @@ Registered boundaries are:
 - `edit_plan_repair.v1`
 - `semantic_qa.v1`
 - `render_critic.v1`
+- `candidate_comparison.v1`
 - `post_render_repair.v1` (read-only compatibility)
 - `post_render_repair.v2`
 - `ffmpega_agentic_finishing.v1`
@@ -61,6 +62,14 @@ when the rendered critic shows improvement without a new authoritative blocker.
 One primary request is allowed; one contingency request is allowed only for a
 new objective defect. Sidecar failure records an omitted effect and does not
 trigger another semantic request.
+
+The critic receives bounded transient narrative context: timestamped transcript
+segments, scene/cut counts, caption-event counts, and hold-length metrics. These
+values ground pacing and coherence findings but are never persisted in the
+critic, comparison, or outcome artifacts. `candidate_comparison.v1` is called
+only when original and repaired candidates are materially different and both
+survive deterministic gates; a single candidate, unchanged evidence, or a
+technical blocker produces a no-call outcome.
 
 The deploy wrapper runs Responses-based strict acceptance and extra-field
 rejection probes whenever `json_schema` mode is selected. A failed probe blocks

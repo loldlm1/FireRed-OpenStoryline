@@ -70,6 +70,13 @@ from open_storyline.mvp.render_critic import (
     render_review_mode,
     review_render_evidence,
 )
+from open_storyline.mvp.candidate_comparison import (
+    CANDIDATE_COMPARISON_VERSION,
+    CandidateComparisonError,
+    compare_rendered_candidates,
+    comparison_from_checkpoint,
+    comparison_call_fingerprint,
+)
 from open_storyline.mvp.fallbacks import (
     FallbackEntry,
     FallbackDirective,
@@ -133,6 +140,7 @@ from open_storyline.mvp.prompts import (
     REPAIR_SYSTEM_PROMPT_VERSION,
     POST_RENDER_REPAIR_SYSTEM_PROMPT,
     RENDER_CRITIC_SYSTEM_PROMPT,
+    CANDIDATE_COMPARISON_SYSTEM_PROMPT,
     VISUAL_UNDERSTANDING_SYSTEM_PROMPT,
 )
 from open_storyline.mvp.repair import (
@@ -262,6 +270,42 @@ def _effect_execution_summary(
         "omission_codes": sorted({
             item.reason_code for item in records.values() if item.reason_code
         }),
+    }
+
+
+def _bounded_narrative_context(
+    transcript: Any,
+    rhythm_report: Mapping[str, Any] | None,
+) -> dict[str, Any]:
+    """Provide transient timing/rhythm evidence without persisting transcript text."""
+    segments = []
+    for index, item in enumerate(getattr(transcript, "segments", ())[:32]):
+        if not isinstance(item, Mapping):
+            continue
+        start = max(0, int(item.get("start") or 0))
+        end = max(start + 1, int(item.get("end") or start + 1))
+        text = str(item.get("text") or "").strip()
+        segments.append({
+            "segment_id": f"transcript-{index + 1}",
+            "start_ms": start,
+            "end_ms": end,
+            "text": text[:240],
+        })
+    rhythm = rhythm_report if isinstance(rhythm_report, Mapping) else {}
+    return {
+        "transcript_segments": segments,
+        "scene_change_count": min(64, len(segments)),
+        "rhythm_metrics": {
+            key: rhythm.get(key)
+            for key in (
+                "status",
+                "cut_count",
+                "caption_event_count",
+                "median_hold_ms",
+                "longest_hold_ms",
+            )
+            if rhythm.get(key) is not None
+        },
     }
 
 
@@ -4088,9 +4132,11 @@ class MVPJobProcessor:
         rendered = delivered_rendered
 
         render_qa_report: dict[str, Any] | None = None
+        rhythm_qa_report: dict[str, Any] | None = None
         creative_conformance_report: dict[str, Any] | None = None
         render_critic_report: dict[str, Any] | None = None
         post_render_repair_report: dict[str, Any] | None = None
+        candidate_comparison_report: dict[str, Any] | None = None
         semantic_review_report: dict[str, Any] = {
             "status": "disabled",
             "provider_calls": 0,
@@ -4141,6 +4187,7 @@ class MVPJobProcessor:
                         "registered": registered,
                     }
                     render_qa_report = qa_artifacts.render_qa
+                    rhythm_qa_report = qa_artifacts.rhythm_qa
                     creative_conformance_report = qa_artifacts.conformance
                     semantic_review_report = (
                         qa_artifacts.conformance.get("semantic_review")
@@ -4379,6 +4426,10 @@ class MVPJobProcessor:
                     retryable=retryable_error(error_code),
                 )
             agentic_manifest["render_evidence"] = evidence_manifest
+            narrative_context = _bounded_narrative_context(
+                transcript,
+                rhythm_qa_report,
+            )
             critic_manifest: dict[str, Any] = {
                 "mode": "off",
                 "status": "disabled",
@@ -4397,6 +4448,7 @@ class MVPJobProcessor:
                     critic_fingerprint = critic_call_fingerprint(
                         evidence,
                         editing_prompt=state["prompt"],
+                        narrative_context=narrative_context,
                         model=getattr(remote_client, "model", "unknown"),
                         reasoning_effort=getattr(
                             remote_client,
@@ -4434,6 +4486,7 @@ class MVPJobProcessor:
                             image_data_urls=evidence_bundle.image_data_urls,
                             client=remote_client,
                             editing_prompt=state["prompt"],
+                            narrative_context=narrative_context,
                             mode=critic_mode,
                         )
                         critic_report["checkpoint_reused"] = False
@@ -5073,6 +5126,7 @@ class MVPJobProcessor:
                         candidate_critic_fingerprint = critic_call_fingerprint(
                             candidate_review_evidence,
                             editing_prompt=state["prompt"],
+                            narrative_context=narrative_context,
                             model=getattr(remote_client, "model", "unknown"),
                             reasoning_effort=getattr(
                                 remote_client,
@@ -5107,6 +5161,7 @@ class MVPJobProcessor:
                                 ),
                                 client=remote_client,
                                 editing_prompt=state["prompt"],
+                                narrative_context=narrative_context,
                                 mode="enforce",
                             )
                             candidate_critic["checkpoint_reused"] = False
@@ -5144,6 +5199,82 @@ class MVPJobProcessor:
                             original_affected_critic,
                             candidate_critic,
                         )
+                        candidate_preference: dict[str, Any] | None = None
+                        technically_comparable = (
+                            original_candidate_gate.get("decision") != "block"
+                            and candidate_gate.get("decision") != "block"
+                            and candidate_evidence.candidate_fingerprint != (
+                                evidence.candidate_fingerprint
+                                if evidence is not None
+                                else ""
+                            )
+                            and any(
+                                item.get("evidence_ids")
+                                for item in (
+                                    original_affected_critic,
+                                    candidate_critic,
+                                )
+                                if isinstance(item, Mapping)
+                                for item in (item.get("findings") or ())
+                            )
+                        )
+                        if technically_comparable:
+                            comparison_fingerprint = comparison_call_fingerprint(
+                                original_report=original_affected_critic,
+                                repaired_report=candidate_critic,
+                                model=getattr(remote_client, "model", "unknown"),
+                                reasoning_effort=getattr(
+                                    remote_client,
+                                    "reasoning_effort",
+                                    "unknown",
+                                ),
+                            )
+                            comparison_stage = (
+                                f"candidate_comparison_{round_name}"
+                            )
+                            comparison_hit = await load_job_checkpoint(
+                                job_id=job_id,
+                                stage=comparison_stage,
+                                fingerprint=comparison_fingerprint,
+                            )
+                            if comparison_hit is not None:
+                                candidate_preference = comparison_from_checkpoint(
+                                    comparison_hit.payload,
+                                    expected_call_fingerprint=comparison_fingerprint,
+                                )
+                                track_checkpoint(comparison_stage, reused=True)
+                            else:
+                                candidate_preference = await compare_rendered_candidates(
+                                    original_report=original_affected_critic,
+                                    repaired_report=candidate_critic,
+                                    client=remote_client,
+                                )
+                                track_checkpoint(comparison_stage, reused=False)
+                                await save_job_checkpoint(
+                                    job_id=job_id,
+                                    stage=comparison_stage,
+                                    contract_version=CANDIDATE_COMPARISON_VERSION,
+                                    fingerprint=comparison_fingerprint,
+                                    payload=candidate_preference,
+                                    metadata={
+                                        "selection": candidate_preference.get("selection"),
+                                        "provider_calls": candidate_preference.get("provider_calls", 0),
+                                    },
+                                )
+                            candidate_comparison_report = candidate_preference
+                        elif candidate_preference is None:
+                            candidate_comparison_report = {
+                                "version": CANDIDATE_COMPARISON_VERSION,
+                                "status": "skipped",
+                                "selection": "repaired" if comparison["demonstrated"] else "original",
+                                "provider_calls": 0,
+                                "reason": "single_candidate_or_technical_gate",
+                            }
+                        preference_accepts = (
+                            candidate_preference is None
+                            or candidate_preference.get("status") in {"unavailable", "skipped"}
+                            or candidate_preference.get("selection") in {"repaired", "tie"}
+                        )
                         unchanged_findings = [
                             item
                             for item in original_critic_report.get("findings") or []
@@ -5180,6 +5311,7 @@ class MVPJobProcessor:
                                 not new_blocker_codes
                                 and candidate_gate["decision"] != "block"
                                 and comparison["demonstrated"]
+                                and preference_accepts
                             )
                             else "rejected",
                             "localized_render_clip_indexes": list(
@@ -5195,11 +5327,13 @@ class MVPJobProcessor:
                                 "new_blocker_codes": list(new_blocker_codes),
                             },
                             "improvement": comparison,
+                            "candidate_comparison": candidate_preference,
                         })
                         if (
                             not new_blocker_codes
                             and candidate_gate["decision"] != "block"
                             and comparison["demonstrated"]
+                            and preference_accepts
                         ):
                             accepted = {
                                 "plan": candidate_plan,
@@ -5590,6 +5724,7 @@ class MVPJobProcessor:
             semantic_review=semantic_review_report,
             render_critic=render_critic_report,
             post_render_repair=post_render_repair_report,
+            candidate_comparison=candidate_comparison_report,
             rollout_attribution={
                 "model": getattr(remote_client, "model", "unknown"),
                 "reasoning_effort": getattr(
@@ -5630,6 +5765,7 @@ class MVPJobProcessor:
                         REPAIR_SYSTEM_PROMPT,
                         RENDER_CRITIC_SYSTEM_PROMPT,
                         POST_RENDER_REPAIR_SYSTEM_PROMPT,
+                        CANDIDATE_COMPARISON_SYSTEM_PROMPT,
                     )
                 ],
             },

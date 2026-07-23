@@ -108,7 +108,7 @@ validate_agentic_rollout_flags() {
   IFS=',' read -r -a items <<< "$compact_boundaries"
   for item in "${items[@]}"; do
     case "$item" in
-      shorts_selection.v1|visual_understanding.v1|edit_plan.v1|edit_plan_repair.v1|semantic_qa.v1|render_critic.v1|post_render_repair.v1|post_render_repair.v2|ffmpega_agentic_finishing.v1|ffmpega_deterministic_effects.v1)
+      shorts_selection.v1|visual_understanding.v1|edit_plan.v1|edit_plan_repair.v1|semantic_qa.v1|render_critic.v1|post_render_repair.v1|post_render_repair.v2|candidate_comparison.v1|ffmpega_agentic_finishing.v1|ffmpega_deterministic_effects.v1)
         enabled["$item"]=1
         ;;
       *)
@@ -159,6 +159,11 @@ validate_agentic_rollout_flags() {
       || fail "post_render_repair.v2 requires post_render_repair.v1 compatibility first"
     stage=8
   fi
+  if [[ -n "${enabled[candidate_comparison.v1]:-}" ]]; then
+    [[ "$stage" -ge 8 ]] \
+      || fail "candidate_comparison.v1 requires post_render_repair.v2 first"
+    stage=9
+  fi
   if [[ -z "${enabled[visual_understanding.v1]:-}" && "$stage" -gt 1 ]] \
     || [[ -z "${enabled[edit_plan.v1]:-}" && "$stage" -gt 2 ]] \
     || [[ -z "${enabled[semantic_qa.v1]:-}" && "$stage" -gt 3 ]] \
@@ -166,6 +171,9 @@ validate_agentic_rollout_flags() {
     || [[ -z "${enabled[post_render_repair.v1]:-}" && "$stage" -gt 5 ]] \
     || [[ -z "${enabled[ffmpega_agentic_finishing.v1]:-}" && "$stage" -gt 6 ]] \
     || [[ -z "${enabled[post_render_repair.v2]:-}" && "$stage" -gt 7 ]]; then
+    fail "strict-schema boundaries must be a complete rollout prefix"
+  fi
+  if [[ -z "${enabled[candidate_comparison.v1]:-}" && "$stage" -gt 8 ]]; then
     fail "strict-schema boundaries must be a complete rollout prefix"
   fi
 
@@ -184,6 +192,8 @@ validate_agentic_rollout_flags() {
   if [[ "$post_render_review" == "enforce" ]]; then
     [[ -n "${enabled[post_render_repair.v2]:-}" ]] \
       || fail "post-render review enforce requires post_render_repair.v2"
+    [[ -n "${enabled[candidate_comparison.v1]:-}" ]] \
+      || fail "post-render review enforce requires candidate_comparison.v1"
     [[ "$repair_mode" == "enforce" ]] \
       || fail "post-render review enforce requires enforced LLM repair"
   fi

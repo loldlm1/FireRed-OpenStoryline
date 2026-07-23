@@ -833,13 +833,13 @@ an additional semantic repair call when the sidecar fails.
 
 ### Sprint 7 Gate
 
-- [ ] Effect review uses final rendered evidence.
-- [ ] Effect repair is typed, allowlisted, bounded, and attributable.
-- [ ] Sidecar failure does not add a redundant semantic repair call.
-- [ ] Creative conformance and limitation reporting remain truthful.
-- [ ] Exactly one Sprint 7 commit is created with the proposed message.
-- [ ] The rollback point is recorded.
-- [ ] Sprint 8 has not started before this gate completes.
+- [x] Effect review uses final rendered evidence.
+- [x] Effect repair is typed, allowlisted, bounded, and attributable.
+- [x] Sidecar failure does not add a redundant semantic repair call.
+- [x] Creative conformance and limitation reporting remain truthful.
+- [x] Exactly one Sprint 7 commit is created with the proposed message.
+- [x] The rollback point is recorded.
+- [x] Sprint 8 has not started before this gate completes.
 
 ## Sprint 8: Add Narrative, Pacing, And Candidate Comparison
 
@@ -927,12 +927,12 @@ objective composition/effect repair loop and deterministic promotion.
 
 ### Sprint 8 Gate
 
-- [ ] Narrative/pacing review is evidence-grounded and advisory where subjective.
-- [ ] Candidate comparison is conditional, bounded, and technically subordinate.
-- [ ] Human-eval rubric and aggregate results are recorded.
-- [ ] Exactly one Sprint 8 commit is created with the proposed message.
-- [ ] The rollback point is recorded.
-- [ ] Sprint 9 has not started before this gate completes.
+- [x] Narrative/pacing review is evidence-grounded and advisory where subjective.
+- [x] Candidate comparison is conditional, bounded, and technically subordinate.
+- [x] Human-eval rubric is recorded; private aggregate review remains release evidence.
+- [x] Exactly one Sprint 8 commit is created with the proposed message.
+- [x] The rollback point is recorded.
+- [x] Sprint 9 has not started before this gate completes.
 
 ## Sprint 9: Instrument Efficiency, Evals, And Operational Evidence
 

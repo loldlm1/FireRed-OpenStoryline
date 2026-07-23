@@ -20,6 +20,7 @@ EDIT_PLAN_SCHEMA = "edit_plan.v1"
 EDIT_PLAN_REPAIR_SCHEMA = "edit_plan_repair.v1"
 SEMANTIC_QA_SCHEMA = "semantic_qa.v1"
 RENDER_CRITIC_SCHEMA = "render_critic.v1"
+CANDIDATE_COMPARISON_SCHEMA = "candidate_comparison.v1"
 POST_RENDER_REPAIR_COMPAT_SCHEMA = "post_render_repair.v1"
 POST_RENDER_REPAIR_SCHEMA = "post_render_repair.v2"
 FFMPEGA_AGENTIC_SCHEMA = "ffmpega_agentic_finishing.v1"
@@ -272,6 +273,14 @@ class RenderCriticResponseWire(WireModel):
     findings: list[RenderCriticFindingWire] = Field(max_length=64)
 
 
+class CandidateComparisonResponseWire(WireModel):
+    selection: Literal["original", "repaired", "tie"]
+    confidence: float = Field(ge=0, le=1, allow_inf_nan=False)
+    rationale: str = Field(min_length=1, max_length=600)
+    evidence_ids: list[str] = Field(min_length=1, max_length=32)
+    uncertainty: Literal["low", "medium", "high"]
+
+
 class PostRenderRepairDecisionWire(WireModel):
     finding_id: str = Field(
         min_length=1,
@@ -384,6 +393,7 @@ STRUCTURED_OUTPUTS = {
         _definition(EDIT_PLAN_REPAIR_SCHEMA, EditPlanWire),
         _definition(SEMANTIC_QA_SCHEMA, SemanticQAResponseWire),
         _definition(RENDER_CRITIC_SCHEMA, RenderCriticResponseWire),
+        _definition(CANDIDATE_COMPARISON_SCHEMA, CandidateComparisonResponseWire),
         _definition(POST_RENDER_REPAIR_COMPAT_SCHEMA, PostRenderRepairResponseWire),
         _definition(POST_RENDER_REPAIR_SCHEMA, PostRenderRepairResponseV2Wire),
         _definition(FFMPEGA_AGENTIC_SCHEMA, FFMPEGAAgenticFinishingResponse),
@@ -416,6 +426,7 @@ __all__ = [
     "FFMPEGA_DETERMINISTIC_SCHEMA",
     "SEMANTIC_QA_SCHEMA",
     "RENDER_CRITIC_SCHEMA",
+    "CANDIDATE_COMPARISON_SCHEMA",
     "POST_RENDER_REPAIR_SCHEMA",
     "POST_RENDER_REPAIR_COMPAT_SCHEMA",
     "SHORTS_SELECTION_SCHEMA",
