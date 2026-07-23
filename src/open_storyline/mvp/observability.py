@@ -22,6 +22,7 @@ SAFE_VERSION = re.compile(r"^[A-Za-z0-9._-]{1,80}$")
 QUALITY_FEEDBACK_VERSION = "quality_feedback.v1"
 REPAIR_OBSERVABILITY_VERSION = "repair_observability.v1"
 RENDER_EVIDENCE_OBSERVABILITY_VERSION = "render_evidence_observability.v1"
+RENDER_CRITIC_OBSERVABILITY_VERSION = "render_critic_observability.v1"
 REPAIR_EVIDENCE_TYPES = frozenset(
     evidence_type
     for definition in DEFECT_REGISTRY.values()
@@ -382,6 +383,57 @@ def compact_render_evidence_observability(manifest: dict[str, Any]) -> dict[str,
         "encoded_bytes": _integer(source.get("encoded_bytes"), maximum=64 * 1024 * 1024),
         "selected_reasons": sorted(reasons)[:32],
         "clips": clips,
+    }
+
+
+def compact_render_critic_observability(report: dict[str, Any]) -> dict[str, Any]:
+    """Project critic outcomes without prompts, explanations, or provider bodies."""
+    source = _mapping(report)
+    findings = []
+    for finding in _records(source.get("findings"), limit=64):
+        finding_id = str(finding.get("finding_id") or "")
+        fingerprint = str(finding.get("finding_fingerprint") or "")
+        findings.append({
+            "finding_id": finding_id if SAFE_ID.fullmatch(finding_id) else "",
+            "finding_fingerprint": fingerprint if re.fullmatch(r"[a-f0-9]{64}", fingerprint) else "",
+            "category": _token(finding.get("category"), limit=40),
+            "severity": _token(finding.get("severity"), limit=40),
+            "classification": _token(finding.get("classification"), limit=40),
+            "clip_index": _integer(finding.get("clip_index"), minimum=1, maximum=50),
+            "start_ms": _integer(finding.get("start_ms")),
+            "end_ms": _integer(finding.get("end_ms")),
+            "evidence_count": len([
+                value
+                for value in finding.get("evidence_ids") or []
+                if isinstance(value, str) and SAFE_ID.fullmatch(value)
+            ][:16]),
+            "repairable": finding.get("repairable") is True,
+            "lifecycle": _token(finding.get("lifecycle"), limit=40),
+        })
+    call_fingerprint = str(source.get("call_fingerprint") or "")
+    candidate_fingerprint = str(source.get("candidate_fingerprint") or "")
+    return {
+        "version": RENDER_CRITIC_OBSERVABILITY_VERSION,
+        "report_version": (
+            "render_critic.v1" if source.get("version") == "render_critic.v1" else ""
+        ),
+        "mode": _token(source.get("mode"), limit=20),
+        "status": _token(source.get("status"), limit=20),
+        "model": _token(source.get("model"), limit=80),
+        "reasoning_effort": _token(source.get("reasoning_effort"), limit=20),
+        "prompt_version": _token(source.get("prompt_version"), limit=80),
+        "response_schema": _token(source.get("response_schema"), limit=80),
+        "non_mutating": source.get("non_mutating") is True,
+        "call_fingerprint": call_fingerprint if re.fullmatch(r"[a-f0-9]{64}", call_fingerprint) else "",
+        "candidate_fingerprint": candidate_fingerprint if re.fullmatch(r"[a-f0-9]{64}", candidate_fingerprint) else "",
+        "provider_calls": _integer(source.get("provider_calls"), maximum=1),
+        "finding_count": len(findings),
+        "error_code": (
+            str(source.get("error_code") or "")
+            if SAFE_CODE.fullmatch(str(source.get("error_code") or ""))
+            else ""
+        ),
+        "findings": findings,
     }
 
 

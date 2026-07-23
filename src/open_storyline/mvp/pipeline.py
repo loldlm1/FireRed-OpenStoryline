@@ -54,13 +54,18 @@ from open_storyline.mvp.frame_quality import (
     build_frame_quality_report,
 )
 from open_storyline.mvp.render_evidence import (
-    RenderEvidenceError,
     RenderedCandidate,
     build_render_evidence,
     derive_evidence_events,
     evidence_fingerprint,
     evidence_limits,
     manifest_from_checkpoint,
+)
+from open_storyline.mvp.render_critic import (
+    critic_call_fingerprint,
+    render_critic_report_from_checkpoint,
+    render_review_mode,
+    review_render_evidence,
 )
 from open_storyline.mvp.fallbacks import (
     FallbackEntry,
@@ -91,6 +96,7 @@ from open_storyline.mvp.creative_qa import (
 from open_storyline.mvp.jobs import JobStore
 from open_storyline.mvp.ninerouter import NineRouterClient, NineRouterError
 from open_storyline.mvp.observability import (
+    compact_render_critic_observability,
     compact_render_evidence_observability,
     compact_repair_observability,
     emit_event,
@@ -110,6 +116,7 @@ from open_storyline.mvp.prompts import (
     EDIT_PLAN_SYSTEM_PROMPT,
     REPAIR_SYSTEM_PROMPT,
     REPAIR_SYSTEM_PROMPT_VERSION,
+    RENDER_CRITIC_SYSTEM_PROMPT,
     VISUAL_UNDERSTANDING_SYSTEM_PROMPT,
 )
 from open_storyline.mvp.repair import (
@@ -3779,6 +3786,7 @@ class MVPJobProcessor:
 
         render_qa_report: dict[str, Any] | None = None
         creative_conformance_report: dict[str, Any] | None = None
+        render_critic_report: dict[str, Any] | None = None
         semantic_review_report: dict[str, Any] = {
             "status": "disabled",
             "provider_calls": 0,
@@ -3931,6 +3939,12 @@ class MVPJobProcessor:
                 "frame_count": 0,
                 "burst_count": 0,
             }
+            evidence = None
+            evidence_bundle = None
+            evidence_candidates: list[RenderedCandidate] = []
+            evidence_config = None
+            plan_payload: dict[str, Any] = {}
+            effects_payload: dict[str, Any] = {}
             try:
                 evidence_config = evidence_limits(self.config.agentic_editing)
                 plan_payload = edit_plan.to_dict()
@@ -3949,7 +3963,6 @@ class MVPJobProcessor:
                     int(item.get("clip_index") or 0): item
                     for item in frame_quality_report.get("clips") or []
                 }
-                evidence_candidates = []
                 for qa_input in qa_inputs:
                     clip_index = int(qa_input.clip_index)
                     evidence_candidates.append(RenderedCandidate(
@@ -3987,7 +4000,7 @@ class MVPJobProcessor:
                     )
                     track_checkpoint("render_evidence", reused=True)
                 else:
-                    bundle = await asyncio.to_thread(
+                    evidence_bundle = await asyncio.to_thread(
                         build_render_evidence,
                         evidence_candidates,
                         source_sha256=source_hash,
@@ -3996,7 +4009,7 @@ class MVPJobProcessor:
                         effects=effects_payload,
                         limits=evidence_config,
                     )
-                    evidence = bundle.manifest
+                    evidence = evidence_bundle.manifest
                     track_checkpoint("render_evidence", reused=False)
                     await save_job_checkpoint(
                         job_id=job_id,
@@ -4057,6 +4070,114 @@ class MVPJobProcessor:
                     retryable=retryable_error(error_code),
                 )
             agentic_manifest["render_evidence"] = evidence_manifest
+            critic_manifest: dict[str, Any] = {
+                "mode": "off",
+                "status": "disabled",
+                "non_mutating": True,
+                "provider_calls": 0,
+                "finding_count": 0,
+                "checkpoint_reused": False,
+            }
+            try:
+                critic_mode = render_review_mode(self.config.agentic_editing)
+                critic_manifest["mode"] = critic_mode
+                if critic_mode != "off":
+                    if evidence is None or evidence_config is None:
+                        raise RuntimeError("rendered evidence is unavailable")
+                    critic_fingerprint = critic_call_fingerprint(
+                        evidence,
+                        editing_prompt=state["prompt"],
+                        model=getattr(remote_client, "model", "unknown"),
+                        reasoning_effort=getattr(
+                            remote_client,
+                            "reasoning_effort",
+                            "unknown",
+                        ),
+                    )
+                    critic_hit = await load_job_checkpoint(
+                        job_id=job_id,
+                        stage="render_critic",
+                        fingerprint=critic_fingerprint,
+                    )
+                    if critic_hit is not None:
+                        critic_report = render_critic_report_from_checkpoint(
+                            critic_hit.payload,
+                            expected_call_fingerprint=critic_fingerprint,
+                            expected_candidate_fingerprint=evidence.candidate_fingerprint,
+                        )
+                        track_checkpoint("render_critic", reused=True)
+                    else:
+                        if evidence_bundle is None:
+                            evidence_bundle = await asyncio.to_thread(
+                                build_render_evidence,
+                                evidence_candidates,
+                                source_sha256=source_hash,
+                                render_execution=agentic_result.execution,
+                                plan=plan_payload,
+                                effects=effects_payload,
+                                limits=evidence_config,
+                                checkpoint_reused=True,
+                            )
+                        critic_report = await review_render_evidence(
+                            evidence,
+                            image_data_urls=evidence_bundle.image_data_urls,
+                            client=remote_client,
+                            editing_prompt=state["prompt"],
+                            mode=critic_mode,
+                        )
+                        critic_report["checkpoint_reused"] = False
+                        track_checkpoint("render_critic", reused=False)
+                        await save_job_checkpoint(
+                            job_id=job_id,
+                            stage="render_critic",
+                            contract_version="render_critic.v1",
+                            fingerprint=critic_fingerprint,
+                            payload=critic_report,
+                            metadata={
+                                "status": critic_report.get("status"),
+                                "finding_count": critic_report.get("finding_count", 0),
+                                "provider_calls": critic_report.get("provider_calls", 0),
+                            },
+                        )
+                    critic_report["mode"] = critic_mode
+                    critic_path = output_dir / names.render_critic
+                    render_critic_report = critic_report
+                    critic_path.write_text(
+                        json.dumps(critic_report, ensure_ascii=False, indent=2),
+                        encoding="utf-8",
+                    )
+                    await store.register_artifact(
+                        job_id,
+                        critic_path,
+                        kind="render_critic",
+                    )
+                    critic_manifest = {
+                        "mode": critic_mode,
+                        "status": critic_report.get("status", "unavailable"),
+                        "artifact": names.render_critic,
+                        "non_mutating": True,
+                        "call_fingerprint": critic_report.get("call_fingerprint"),
+                        "provider_calls": critic_report.get("provider_calls", 0),
+                        "finding_count": critic_report.get("finding_count", 0),
+                        "checkpoint_reused": critic_report.get("checkpoint_reused") is True,
+                        "error_code": critic_report.get("error_code"),
+                    }
+                    emit_event(
+                        "render_critic_ready",
+                        job_id=job_id,
+                        stage="post_render_qa",
+                        **compact_render_critic_observability(critic_report),
+                    )
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:
+                critic_manifest.update({
+                    "status": "unavailable",
+                    "error_code": str(
+                        getattr(exc, "code", "RENDER_CRITIC_UNAVAILABLE")
+                    )[:80],
+                })
+            agentic_manifest["render_critic"] = critic_manifest
             caption_footprints = []
             for item in rendered:
                 if item.caption_footprint_path is None:
@@ -4229,6 +4350,7 @@ class MVPJobProcessor:
             ),
             repair_report=repair_report,
             semantic_review=semantic_review_report,
+            render_critic=render_critic_report,
             rollout_attribution={
                 "model": getattr(remote_client, "model", "unknown"),
                 "reasoning_effort": getattr(
@@ -4267,6 +4389,7 @@ class MVPJobProcessor:
                         EDIT_PLAN_SYSTEM_PROMPT,
                         VISUAL_UNDERSTANDING_SYSTEM_PROMPT,
                         REPAIR_SYSTEM_PROMPT,
+                        RENDER_CRITIC_SYSTEM_PROMPT,
                     )
                 ],
             },

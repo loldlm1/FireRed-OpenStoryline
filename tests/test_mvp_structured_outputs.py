@@ -18,6 +18,7 @@ EXPECTED_FINGERPRINTS = {
     "edit_plan.v1": "d24a6164feaf3ac90e7df3b4606235122b5056ffa7c2ebca3967032525c96868",
     "edit_plan_repair.v1": "d24a6164feaf3ac90e7df3b4606235122b5056ffa7c2ebca3967032525c96868",
     "semantic_qa.v1": "7384f780cec8500caed70bd2bebe5f3b672866a019ce42670927cdf0d12f77bf",
+    "render_critic.v1": "c0fa3c631f386dde07c0e50d2ea82341b84575d52b7d0245d949aeda7dc32f0c",
     "ffmpega_agentic_finishing.v1": "9d7b956f9e9e00b9f243eaf518af6faabd1972e4a4315591ef36402ff22a5496",
     "ffmpega_deterministic_effects.v1": "fd8cde2fdc36ad66e4fb23eb958415afbda1944f07abbfeced9c02dfc1b57e0f",
 }

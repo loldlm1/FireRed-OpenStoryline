@@ -55,6 +55,7 @@ completion_policy = "strict"
 delivery_policy = "qa_enforced"
 semantic_qa_enabled = false
 semantic_qa_max_frames = 4
+post_render_review_mode = "off"
 render_evidence_max_frames_per_clip = 12
 render_evidence_max_frames_total = 64
 render_evidence_max_bursts_per_clip = 8

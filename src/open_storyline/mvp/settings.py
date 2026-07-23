@@ -99,6 +99,7 @@ class AgenticEditingConfig(ConfigBaseModel):
     delivery_policy: Literal["qa_enforced", "technical_pass_guaranteed"] = "qa_enforced"
     semantic_qa_enabled: bool = False
     semantic_qa_max_frames: int = Field(default=4, ge=1, le=8)
+    post_render_review_mode: Literal["off", "shadow", "report", "enforce"] = "off"
     render_evidence_max_frames_per_clip: int = Field(default=12, ge=3, le=32)
     render_evidence_max_frames_total: int = Field(default=64, ge=3, le=128)
     render_evidence_max_bursts_per_clip: int = Field(default=8, ge=0, le=16)

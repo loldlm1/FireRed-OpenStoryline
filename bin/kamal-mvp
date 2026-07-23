@@ -44,6 +44,7 @@ validate_agentic_rollout_flags() {
   local capability_verified="${OPENSTORYLINE_STRUCTURED_OUTPUT_CAPABILITY_VERIFIED:-false}"
   local repair_mode="${OPENSTORYLINE_LLM_DEFECT_REPAIR_MODE:-off}"
   local semantic_qa="${OPENSTORYLINE_SEMANTIC_QA_ENABLED:-false}"
+  local post_render_review="${OPENSTORYLINE_POST_RENDER_REVIEW_MODE:-off}"
   local ffmpega="${OPENSTORYLINE_FFMPEGA_ENABLED:-false}"
   local delivery="${OPENSTORYLINE_DELIVERY_POLICY:-qa_enforced}"
   local retry_ux="${OPENSTORYLINE_RETRY_UX_ENABLED:-false}"
@@ -77,6 +78,10 @@ validate_agentic_rollout_flags() {
     off|shadow|render) ;;
     *) fail "OPENSTORYLINE_AGENTIC_EDITING_MODE must be off, shadow, or render" ;;
   esac
+  case "$post_render_review" in
+    off|shadow|report|enforce) ;;
+    *) fail "OPENSTORYLINE_POST_RENDER_REVIEW_MODE must be off, shadow, report, or enforce" ;;
+  esac
 
   if [[ "$mode" == "json_object" ]]; then
     [[ -z "$compact_boundaries" ]] \
@@ -85,6 +90,8 @@ validate_agentic_rollout_flags() {
       || fail "repair rollout requires all strict-schema boundaries first"
     [[ "${semantic_qa,,}" == "false" && "${ffmpega,,}" == "false" ]] \
       || fail "semantic QA and FFMPEGA require their strict-schema boundaries first"
+    [[ "$post_render_review" == "off" ]] \
+      || fail "post-render review requires its strict-schema boundary first"
     [[ "$delivery" == "qa_enforced" ]] \
       || fail "technical-pass delivery requires strict schema and enforced repair first"
     [[ "${retry_ux,,}" == "false" ]] \
@@ -101,7 +108,7 @@ validate_agentic_rollout_flags() {
   IFS=',' read -r -a items <<< "$compact_boundaries"
   for item in "${items[@]}"; do
     case "$item" in
-      shorts_selection.v1|visual_understanding.v1|edit_plan.v1|edit_plan_repair.v1|semantic_qa.v1|ffmpega_agentic_finishing.v1|ffmpega_deterministic_effects.v1)
+      shorts_selection.v1|visual_understanding.v1|edit_plan.v1|edit_plan_repair.v1|semantic_qa.v1|render_critic.v1|ffmpega_agentic_finishing.v1|ffmpega_deterministic_effects.v1)
         enabled["$item"]=1
         ;;
       *)
@@ -128,25 +135,39 @@ validate_agentic_rollout_flags() {
       || fail "semantic_qa.v1 requires the edit-plan strict schemas first"
     stage=4
   fi
-  if [[ -n "${enabled[ffmpega_agentic_finishing.v1]:-}" || -n "${enabled[ffmpega_deterministic_effects.v1]:-}" ]]; then
+  if [[ -n "${enabled[render_critic.v1]:-}" ]]; then
     [[ "$stage" -ge 4 ]] \
-      || fail "FFMPEGA strict schemas require semantic_qa.v1 first"
+      || fail "render_critic.v1 requires semantic_qa.v1 first"
+    stage=5
+  fi
+  if [[ -n "${enabled[ffmpega_agentic_finishing.v1]:-}" || -n "${enabled[ffmpega_deterministic_effects.v1]:-}" ]]; then
+    [[ "$stage" -ge 5 ]] \
+      || fail "FFMPEGA strict schemas require render_critic.v1 first"
     [[ -n "${enabled[ffmpega_agentic_finishing.v1]:-}" && -n "${enabled[ffmpega_deterministic_effects.v1]:-}" ]] \
       || fail "both FFMPEGA strict schemas must roll out together"
-    stage=5
+    stage=6
   fi
   if [[ -z "${enabled[visual_understanding.v1]:-}" && "$stage" -gt 1 ]] \
     || [[ -z "${enabled[edit_plan.v1]:-}" && "$stage" -gt 2 ]] \
-    || [[ -z "${enabled[semantic_qa.v1]:-}" && "$stage" -gt 3 ]]; then
+    || [[ -z "${enabled[semantic_qa.v1]:-}" && "$stage" -gt 3 ]] \
+    || [[ -z "${enabled[render_critic.v1]:-}" && "$stage" -gt 4 ]]; then
     fail "strict-schema boundaries must be a complete rollout prefix"
   fi
 
   if [[ "$repair_mode" != "off" ]]; then
-    [[ "$stage" -eq 5 ]] \
+    [[ "$stage" -eq 6 ]] \
       || fail "repair report/enforce requires every strict-schema boundary first"
     [[ "$agentic_mode" != "off" ]] \
       || fail "repair report/enforce requires agentic editing shadow or render mode"
   fi
+  if [[ "$post_render_review" != "off" ]]; then
+    [[ -n "${enabled[render_critic.v1]:-}" ]] \
+      || fail "post-render review requires render_critic.v1"
+    [[ "$agentic_mode" == "render" ]] \
+      || fail "post-render review requires agentic render mode"
+  fi
+  [[ "$post_render_review" != "enforce" ]] \
+    || fail "post-render review enforce is unavailable before bounded repair rollout"
   if [[ "$repair_mode" == "enforce" ]]; then
     [[ "$agentic_mode" == "render" ]] \
       || fail "enforced repair requires OPENSTORYLINE_AGENTIC_EDITING_MODE=render"
@@ -163,7 +184,7 @@ validate_agentic_rollout_flags() {
     [[ "$stage" -ge 4 ]] || fail "semantic QA requires semantic_qa.v1"
   fi
   if [[ "${ffmpega,,}" == "true" ]]; then
-    [[ "$stage" -eq 5 ]] || fail "FFMPEGA requires both strict FFMPEGA schemas"
+    [[ "$stage" -eq 6 ]] || fail "FFMPEGA requires both strict FFMPEGA schemas"
   fi
   if [[ "$delivery" == "technical_pass_guaranteed" ]]; then
     [[ "$repair_mode" == "enforce" ]] \

@@ -1,7 +1,7 @@
 # Plan: Agentic-Only Render Review and Repair Upgrade
 
 **Generated**: 2026-07-22
-**Status**: In progress; Sprints 1-4 complete
+**Status**: In progress; Sprints 1-5 complete
 **Estimated Complexity**: High
 
 ## Overview
@@ -643,14 +643,14 @@ repair remain authoritative.
 
 ### Sprint 5 Gate
 
-- [ ] Critic schema and prompt are strict, bounded, evidence-grounded, and
+- [x] Critic schema and prompt are strict, bounded, evidence-grounded, and
   non-executable.
-- [ ] Shadow/report calls are non-mutating and call fingerprints suppress
+- [x] Shadow/report calls are non-mutating and call fingerprints suppress
   redundant requests.
-- [ ] Defect lifecycle and privacy evidence are recorded.
-- [ ] Exactly one Sprint 5 commit is created with the proposed message.
-- [ ] The rollback point is recorded.
-- [ ] Sprint 6 has not started before this gate completes.
+- [x] Defect lifecycle and privacy evidence are recorded.
+- [x] Exactly one Sprint 5 commit is created with the proposed message.
+- [x] The rollback point is recorded.
+- [x] Sprint 6 has not started before this gate completes.
 
 ## Sprint 6: Add Core Post-Render Creative Repair
 

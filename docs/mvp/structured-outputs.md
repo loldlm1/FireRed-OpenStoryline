@@ -14,6 +14,7 @@ Registered boundaries are:
 - `edit_plan.v1`
 - `edit_plan_repair.v1`
 - `semantic_qa.v1`
+- `render_critic.v1`
 - `ffmpega_agentic_finishing.v1`
 - `ffmpega_deterministic_effects.v1`
 

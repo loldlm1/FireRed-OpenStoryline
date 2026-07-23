@@ -62,9 +62,12 @@ isolated so upstream behavior can continue to be merged into this fork.
    operations and subtitles on CPU.
 9. Agentic renders remain unregistered candidates while deterministic QA writes
    `render_qa.json`, `frame_quality_qa.json`, `render_evidence.json`,
-   `creative_conformance.json`, caption-footprint evidence, and
+   optional `render_critic.json`, `creative_conformance.json`, caption-footprint evidence, and
    `render_promotion.json`. Rendered evidence uses bounded anchors and
    event-focused bursts; it never sends every frame or persists frame bytes.
+   The optional post-render critic uses the strict `render_critic.v1` schema,
+   references only supplied evidence IDs, and remains non-mutating in
+   `shadow`/`report`. Identical call fingerprints reuse the critic checkpoint.
    Report mode records objective blockers without changing completion behavior.
    Enforce mode uses the configured completion policy: `strict` blocks any
    objective blocker, while the independently enabled `baseline_guaranteed`
@@ -169,6 +172,13 @@ isolated so upstream behavior can continue to be merged into this fork.
   `OPENSTORYLINE_SEMANTIC_QA_MAX_FRAMES`, stores no frame bytes or raw provider
   body, cannot authorize actions or modify the edit plan, and degrades to an
   unavailable review note on provider failure.
+- `OPENSTORYLINE_POST_RENDER_REVIEW_MODE=off|shadow|report|enforce` is an
+  operator rollout control, not an editor mode. Sprint-5 `shadow` and `report`
+  create a bounded `render_critic.json` advisory report after final rendered
+  evidence; they cannot change the plan, candidate, effects, or promotion.
+  `enforce` remains rejected by rollout validation until bounded post-render
+  repair is available. The critic checkpoint stores only sanitized metadata,
+  stable finding fingerprints, attribution, and lifecycle state.
 - Optional FFMPEGA finishing runs in a separate, non-root, model-free container
   built from pinned upstream commit
   `0cfe2db05df104f95c98cc45e11f129fa5ef5193`. The service exposes only the

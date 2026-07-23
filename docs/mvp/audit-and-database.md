@@ -161,7 +161,10 @@ audio, frame, thumbnail, and ZIP bytes never enter PostgreSQL.
 
 Agentic render candidates also produce bounded `frame_quality_qa.json`,
 `render_evidence.json`, `render_promotion.json`, `repair_report.json`, and
-`outcome_report.json` documents. Render evidence stores only candidate hashes,
+`outcome_report.json` documents. When the operator enables post-render review,
+`render_critic.json` records non-mutating evidence-grounded findings and stable
+defect fingerprints without prompt text, provider bodies, or frame bytes.
+Render evidence stores only candidate hashes,
 timestamps, selection reasons, bounded dimensions, frame hashes, and checkpoint
 fingerprints; JPEG data URLs remain transient in memory. Frame quality records
 cropdetect active-area

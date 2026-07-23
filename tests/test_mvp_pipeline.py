@@ -30,6 +30,13 @@ from open_storyline.mvp.pipeline import MVPJobProcessor
 from open_storyline.mvp.preflight import PreflightFinding, PreflightReport, build_preflight
 from open_storyline.mvp.promotion import RenderPromotionError
 from open_storyline.mvp.render import AgenticRenderResult, MediaInfo, RenderError, RenderedShort
+from open_storyline.mvp.render_evidence import (
+    EvidenceClip,
+    EvidenceFrame,
+    EvidenceLimits,
+    RenderEvidenceBundle,
+    RenderEvidenceManifest,
+)
 from open_storyline.mvp.scene_boundaries import build_scene_boundaries
 from open_storyline.mvp.shorts import ShortCandidate, ShortsPlan
 from open_storyline.mvp.stock import PexelsAsset, PexelsAttempt
@@ -577,6 +584,45 @@ async def fake_creative_qa_artifacts(*, output_dir, **_kwargs):
         render,
         rhythm,
         conformance,
+    )
+
+
+def fake_render_evidence_bundle() -> RenderEvidenceBundle:
+    frame = EvidenceFrame(
+        evidence_id="ev-" + "a" * 24,
+        clip_index=1,
+        timestamp_ms=1000,
+        purpose=("opening_anchor",),
+        source_artifact="short-01.mp4",
+        width=320,
+        height=180,
+        encoded_bytes=4,
+        sha256="b" * 64,
+    )
+    clip = EvidenceClip(
+        clip_index=1,
+        source_artifact="short-01.mp4",
+        output_sha256="c" * 64,
+        duration_ms=20_000,
+        frames=(frame,),
+        selected_reasons=("opening_anchor",),
+    )
+    manifest = RenderEvidenceManifest(
+        source_sha256="d" * 64,
+        render_execution_sha256="e" * 64,
+        plan_sha256="f" * 64,
+        effects_sha256="0" * 64,
+        candidate_fingerprint="1" * 64,
+        call_fingerprint="1" * 64,
+        limits=EvidenceLimits(),
+        clips=(clip,),
+        frame_count=1,
+        burst_count=0,
+        encoded_bytes=4,
+    )
+    return RenderEvidenceBundle(
+        manifest=manifest,
+        image_data_urls={frame.evidence_id: "data:image/jpeg;base64,ZmFrZQ=="},
     )
 
 
@@ -1511,7 +1557,37 @@ class MVPAgenticPipelineTests(unittest.IsolatedAsyncioTestCase):
             processor = object.__new__(MVPJobProcessor)
             processor.config = config("render")
             processor.config.agentic_editing.creative_qa_enabled = True
+            processor.config.agentic_editing.post_render_review_mode = "report"
             processor.stt = FakeSTT()
+            checkpoints = FakeCheckpointStore()
+            evidence_bundle = fake_render_evidence_bundle()
+            critic_report = {
+                "version": "render_critic.v1",
+                "status": "review",
+                "scope": "rendered_evidence_only",
+                "non_mutating": True,
+                "summary": "caption review",
+                "call_fingerprint": "2" * 64,
+                "candidate_fingerprint": evidence_bundle.manifest.candidate_fingerprint,
+                "provider_calls": 1,
+                "finding_count": 1,
+                "findings": [{
+                    "finding_id": "finding-" + "3" * 24,
+                    "finding_fingerprint": "4" * 64,
+                    "defect_code": "RENDER_CRITIC_FINDING",
+                    "category": "captions",
+                    "severity": "warning",
+                    "classification": "creative",
+                    "clip_index": 1,
+                    "start_ms": 0,
+                    "end_ms": 2000,
+                    "evidence_ids": ["ev-" + "a" * 24],
+                    "repairable": True,
+                    "lifecycle": "observed",
+                }],
+                "mode": "report",
+                "attempts": [],
+            }
             scene_report = build_scene_boundaries([], source_duration_ms=30_000, threshold=0.35)
             frame_manifest = FrameManifest(
                 source_duration_ms=30_000,
@@ -1540,6 +1616,14 @@ class MVPAgenticPipelineTests(unittest.IsolatedAsyncioTestCase):
                 patch("open_storyline.mvp.pipeline.ShortsPlanner", FakePlanner),
                 patch("open_storyline.mvp.pipeline.AgenticShortRenderer", FakeAgenticRenderer),
                 patch("open_storyline.mvp.pipeline.CPUShortRenderer", side_effect=AssertionError("legacy renderer called")),
+                patch("open_storyline.mvp.pipeline.CheckpointStore", return_value=checkpoints),
+                patch("open_storyline.mvp.pipeline.evidence_fingerprint", return_value="5" * 64),
+                patch("open_storyline.mvp.pipeline.critic_call_fingerprint", return_value="2" * 64),
+                patch("open_storyline.mvp.pipeline.build_render_evidence", return_value=evidence_bundle),
+                patch(
+                    "open_storyline.mvp.pipeline.review_render_evidence",
+                    return_value=critic_report,
+                ) as critic_call,
                 patch(
                     "open_storyline.mvp.pipeline.generate_creative_qa_artifacts",
                     side_effect=fake_creative_qa_artifacts,
@@ -1563,6 +1647,8 @@ class MVPAgenticPipelineTests(unittest.IsolatedAsyncioTestCase):
             self.assertIn("retention_rhythm_qa.json", names)
             self.assertIn("creative_conformance.json", names)
             self.assertIn("frame_quality_qa.json", names)
+            self.assertIn("render_evidence.json", names)
+            self.assertIn("render_critic.json", names)
             self.assertIn("render_promotion.json", names)
             self.assertEqual(manifest["agentic"]["render_execution"], "render_execution.json")
             self.assertEqual(
@@ -1570,7 +1656,15 @@ class MVPAgenticPipelineTests(unittest.IsolatedAsyncioTestCase):
                 "render_quality_profile.json",
             )
             self.assertEqual(manifest["agentic"]["qa"]["status"], "pass")
+            self.assertEqual(manifest["agentic"]["render_critic"]["status"], "review")
+            self.assertTrue(manifest["agentic"]["render_critic"]["non_mutating"])
+            self.assertEqual(manifest["outcome"]["creative_review"]["finding_count"], 1)
             self.assertEqual(manifest["agentic"]["render_promotion"]["decision"], "promote")
+            self.assertEqual(critic_call.await_count, 1)
+            self.assertIn(
+                "render_critic",
+                {key[1] for key in checkpoints.jobs},
+            )
             self.assertEqual((root / "output" / "short-01.mp4").read_bytes(), b"agentic-render")
             registered_names = [name for name, _kind in store.registered]
             self.assertLess(

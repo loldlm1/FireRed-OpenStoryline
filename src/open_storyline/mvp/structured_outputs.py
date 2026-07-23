@@ -19,6 +19,7 @@ VISUAL_UNDERSTANDING_SCHEMA = "visual_understanding.v1"
 EDIT_PLAN_SCHEMA = "edit_plan.v1"
 EDIT_PLAN_REPAIR_SCHEMA = "edit_plan_repair.v1"
 SEMANTIC_QA_SCHEMA = "semantic_qa.v1"
+RENDER_CRITIC_SCHEMA = "render_critic.v1"
 FFMPEGA_AGENTIC_SCHEMA = "ffmpega_agentic_finishing.v1"
 FFMPEGA_DETERMINISTIC_SCHEMA = "ffmpega_deterministic_effects.v1"
 
@@ -223,6 +224,52 @@ class SemanticQAResponseWire(WireModel):
     observations: list[SemanticObservationWire] = Field(max_length=8)
 
 
+class RenderCriticFindingWire(WireModel):
+    finding_key: str = Field(min_length=1, max_length=80, pattern=r"^[A-Za-z0-9._:-]+$")
+    category: Literal[
+        "composition",
+        "framing",
+        "captions",
+        "pacing",
+        "narrative",
+        "transitions",
+        "effects",
+        "visual_hierarchy",
+        "relevance",
+    ]
+    severity: Literal["advisory", "warning", "blocker"]
+    classification: Literal["creative", "objective", "technical", "advisory"]
+    confidence: float = Field(ge=0, le=1, allow_inf_nan=False)
+    clip_index: int = Field(ge=1, le=50)
+    start_ms: int = Field(ge=0)
+    end_ms: int = Field(gt=0)
+    evidence_ids: list[str] = Field(min_length=1, max_length=16)
+    explanation: str = Field(min_length=1, max_length=600)
+    repair_objective: str = Field(min_length=1, max_length=320)
+    requested_capabilities: list[Literal[
+        "crop",
+        "fit",
+        "letterbox",
+        "subtitles",
+        "hard_cut",
+        "fade",
+        "xfade",
+        "image_overlay",
+        "pip",
+        "zoom",
+        "effect",
+    ]] = Field(max_length=8)
+    repairable: bool
+
+
+class RenderCriticResponseWire(WireModel):
+    status: Literal["pass", "review"]
+    scope: Literal["rendered_evidence_only"]
+    non_mutating: bool
+    summary: str = Field(min_length=1, max_length=600)
+    findings: list[RenderCriticFindingWire] = Field(max_length=64)
+
+
 @dataclass(frozen=True)
 class StructuredOutputDefinition:
     name: str
@@ -303,6 +350,7 @@ STRUCTURED_OUTPUTS = {
         _definition(EDIT_PLAN_SCHEMA, EditPlanWire),
         _definition(EDIT_PLAN_REPAIR_SCHEMA, EditPlanWire),
         _definition(SEMANTIC_QA_SCHEMA, SemanticQAResponseWire),
+        _definition(RENDER_CRITIC_SCHEMA, RenderCriticResponseWire),
         _definition(FFMPEGA_AGENTIC_SCHEMA, FFMPEGAAgenticFinishingResponse),
         _definition(FFMPEGA_DETERMINISTIC_SCHEMA, FFMPEGADeterministicEffectsResponse),
     )
@@ -332,6 +380,7 @@ __all__ = [
     "FFMPEGA_AGENTIC_SCHEMA",
     "FFMPEGA_DETERMINISTIC_SCHEMA",
     "SEMANTIC_QA_SCHEMA",
+    "RENDER_CRITIC_SCHEMA",
     "SHORTS_SELECTION_SCHEMA",
     "STRUCTURED_OUTPUTS",
     "StructuredOutputDefinition",

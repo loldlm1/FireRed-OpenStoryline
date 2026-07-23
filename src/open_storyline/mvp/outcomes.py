@@ -470,6 +470,47 @@ def _semantic_qa_summary(value: Any) -> dict[str, Any]:
     }
 
 
+def _render_critic_summary(value: Any) -> dict[str, Any]:
+    source = value if isinstance(value, dict) else {}
+    status = str(source.get("status") or "disabled")[:20]
+    if status not in {"disabled", "pass", "review", "unavailable", "skipped"}:
+        status = "unavailable"
+    findings = []
+    for item in (source.get("findings") or [])[:64]:
+        if not isinstance(item, dict):
+            continue
+        finding_id = str(item.get("finding_id") or "")[:80]
+        fingerprint = str(item.get("finding_fingerprint") or "")
+        if not finding_id or not _HASH.fullmatch(fingerprint):
+            continue
+        findings.append({
+            "finding_id": finding_id,
+            "finding_fingerprint": fingerprint,
+            "defect_code": str(item.get("defect_code") or "RENDER_CRITIC_FINDING")[:80],
+            "category": str(item.get("category") or "")[:40],
+            "severity": str(item.get("severity") or "")[:40],
+            "classification": str(item.get("classification") or "")[:40],
+            "clip_index": _metric_int(item.get("clip_index"), 50),
+            "start_ms": _metric_int(item.get("start_ms"), 86_400_000),
+            "end_ms": _metric_int(item.get("end_ms"), 86_400_000),
+            "repairable": item.get("repairable") is True,
+            "lifecycle": str(item.get("lifecycle") or "observed")[:40],
+        })
+    call_fingerprint = str(source.get("call_fingerprint") or "")
+    candidate_fingerprint = str(source.get("candidate_fingerprint") or "")
+    return {
+        "version": str(source.get("version") or "")[:80],
+        "mode": str(source.get("mode") or "off")[:20],
+        "status": status,
+        "non_mutating": source.get("non_mutating") is True,
+        "call_fingerprint": call_fingerprint if _HASH.fullmatch(call_fingerprint) else "",
+        "candidate_fingerprint": candidate_fingerprint if _HASH.fullmatch(candidate_fingerprint) else "",
+        "provider_calls": _metric_int(source.get("provider_calls"), 1),
+        "finding_count": len(findings),
+        "findings": findings,
+    }
+
+
 def repair_defect_lifecycle(repair: dict[str, Any]) -> list[dict[str, Any]]:
     records: dict[str, dict[str, Any]] = {}
 
@@ -572,6 +613,7 @@ def build_completed_outcome_report(
     repair_report: dict[str, Any] | None = None,
     rollout_attribution: dict[str, Any] | None = None,
     semantic_review: dict[str, Any] | None = None,
+    render_critic: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     fallbacks = tuple(fallback_entries)
     promotion = promotion_report if isinstance(promotion_report, dict) else {}
@@ -677,6 +719,7 @@ def build_completed_outcome_report(
             "blocker_codes": _codes(promotion.get("blocker_codes") or ()),
         },
         "semantic_qa": _semantic_qa_summary(semantic_review),
+        "creative_review": _render_critic_summary(render_critic),
         "delivery": {
             "policy": delivery_policy,
             "decision": delivery_decision,
