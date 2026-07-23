@@ -634,6 +634,7 @@ class AgenticShortRenderer:
         crop_smoothing_alpha: float = 0.65,
         max_crop_velocity_ratio_per_second: float = 0.45,
         resolved_assets: dict[str, str | Path] | None = None,
+        clip_indexes: Sequence[int] | None = None,
         progress_callback: RenderProgressCallback | None = None,
     ) -> AgenticRenderResult:
         if len(edit_plan.clips) != len(selected_clips):
@@ -658,12 +659,32 @@ class AgenticShortRenderer:
         profile = settings.resolve(media.frame_rate)
         rendered: list[RenderedShort] = []
         executions: list[dict[str, Any]] = []
-
-        total = len(selected_clips)
-        for index, (clip_plan, selected_clip) in enumerate(
-            zip(edit_plan.clips, selected_clips),
-            start=1,
+        requested_indexes = (
+            tuple(sorted({int(index) for index in clip_indexes}))
+            if clip_indexes is not None
+            else tuple(clip.clip_index for clip in edit_plan.clips)
+        )
+        if not requested_indexes or any(
+            index not in {clip.clip_index for clip in edit_plan.clips}
+            for index in requested_indexes
         ):
+            raise RenderError(
+                "AGENTIC_RENDER_CLIP_MISMATCH",
+                "requested render clip indexes are invalid",
+            )
+
+        selected_by_index = {
+            clip_index: selected_clip
+            for clip_index, selected_clip in zip(
+                (clip.clip_index for clip in edit_plan.clips),
+                selected_clips,
+            )
+        }
+        plan_by_index = {clip.clip_index: clip for clip in edit_plan.clips}
+        total = len(requested_indexes)
+        for index, clip_index in enumerate(requested_indexes, start=1):
+            clip_plan = plan_by_index[clip_index]
+            selected_clip = selected_by_index[clip_index]
             _notify_render_progress(progress_callback, "started", index, total)
             if (
                 clip_plan.source_window.start_ms != selected_clip.start_ms

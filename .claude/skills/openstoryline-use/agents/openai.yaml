@@ -1,4 +1,0 @@
-interface:
-  display_name: "OpenStoryline Use"
-  short_description: "Run and continue OpenStoryline editing"
-  default_prompt: "Use $openstoryline-use to start OpenStoryline and complete a video editing session."

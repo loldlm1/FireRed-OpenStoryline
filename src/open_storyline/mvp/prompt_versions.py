@@ -17,7 +17,7 @@ from sqlalchemy.ext.asyncio import AsyncConnection, AsyncSession
 from open_storyline.mvp.edit_plan import (
     EditPlanError,
     validate_generated_asset_limit,
-    validate_job_controls,
+    validate_asset_policy,
     validate_stock_asset_limit,
     validate_stock_asset_kind,
     validate_stock_policy,
@@ -70,7 +70,6 @@ def _hash_file(path: Path) -> str:
 def validate_run_settings(
     *,
     max_clips: int = 8,
-    edit_mode: str = "legacy",
     asset_policy: str = "auto",
     max_generated_assets_per_clip: int = 2,
     stock_policy: str = "off",
@@ -80,10 +79,7 @@ def validate_run_settings(
     if not 1 <= int(max_clips) <= 50:
         raise JobStoreError("MAX_CLIPS_INVALID", "max_clips must be between 1 and 50")
     try:
-        normalized_edit_mode, normalized_asset_policy = validate_job_controls(
-            edit_mode,
-            asset_policy,
-        )
+        normalized_asset_policy = validate_asset_policy(asset_policy)
         generated_asset_limit = validate_generated_asset_limit(
             max_generated_assets_per_clip
         )
@@ -105,7 +101,6 @@ def validate_run_settings(
     return {
         "settings_version": 2,
         "max_clips": int(max_clips),
-        "edit_mode": normalized_edit_mode,
         "asset_policy": normalized_asset_policy,
         "max_generated_assets_per_clip": generated_asset_limit,
         "stock_policy": normalized_stock_policy,
@@ -140,7 +135,6 @@ class PromptVersionService:
             raise JobStoreError("PROMPT_INVALID", "the editing prompt is too long")
         settings = validate_run_settings(
             max_clips=settings.get("max_clips", 8),
-            edit_mode=settings.get("edit_mode", "legacy"),
             asset_policy=settings.get("asset_policy", "auto"),
             max_generated_assets_per_clip=settings.get(
                 "max_generated_assets_per_clip", 2

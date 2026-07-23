@@ -14,6 +14,10 @@ Registered boundaries are:
 - `edit_plan.v1`
 - `edit_plan_repair.v1`
 - `semantic_qa.v1`
+- `render_critic.v1`
+- `candidate_comparison.v1`
+- `post_render_repair.v1` (read-only compatibility)
+- `post_render_repair.v2`
 - `ffmpega_agentic_finishing.v1`
 - `ffmpega_deterministic_effects.v1`
 
@@ -39,12 +43,52 @@ Registry-driven semantic repair is independently controlled by
 `OPENSTORYLINE_LLM_DEFECT_REPAIR_MODE`. `off` bypasses eligibility and makes no
 repair call. `report` evaluates the same evidence and records only a redacted
 would-call contract. `enforce` may make at most one visual-understanding repair
-and one primary plus at most one contingency pre-render edit-plan batch. The
+per affected clip (bounded to the eight-clip repair limit) and one primary plus
+at most one contingency pre-render edit-plan batch. The
 contingency is reserved for a genuinely new authoritative defect after primary
 revalidation. Advisory-only,
 post-render, provider, media, security, unknown, and FFMPEGA findings cannot
 trigger these calls. Returning the setting to `off` is the repair rollback and
 does not disable the defect registry or strict schema transport.
+
+`OPENSTORYLINE_POST_RENDER_REVIEW_MODE=enforce` additionally enables the
+strict `post_render_repair.v2` boundary after a rendered-evidence critic
+finding. `post_render_repair.v1` remains readable for historical artifacts but
+is not emitted for new requests. The model can return only typed replacement
+plans for affected clips or a typed replacement for the allowlisted FFMPEGA
+finishing plan. Deterministic code preserves source bounds and protected
+intent, rerenders only affected clips, applies finishing only through the
+typed sidecar contract, repeats technical QA, and promotes a candidate only
+when the rendered critic shows improvement without a new authoritative blocker.
+One primary request is allowed; one contingency request is allowed only for a
+new objective defect. Sidecar failure records an omitted effect and does not
+trigger another semantic request.
+
+The critic receives bounded transient narrative context: timestamped transcript
+segments, scene/cut counts, caption-event counts, and hold-length metrics. These
+values ground pacing and coherence findings but are never persisted in the
+critic, comparison, or outcome artifacts. `candidate_comparison.v1` is called
+only when original and repaired candidates are materially different and both
+survive deterministic gates; a single candidate, unchanged evidence, or a
+technical blocker produces a no-call outcome.
+
+Critic evidence IDs are authoritative for clip and timestamp alignment. When a
+schema-valid finding cites known same-clip evidence but its otherwise valid
+window excludes one of those timestamps, deterministic validation expands the
+window just enough to include the cited evidence and records
+`window_normalized=true`. This metadata repair does not change the critic's
+creative judgment and avoids a redundant provider call. Unknown evidence,
+cross-clip references, invalid windows, and unsupported capabilities still fail
+closed.
+
+Before `post_render_repair.v2`, related repairable findings are consolidated
+into one composite clip-plan objective per affected clip, with a separate
+effect-plan objective only when final executed-effect evidence supports it.
+This preserves the critic's full report while keeping the repair request small
+and decision-complete. A schema or local-validation failure after the provider
+call remains attributable as one call and publishes
+`POST_RENDER_REPAIR_UNAVAILABLE` plus the unresolved critic limitation; it does
+not retry the same evidence or falsely label the original candidate enhanced.
 
 The deploy wrapper runs Responses-based strict acceptance and extra-field
 rejection probes whenever `json_schema` mode is selected. A failed probe blocks

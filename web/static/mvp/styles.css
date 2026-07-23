@@ -1368,24 +1368,6 @@ fieldset.field {
   gap: 8px;
 }
 
-.legacy-workspace {
-  max-width: 920px;
-}
-
-.legacy-workspace h2 {
-  max-width: 720px;
-  margin-top: 12px;
-}
-
-.legacy-workspace > p:not(.step-label) {
-  max-width: 720px;
-  color: var(--ui-text-soft);
-}
-
-.legacy-history {
-  margin-top: 28px;
-}
-
 .version-history {
   display: grid;
   gap: 12px;

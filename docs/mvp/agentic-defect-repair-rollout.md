@@ -23,8 +23,11 @@ The validator makes no provider or deployment call. `setup`, `deploy`, and
 | Defect registry and read-only presentation | Application reliability | Always on | Deploy compatible readers | Roll back code only after outcome compatibility review | Registry/hash tests and bounded audit output | Unknown or historical codes stop rendering safely in API/UI |
 | Strict-schema capability probe | Provider operations | Unverified | Run `scripts/qa_ninerouter.py --strict-models --live-inference --strict-schema --skip-ssh`, then set `OPENSTORYLINE_STRUCTURED_OUTPUT_CAPABILITY_VERIFIED=true` | Set the verification flag to `false` before returning to permissive mode | Responses-based acceptance and extra-field rejection both pass for the configured model | Schema unsupported, mismatch, refusal, incomplete response, or provider regression |
 | Strict boundaries | AI application owner | `json_object`, empty list | Set `json_schema` and add the next complete prefix described below | Remove boundaries in reverse order, then restore `json_object` | Strict validity and local semantic validity remain healthy | Higher schema failures, latency, cost, or lower playable output |
+| Post-render critic report | AI application owner | `off` | After `render_critic.v1` is in the strict prefix, set `OPENSTORYLINE_POST_RENDER_REVIEW_MODE=shadow` or `report` | Set it to `off`; deterministic QA and promotion remain authoritative | Findings reference supplied evidence only, calls are fingerprinted, and no plan/output mutation occurs | Provider/schema failures, private evidence, duplicate calls, or creative findings treated as technical blockers |
+| Post-render repair enforce | AI application owner | `off` | After `post_render_repair.v2`, strict deterministic QA, and enforced pre-render repair are active, set post-render review to `enforce` for a private canary | Return post-render review to `report` or `off`; the original validated candidate remains eligible | One primary repair at most, one new-objective-defect contingency at most, localized rerendering, typed effect execution, and demonstrated critic improvement with no new deterministic blocker | Third semantic request, invalid typed patch, unsupported effect, sidecar failure without truthful omission, candidate regression, private evidence, or missing rollback candidate |
+| Candidate comparison | AI application owner | `off` | Add `candidate_comparison.v1` and enable post-render enforce only after both candidates pass deterministic gates | Set review to `report` or `off`; deterministic promotion remains authoritative | One evidence-grounded preference call only for two materially different eligible candidates; tie/uncertainty is recorded | Comparison for one candidate, technical override, unknown evidence, duplicate fingerprint, or provider failure treated as a repair retry |
 | Repair report | AI application owner | `off` | After all strict boundaries, set agentic mode to `shadow` and repair mode to `report` | Set repair mode to `off` | Eligible dispositions match enforce mode while semantic repair calls remain zero | Unexpected eligibility, private evidence, or unbounded request/report |
-| Repair enforce | AI application owner | `off` | Set agentic mode to `render`, repair mode to `enforce`, baseline fallbacks to `true`, and retry UX to `true` | Leave render mode first, then set repair mode to `off` or use an explicit shadow/off profile | At most one visual call and at most two plan batches (`primary` plus new-defect `contingency`); no FFMPEGA repair calls; no invariant violations | Repair failures, third-call attempt, new defects, checkpoint mismatch, latency, cost, or playable-rate threshold |
+| Repair enforce | AI application owner | `off` | Set agentic mode to `render`, repair mode to `enforce`, baseline fallbacks to `true`, and retry UX to `true` | Leave render mode first, then set repair mode to `off` or use an explicit shadow/off profile | At most one visual repair call per affected clip (maximum eight clips) and at most two plan batches (`primary` plus new-defect `contingency`); no FFMPEGA repair calls; no invariant violations | Repair failures, third-call attempt, new defects, checkpoint mismatch, latency, cost, or playable-rate threshold |
 | Technical-pass delivery | QA/release owner | `qa_enforced` | Keep creative QA strict, set render promotion to `enforce`, then set delivery to `technical_pass_guaranteed` | Restore `qa_enforced` | Creative-only blockers publish truthfully; technical and mixed blockers remain withheld | Any technical blocker becomes downloadable or strict evidence is rewritten |
 | Retry/details UI | Product QA owner | `false` | Set `OPENSTORYLINE_RETRY_UX_ENABLED=true` last | Set it to `false` | Focused desktop/mobile comparison flow passes without console errors | Retry action, comparison, accessibility, or activity regression |
 
@@ -37,9 +40,14 @@ and the two FFMPEGA schemas move together.
 2. Add `visual_understanding.v1`
 3. Add `edit_plan.v1,edit_plan_repair.v1`
 4. Add `semantic_qa.v1`
-5. Add `ffmpega_agentic_finishing.v1,ffmpega_deterministic_effects.v1`
-6. Set repair to `report` while agentic editing remains `shadow`.
-7. Switch the production profile atomically: agentic `render`, repair
+5. Add `render_critic.v1`; then set post-render review to `shadow` or `report`.
+6. Add `post_render_repair.v2` (keep `post_render_repair.v1` readable).
+7. Add `candidate_comparison.v1`; private canaries may then set post-render
+   review to `enforce`.
+8. Add `ffmpega_agentic_finishing.v1,ffmpega_deterministic_effects.v1` and
+   require a healthy pinned sidecar before enabling finishing.
+9. Set repair to `report` while agentic editing remains `shadow`.
+10. Switch the production profile atomically: agentic `render`, repair
    `enforce`, baseline fallbacks `true`, promotion `enforce`, delivery
    `technical_pass_guaranteed`, and retry/details UI `true`.
 
@@ -52,7 +60,8 @@ Example fully staged canary values:
 ```bash
 OPENSTORYLINE_STRUCTURED_OUTPUT_MODE=json_schema
 OPENSTORYLINE_STRUCTURED_OUTPUT_CAPABILITY_VERIFIED=true
-OPENSTORYLINE_STRUCTURED_OUTPUT_BOUNDARIES=shorts_selection.v1,visual_understanding.v1,edit_plan.v1,edit_plan_repair.v1,semantic_qa.v1,ffmpega_agentic_finishing.v1,ffmpega_deterministic_effects.v1
+OPENSTORYLINE_STRUCTURED_OUTPUT_BOUNDARIES=shorts_selection.v1,visual_understanding.v1,edit_plan.v1,edit_plan_repair.v1,semantic_qa.v1,render_critic.v1,post_render_repair.v1,post_render_repair.v2,candidate_comparison.v1,ffmpega_agentic_finishing.v1,ffmpega_deterministic_effects.v1
+OPENSTORYLINE_POST_RENDER_REVIEW_MODE=report
 OPENSTORYLINE_AGENTIC_EDITING_MODE=render
 OPENSTORYLINE_LLM_DEFECT_REPAIR_MODE=enforce
 OPENSTORYLINE_BASELINE_FALLBACKS_ENABLED=true
@@ -98,6 +107,24 @@ frames, provider bodies, credentials, or raw reports into Git or chat. Verify
 playback and download registration, truthful creative limitations, technical
 withholding, repair checkpoint reuse, call counts, tokens, cost, latency, and
 the absence of new defects.
+
+The enforce canary also verifies the one-or-many output contract. A single input
+session may produce one or several bounded output clips; deterministic artifact
+and promotion checks operate per clip and never assume exactly one output. A
+canary that exposes several short speech pauses must keep those pauses visible
+as a pacing warning, while only a sustained silent interval may be a technical
+promotion blocker. This prevents cumulative natural pauses from being
+misclassified as an unplayable backend failure without weakening the technical
+gate for genuinely silent output.
+
+The review scorecard must also report candidate-comparison calls, completed
+preferences, ties, skipped no-call decisions, checkpoint reuse, and invariant
+violations. A comparison provider failure is reportable and falls back to the
+deterministic candidate gate; it never authorizes another repair request.
+Promotion gates require zero third repair calls, zero promoted new technical
+defects, no raw evidence persistence, stable artifact lineage, and an
+owner-approved human preference aggregate from the rubric in
+[agentic-video-review-eval.md](agentic-video-review-eval.md).
 
 Queue the newest immutable prompt when it is the intended canary, or select an
 older authoritative version explicitly when a targeted QA variant is newer:
@@ -148,9 +175,35 @@ The production claim is therefore scoped to the tested uploaded source, the
 authoritative prompt, the one targeted effect prompt, and the exact final image.
 It is not a cross-source, cross-niche, or 99%-reliability statement.
 
-This evidence closes the implementation plan. Manual QA with newly uploaded
-sessions remains normal operator validation and does not reopen the completed
-implementation sequence.
+This evidence closed the earlier defect-repair rollout. The adaptive rendered
+review upgrade below supersedes its final-image implementation evidence without
+turning the older result into a broad quality claim.
+
+## Adaptive rendered-review rollout evidence
+
+The 2026-07-23 closeout uses exact application image
+`675d1b5a71acff248e829edf4623982c687535f9`, PostgreSQL revision
+`20260723_0004`, the full strict-schema prefix, enforced Agentic editing,
+adaptive rendered evidence, technical-pass delivery, and the pinned FFMPEGA
+boundary. Sanitized evidence only is recorded here.
+
+| Gate | Result | Evidence boundary |
+| --- | --- | --- |
+| Full Python validation | PASS | 541 tests pass with 85 expected PostgreSQL/provider skips. |
+| Release dependencies | PASS | The release wrapper passes mandatory 9Router text/schema/vision/image, direct Mistral STT, FFMPEGA readiness, database head, build/deploy, exact-image, `/up`, and `/health` gates. |
+| Historical data safety | PASS | Three workflow-version-1 sessions, six terminal jobs, and 49 artifacts remain non-executable audit history with zero active legacy jobs. No destructive migration or media deletion ran. |
+| One-or-many output contract | PASS | The immutable private input produced three bounded, registered, downloadable outputs; artifact and promotion checks did not assume one output. |
+| Critic evidence alignment | PASS with provider variability | One canary critic call returned 14 repairable findings and all 14 windows were normalized to authoritative clip/evidence timestamps without another LLM call. A later call returned a status/findings mismatch and was rejected locally. |
+| Repair call attribution | PASS with unavailable repair | The bounded primary repair call was counted as one after the provider response, including local semantic validation failure. No contingency, third repair, or comparison call followed. |
+| Technical promotion | PASS | Deterministic and semantic checks passed. Invalid critic or repair evidence produced `publish_with_limitations`, never a false enhanced label or legacy fallback. |
+| Deployed browser smoke | PASS | Chromium smoke passes with console-error enforcement on the exact final image. |
+| Authenticated production browser | OPEN | The operator-held plaintext password was unavailable to automation; authentication was not bypassed. |
+| Broad human preference and 99% reliability | OPEN | One private source cannot establish cross-source creative lift, professional-quality equivalence, or the Wilson reliability gate. |
+
+The canary proves bounded calls, deterministic evidence normalization, truthful
+failure attribution, one-to-many output handling, and safe promotion behavior.
+It does not prove that every provider response will produce an accepted creative
+repair, nor does it establish broad human-preference improvement.
 
 ## Rollback
 

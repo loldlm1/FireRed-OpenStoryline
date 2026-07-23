@@ -129,7 +129,9 @@ class RetentionPostgresTestCase(unittest.IsolatedAsyncioTestCase):
         self.temporary_directory.cleanup()
 
     async def create_terminal_job(self, title: str = "Retention session"):
-        editing_session = await self.store.create_session(title)
+        editing_session = await self.store.create_session(
+            title, workflow_version=1
+        )
         job = await self.store.create(
             editing_session_id=editing_session["id"],
             prompt="private prompt retained for audit",
@@ -232,7 +234,9 @@ class RetentionDecisionTests(RetentionPostgresTestCase):
     async def test_preview_is_repeatable_read_only_and_excludes_active_jobs(self):
         _editing_session, job, files = await self.create_terminal_job()
         await self.expire_job(job["id"], media=True)
-        active_session = await self.store.create_session("Active")
+        active_session = await self.store.create_session(
+            "Active", workflow_version=1
+        )
         active = await self.store.create(
             editing_session_id=active_session["id"],
             prompt="active job",
@@ -322,7 +326,9 @@ class MediaPurgeTests(RetentionPostgresTestCase):
         self.assertEqual(shown["reviews"][0]["findings"]["code"], "MANUAL_REVIEW")
 
     async def test_session_delete_is_soft_idempotent_and_rejects_active_jobs(self):
-        editing_session = await self.store.create_session("Delete session")
+        editing_session = await self.store.create_session(
+            "Delete session", workflow_version=1
+        )
         job = await self.store.create(
             editing_session_id=editing_session["id"],
             prompt="delete after completion",

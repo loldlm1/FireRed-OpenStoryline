@@ -13,7 +13,10 @@ import uuid
 from sqlalchemy import select, text, update
 from sqlalchemy.engine import make_url
 
-from open_storyline.mvp.admin import backfill_legacy_prompt_versions
+from open_storyline.mvp.admin import (
+    backfill_legacy_prompt_versions,
+    inventory_workflows,
+)
 from open_storyline.mvp.database import Database, normalize_database_url
 from open_storyline.mvp.jobs import JobStore, JobStoreError
 from open_storyline.mvp.models import EditingSession, PromptVersion, VideoJob
@@ -85,7 +88,7 @@ class EditingSessionTests(unittest.IsolatedAsyncioTestCase):
         )
         resumed = await self.store.get_session(created[1]["id"])
         self.assertEqual(resumed["title"], "Second")
-        self.assertEqual(resumed["workflow_version"], 1)
+        self.assertEqual(resumed["workflow_version"], 2)
         self.assertIsNone(resumed["input_video"])
         with self.assertRaises(JobStoreError):
             await self.store.list_sessions(limit=51)
@@ -97,8 +100,30 @@ class EditingSessionTests(unittest.IsolatedAsyncioTestCase):
             await self.store.create_session("Unknown", workflow_version=3)
         self.assertEqual(raised.exception.code, "SESSION_WORKFLOW_VERSION_INVALID")
 
+    async def test_workflow_inventory_is_aggregate_only_and_marks_history_read_only(self):
+        legacy = await self.store.create_session("Private history", workflow_version=1)
+        agentic = await self.store.create_session("Private Agentic")
+        await self.store.create(
+            editing_session_id=legacy["id"],
+            prompt="private prompt must not appear",
+            filename="private.mp4",
+        )
+
+        report = await inventory_workflows(self.database)
+
+        self.assertTrue(report["read_only"])
+        self.assertFalse(report["workflow_v1_history"]["executable"])
+        self.assertEqual(report["workflow_v1_history"]["sessions"], 1)
+        self.assertEqual(report["workflow_v1_history"]["active_jobs"], 1)
+        self.assertTrue(report["workflow_v2_agentic"]["executable"])
+        self.assertEqual(report["workflow_v2_agentic"]["sessions"], 1)
+        self.assertNotIn("private prompt", json.dumps(report))
+        self.assertNotIn(agentic["id"], json.dumps(report))
+
     async def test_one_session_contains_multiple_jobs_in_stable_order(self):
-        editing_session = await self.store.create_session("Series")
+        editing_session = await self.store.create_session(
+            "Series", workflow_version=1
+        )
         jobs = []
         for prompt in ("first prompt", "second prompt"):
             jobs.append(
@@ -124,8 +149,12 @@ class EditingSessionTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(all(item["is_favorite"] is False for item in listed["items"]))
 
     async def test_legacy_prompt_backfill_is_bounded_resumable_and_idempotent(self):
-        first_session = await self.store.create_session("First legacy session")
-        second_session = await self.store.create_session("Second legacy session")
+        first_session = await self.store.create_session(
+            "First legacy session", workflow_version=1
+        )
+        second_session = await self.store.create_session(
+            "Second legacy session", workflow_version=1
+        )
         jobs = []
         for prompt in ("same private prompt", "same private prompt", "third prompt"):
             jobs.append(
@@ -145,13 +174,12 @@ class EditingSessionTests(unittest.IsolatedAsyncioTestCase):
         workspace_session = await self.store.create_session(
             "Future workspace", workflow_version=2
         )
-        with self.assertRaises(JobStoreError) as reusable:
-            await self.store.create(
-                editing_session_id=workspace_session["id"],
-                prompt="must use prompt-version creation",
-                filename="talk.mp4",
-            )
-        self.assertEqual(reusable.exception.code, "SESSION_WORKFLOW_REUSABLE")
+        reusable = await self.store.create(
+            editing_session_id=workspace_session["id"],
+            prompt="agentic compatibility fixture",
+            filename="talk.mp4",
+        )
+        self.assertNotIn("edit_mode", reusable["request"])
 
         async with self.database.sessions() as session:
             async with session.begin():

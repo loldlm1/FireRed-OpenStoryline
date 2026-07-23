@@ -14,6 +14,7 @@ from open_storyline.mvp.defects import (
     defect_public_metadata,
 )
 from open_storyline.mvp.fallbacks import FallbackEntry
+from open_storyline.mvp.repair import MAX_REPAIR_CLIPS
 
 
 OUTCOME_REPORT_VERSION = "outcome_report.v2"
@@ -337,8 +338,11 @@ def _compact_repair_metrics(value: Any) -> dict[str, Any]:
         "strict_schema_valid": _metric_int(source.get("strict_schema_valid"), 3),
         "semantic_valid": _metric_int(source.get("semantic_valid"), 3),
         "successful_repairs": _metric_int(source.get("successful_repairs"), 3),
-        "visual_calls": _metric_int(source.get("visual_calls"), 1),
-        "visual_successes": _metric_int(source.get("visual_successes"), 1),
+        "visual_calls": _metric_int(source.get("visual_calls"), MAX_REPAIR_CLIPS),
+        "visual_successes": _metric_int(
+            source.get("visual_successes"),
+            MAX_REPAIR_CLIPS,
+        ),
         "plan_calls": _metric_int(source.get("plan_calls"), 2),
         "plan_successes": _metric_int(source.get("plan_successes"), 2),
         "primary_calls": _metric_int(source.get("primary_calls"), 1),
@@ -470,6 +474,133 @@ def _semantic_qa_summary(value: Any) -> dict[str, Any]:
     }
 
 
+def _render_critic_summary(value: Any) -> dict[str, Any]:
+    source = value if isinstance(value, dict) else {}
+    status = str(source.get("status") or "disabled")[:20]
+    if status not in {"disabled", "pass", "review", "unavailable", "skipped"}:
+        status = "unavailable"
+    findings = []
+    for item in (source.get("findings") or [])[:64]:
+        if not isinstance(item, dict):
+            continue
+        finding_id = str(item.get("finding_id") or "")[:80]
+        fingerprint = str(item.get("finding_fingerprint") or "")
+        if not finding_id or not _HASH.fullmatch(fingerprint):
+            continue
+        findings.append({
+            "finding_id": finding_id,
+            "finding_fingerprint": fingerprint,
+            "defect_code": str(item.get("defect_code") or "RENDER_CRITIC_FINDING")[:80],
+            "category": str(item.get("category") or "")[:40],
+            "severity": str(item.get("severity") or "")[:40],
+            "classification": str(item.get("classification") or "")[:40],
+            "clip_index": _metric_int(item.get("clip_index"), 50),
+            "start_ms": _metric_int(item.get("start_ms"), 86_400_000),
+            "end_ms": _metric_int(item.get("end_ms"), 86_400_000),
+            "repairable": item.get("repairable") is True,
+            "lifecycle": str(item.get("lifecycle") or "observed")[:40],
+        })
+    call_fingerprint = str(source.get("call_fingerprint") or "")
+    candidate_fingerprint = str(source.get("candidate_fingerprint") or "")
+    return {
+        "version": str(source.get("version") or "")[:80],
+        "mode": str(source.get("mode") or "off")[:20],
+        "status": status,
+        "non_mutating": source.get("non_mutating") is True,
+        "call_fingerprint": call_fingerprint if _HASH.fullmatch(call_fingerprint) else "",
+        "candidate_fingerprint": candidate_fingerprint if _HASH.fullmatch(candidate_fingerprint) else "",
+        "provider_calls": _metric_int(source.get("provider_calls"), 1),
+        "finding_count": len(findings),
+        "findings": findings,
+    }
+
+
+def _post_render_repair_summary(value: Any) -> dict[str, Any]:
+    source = value if isinstance(value, dict) else {}
+    status = str(source.get("status") or "disabled")[:32]
+    if status not in {
+        "disabled",
+        "not_needed",
+        "attempted",
+        "accepted",
+        "rejected",
+        "unavailable",
+        "no_change",
+        "deferred_effect_review",
+    }:
+        status = "unavailable"
+    improvement = source.get("improvement")
+    compact_improvement = {}
+    if isinstance(improvement, dict):
+        compact_improvement = {
+            "demonstrated": improvement.get("demonstrated") is True,
+            "original_finding_count": _metric_int(
+                improvement.get("original_finding_count"),
+            ),
+            "repaired_finding_count": _metric_int(
+                improvement.get("repaired_finding_count"),
+            ),
+            "new_blocker_finding_ids": [
+                str(item)[:80]
+                for item in improvement.get("new_blocker_finding_ids") or ()
+            ][:16],
+        }
+    return {
+        "version": str(source.get("version") or "")[:80],
+        "mode": str(source.get("mode") or "off")[:20],
+        "status": status,
+        "selected_candidate": str(source.get("selected_candidate") or "original")[:20],
+        "provider_calls": _metric_int(source.get("provider_calls"), 2),
+        "rounds": _metric_int(source.get("rounds"), 2),
+        "checkpoint_reused": source.get("checkpoint_reused") is True,
+        "affected_clip_indexes": [
+            _metric_int(item, 50)
+            for item in source.get("affected_clip_indexes") or ()
+        ][:8],
+        "effect_action": (
+            str(source.get("effect_action") or "preserve")[:20]
+            if str(source.get("effect_action") or "preserve")
+            in {"preserve", "replace"}
+            else "preserve"
+        ),
+        "effect_affected_clip_indexes": [
+            _metric_int(item, 50)
+            for item in source.get("effect_affected_clip_indexes") or ()
+        ][:8],
+        "effect_skills": [
+            str(item)[:40]
+            for item in source.get("effect_skills") or ()
+            if re.fullmatch(r"[a-z][a-z0-9_]{0,39}", str(item))
+        ][:5],
+        "error_code": str(source.get("error_code") or "")[:80],
+        "improvement": compact_improvement,
+    }
+
+
+def _candidate_comparison_summary(value: Any) -> dict[str, Any]:
+    source = value if isinstance(value, dict) else {}
+    status = str(source.get("status") or "disabled")[:20]
+    if status not in {"disabled", "skipped", "completed", "unavailable"}:
+        status = "unavailable"
+    selection = str(source.get("selection") or "tie")[:12]
+    if selection not in {"original", "repaired", "tie"}:
+        selection = "tie"
+    return {
+        "version": str(source.get("version") or "")[:80],
+        "status": status,
+        "selection": selection,
+        "confidence": _metric_float(source.get("confidence"), 1),
+        "uncertainty": str(source.get("uncertainty") or "high")[:12],
+        "provider_calls": _metric_int(source.get("provider_calls"), 1),
+        "checkpoint_reused": source.get("checkpoint_reused") is True,
+        "call_fingerprint": (
+            str(source.get("call_fingerprint") or "")
+            if _HASH.fullmatch(str(source.get("call_fingerprint") or ""))
+            else ""
+        ),
+    }
+
+
 def repair_defect_lifecycle(repair: dict[str, Any]) -> list[dict[str, Any]]:
     records: dict[str, dict[str, Any]] = {}
 
@@ -572,6 +703,9 @@ def build_completed_outcome_report(
     repair_report: dict[str, Any] | None = None,
     rollout_attribution: dict[str, Any] | None = None,
     semantic_review: dict[str, Any] | None = None,
+    render_critic: dict[str, Any] | None = None,
+    post_render_repair: dict[str, Any] | None = None,
+    candidate_comparison: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     fallbacks = tuple(fallback_entries)
     promotion = promotion_report if isinstance(promotion_report, dict) else {}
@@ -677,6 +811,9 @@ def build_completed_outcome_report(
             "blocker_codes": _codes(promotion.get("blocker_codes") or ()),
         },
         "semantic_qa": _semantic_qa_summary(semantic_review),
+        "creative_review": _render_critic_summary(render_critic),
+        "post_render_repair": _post_render_repair_summary(post_render_repair),
+        "candidate_comparison": _candidate_comparison_summary(candidate_comparison),
         "delivery": {
             "policy": delivery_policy,
             "decision": delivery_decision,
@@ -1028,6 +1165,9 @@ def outcome_summary(value: Any) -> dict[str, Any] | None:
         if isinstance(value.get("semantic_qa"), dict)
         else {}
     )
+    candidate_comparison = _candidate_comparison_summary(
+        value.get("candidate_comparison")
+    )
     attribution = (
         value.get("attribution") if isinstance(value.get("attribution"), dict) else {}
     )
@@ -1055,6 +1195,7 @@ def outcome_summary(value: Any) -> dict[str, Any] | None:
             "blocker_codes": _codes(strict_qa.get("blocker_codes") or ()),
         },
         "semantic_qa": _semantic_qa_summary(semantic_qa),
+        "candidate_comparison": candidate_comparison,
         "delivery": {
             "policy": str(delivery.get("policy") or "")[:40],
             "decision": str(delivery.get("decision") or "")[:40],
@@ -1212,6 +1353,11 @@ def build_outcome_slo_summary(rows: Sequence[dict[str, Any]]) -> dict[str, Any]:
     predictive_attachment_opportunities = 0
     technical_pass_candidates = 0
     technical_pass_published = 0
+    comparison_calls = 0
+    comparison_completed = 0
+    comparison_repaired = 0
+    comparison_ties = 0
+    comparison_skips = 0
     attribution_counts: Counter[tuple[Any, ...]] = Counter()
     for row in rows:
         summary = outcome_summary(row.get("outcome"))
@@ -1229,6 +1375,18 @@ def build_outcome_slo_summary(rows: Sequence[dict[str, Any]]) -> dict[str, Any]:
         playable += int(is_playable)
         limitations.update(summary["limitation_codes"])
         repair_metrics = summary["repair"]["metrics"]
+        comparison = summary.get("candidate_comparison") or {}
+        comparison_calls += int(comparison.get("provider_calls") or 0)
+        comparison_completed += int(comparison.get("status") == "completed")
+        comparison_repaired += int(
+            comparison.get("status") == "completed"
+            and comparison.get("selection") == "repaired"
+        )
+        comparison_ties += int(
+            comparison.get("status") == "completed"
+            and comparison.get("selection") == "tie"
+        )
+        comparison_skips += int(comparison.get("status") == "skipped")
         for name in (
             "semantic_calls",
             "transport_attempts",
@@ -1536,6 +1694,13 @@ def build_outcome_slo_summary(rows: Sequence[dict[str, Any]]) -> dict[str, Any]:
                 technical_pass_published,
                 technical_pass_candidates,
             ),
+        },
+        "candidate_comparison": {
+            "provider_calls": comparison_calls,
+            "completed": comparison_completed,
+            "repaired_selected": comparison_repaired,
+            "ties": comparison_ties,
+            "skipped_no_call": comparison_skips,
         },
         "attribution": [
             {

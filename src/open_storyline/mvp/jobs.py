@@ -24,7 +24,7 @@ from open_storyline.mvp.database import Database
 from open_storyline.mvp.edit_plan import (
     EditPlanError,
     validate_generated_asset_limit,
-    validate_job_controls,
+    validate_asset_policy,
     validate_stock_asset_limit,
     validate_stock_asset_kind,
     validate_stock_policy,
@@ -306,7 +306,7 @@ class JobStore:
         title: str,
         *,
         session_id: str | None = None,
-        workflow_version: int = 1,
+        workflow_version: int = 2,
     ) -> dict[str, Any]:
         clean_title = str(title or "").strip()
         if not clean_title:
@@ -364,6 +364,7 @@ class JobStore:
         *,
         limit: int = 20,
         cursor: str | None = None,
+        workflow_version: int | None = None,
     ) -> dict[str, Any]:
         if not 1 <= int(limit) <= 50:
             raise JobStoreError("PAGE_LIMIT_INVALID", "limit must be between 1 and 50")
@@ -378,6 +379,15 @@ class JobStore:
             .order_by(EditingSession.updated_at.desc(), EditingSession.id.desc())
             .limit(int(limit) + 1)
         )
+        if workflow_version is not None:
+            if int(workflow_version) not in {1, 2}:
+                raise JobStoreError(
+                    "SESSION_WORKFLOW_VERSION_INVALID",
+                    "invalid session workflow version",
+                )
+            query = query.where(
+                EditingSession.workflow_version == int(workflow_version)
+            )
         if boundary:
             timestamp, item_id = boundary
             query = query.where(
@@ -434,7 +444,6 @@ class JobStore:
         prompt: str,
         filename: str,
         max_clips: int = 8,
-        edit_mode: str = "legacy",
         asset_policy: str = "auto",
         max_generated_assets_per_clip: int = 2,
         stock_policy: str = "off",
@@ -448,10 +457,7 @@ class JobStore:
         if not 1 <= int(max_clips) <= 50:
             raise JobStoreError("MAX_CLIPS_INVALID", "max_clips must be between 1 and 50")
         try:
-            normalized_edit_mode, normalized_asset_policy = validate_job_controls(
-                edit_mode,
-                asset_policy,
-            )
+            normalized_asset_policy = validate_asset_policy(asset_policy)
             generated_asset_limit = validate_generated_asset_limit(
                 max_generated_assets_per_clip
             )
@@ -471,31 +477,30 @@ class JobStore:
                 "required stock media needs a positive per-clip count",
             )
         editing_session = await self.get_session(editing_session_id)
-        if editing_session["workflow_version"] != 1:
-            raise JobStoreError(
-                "SESSION_WORKFLOW_REUSABLE",
-                "reusable sessions require prompt-version run creation",
-            )
+        workflow_version = int(editing_session["workflow_version"])
         identifier = job_id or uuid.uuid4().hex
         if not JOB_ID_PATTERN.fullmatch(identifier):
             raise JobStoreError("JOB_ID_INVALID", "invalid job id")
         job_dir = self._prepare_job_directories(identifier)
         now = _utcnow()
+        request_data = {
+            "max_clips": int(max_clips),
+            "asset_policy": normalized_asset_policy,
+            "max_generated_assets_per_clip": generated_asset_limit,
+            "stock_policy": normalized_stock_policy,
+            "max_stock_assets_per_clip": stock_asset_limit,
+            "stock_asset_kind": normalized_stock_kind,
+        }
+        if workflow_version == 1:
+            # This method remains only for bounded historical import/test fixtures.
+            request_data["edit_mode"] = "legacy"
         row = VideoJob(
             id=identifier,
             editing_session_id=editing_session_id,
             state="uploading",
             progress=Decimal("0"),
             prompt=clean_prompt[:12000],
-            request_data={
-                "max_clips": int(max_clips),
-                "edit_mode": normalized_edit_mode,
-                "asset_policy": normalized_asset_policy,
-                "max_generated_assets_per_clip": generated_asset_limit,
-                "stock_policy": normalized_stock_policy,
-                "max_stock_assets_per_clip": stock_asset_limit,
-                "stock_asset_kind": normalized_stock_kind,
-            },
+            request_data=request_data,
             input_data={
                 "original_filename": _safe_filename(filename),
                 "stored_filename": "",
@@ -1110,7 +1115,16 @@ class JobStore:
                 async with session.begin():
                     row = await session.scalar(
                         select(VideoJob)
-                        .where(VideoJob.state == "queued", VideoJob.deleted_at.is_(None))
+                        .join(
+                            EditingSession,
+                            EditingSession.id == VideoJob.editing_session_id,
+                        )
+                        .where(
+                            VideoJob.state == "queued",
+                            VideoJob.deleted_at.is_(None),
+                            EditingSession.workflow_version == 2,
+                            EditingSession.deleted_at.is_(None),
+                        )
                         .order_by(VideoJob.created_at, VideoJob.id)
                         .limit(1)
                         .with_for_update(skip_locked=True)
@@ -1151,9 +1165,15 @@ class JobStore:
                         (
                             await session.execute(
                                 select(VideoJob)
+                                .join(
+                                    EditingSession,
+                                    EditingSession.id == VideoJob.editing_session_id,
+                                )
                                 .where(
                                     VideoJob.state.in_({"queued", "running"}),
                                     VideoJob.deleted_at.is_(None),
+                                    EditingSession.workflow_version == 2,
+                                    EditingSession.deleted_at.is_(None),
                                 )
                                 .order_by(VideoJob.created_at, VideoJob.id)
                                 .limit(limit)
@@ -1746,6 +1766,31 @@ class JobManager:
             )
 
     async def enqueue(self, job_id: str) -> None:
+        try:
+            async with self.store.database.sessions() as session:
+                workflow_version = await session.scalar(
+                    select(EditingSession.workflow_version)
+                    .join(
+                        VideoJob,
+                        VideoJob.editing_session_id == EditingSession.id,
+                    )
+                    .where(
+                        VideoJob.id == job_id,
+                        VideoJob.deleted_at.is_(None),
+                        EditingSession.deleted_at.is_(None),
+                    )
+                )
+        except SQLAlchemyError:
+            raise JobStoreError(
+                "DATABASE_UNAVAILABLE", "job queue is unavailable"
+            ) from None
+        if workflow_version is None:
+            raise JobStoreError("JOB_NOT_FOUND", "job not found")
+        if int(workflow_version) != 2:
+            raise JobStoreError(
+                "SESSION_WORKFLOW_LEGACY",
+                "historical workflow jobs cannot be executed",
+            )
         state = await self.store.load(job_id)
         if state.get("state") in TERMINAL_STATES:
             raise JobStoreError("JOB_TERMINAL", "terminal jobs cannot be queued")

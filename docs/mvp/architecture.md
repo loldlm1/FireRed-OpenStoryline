@@ -1,7 +1,8 @@
 # Remote-only video MVP
 
-This fork adds an opt-in MVP for turning one source video into several social
-clips. The MVP is deliberately CPU-first and does not run local AI models.
+This repository ships a remote-only Agentic MVP for turning one source video
+into one or several bounded social clips. It is deliberately CPU-first and does
+not run local AI models.
 
 ## Non-negotiable runtime policy
 
@@ -23,18 +24,19 @@ clips. The MVP is deliberately CPU-first and does not run local AI models.
   ordinals, categories, latency, cooldown, and request-sent state are retained;
   credentials, transcripts, audio, and provider response bodies are not logged.
 
-The original OpenStoryline workflow remains available. The new MVP path is
-isolated so upstream behavior can continue to be merged into this fork.
+The full local OpenStoryline application and the legacy remote editor are
+retired. Historical workflow-version-1 rows and media remain read-only audit
+history under the documented retention policy; they cannot enter the worker.
 
 ## Data flow
 
 1. The browser authenticates with the single project password. The server
    returns an opaque, revocable session cookie and a separate CSRF cookie;
    neither the password nor a reusable API token is stored by JavaScript.
-2. With workspace mode enabled, the browser creates a workflow-version-2
-   editing session and uploads one source video in resumable, offset-checked
-   chunks. The server validates the completed file with FFprobe, records its
-   size and SHA-256, and makes it immutable under
+2. The browser creates a workflow-version-2 Agentic editing session and uploads
+   one source video in resumable, offset-checked chunks. The server validates
+   the completed file with FFprobe, records its size and SHA-256, and makes it
+   immutable under
    `outputs/mvp_sessions/<session_id>/input/`.
 3. The browser creates an immutable prompt version. PostgreSQL atomically
    allocates its first run attempt and references the session source; no media
@@ -47,7 +49,7 @@ isolated so upstream behavior can continue to be merged into this fork.
    through 9Router and returns a structured clip plan.
 7. The server validates duration, bounds, overlap, and output count, then
    samples every selected source window independently for crop evidence.
-8. In agentic render mode, the server validates an executable edit plan and
+8. The Agentic editor validates an executable edit plan and
    same-window crop coverage, performs at most one bounded visual re-analysis
    and replan when coverage is insufficient, then runs the shared repairable
    defect detector before any render call. A strict primary plan-repair batch
@@ -61,14 +63,19 @@ isolated so upstream behavior can continue to be merged into this fork.
    explicitly permitted for that job, and FFmpeg renders the typed timeline
    operations and subtitles on CPU.
 9. Agentic renders remain unregistered candidates while deterministic QA writes
-   `render_qa.json`, `frame_quality_qa.json`, `creative_conformance.json`,
-   caption-footprint evidence, and `render_promotion.json`. Report mode records
-   objective blockers without changing completion behavior. Enforce mode uses
-   the configured completion policy: `strict` blocks any objective blocker,
-   while the independently enabled `baseline_guaranteed` policy publishes a
-   technically valid output with typed creative limitations and still deletes
-   candidates with technical blockers. Rhythm and semantic findings remain
-   advisory and do not predict retention or virality.
+   `render_qa.json`, `frame_quality_qa.json`, `render_evidence.json`,
+   optional `render_critic.json`, `creative_conformance.json`, caption-footprint evidence, and
+   `render_promotion.json`. Rendered evidence uses bounded anchors and
+   event-focused bursts; it never sends every frame or persists frame bytes.
+   The optional post-render critic uses the strict `render_critic.v1` schema,
+   references only supplied evidence IDs, and remains non-mutating in
+   `shadow`/`report`. Identical call fingerprints reuse the critic checkpoint.
+   Report mode records objective blockers without changing completion behavior.
+   Enforce mode uses the configured completion policy: `strict` blocks any
+   objective blocker, while the independently enabled `baseline_guaranteed`
+   policy publishes a technically valid output with typed creative limitations
+   and still deletes candidates with technical blockers. Rhythm and semantic
+   findings remain advisory and do not predict retention or virality.
 10. PostgreSQL ingests sanitized JSON/SRT evidence, promotion decisions, public
    activity events, and deterministic FFprobe/subtitle checks without storing
    media or frame bytes.
@@ -82,29 +89,28 @@ isolated so upstream behavior can continue to be merged into this fork.
    or prefill a user-editable improved version. Selecting a favorite never
    changes deterministic QA verdicts.
 
-## Reusable workspace contract and rollout bridge
+## Agentic-only reusable workspace contract
 
-- `OPENSTORYLINE_SESSION_WORKSPACE_MODE` accepts only `legacy` or `enabled` and
-  defaults to `legacy`. `legacy` serves `web/mvp-legacy.html` and creates
-  workflow-version-1 sessions. `enabled` serves the modular reusable workspace
-  and creates workflow-version-2 sessions.
+- The application serves only the modular reusable workspace and every new
+  session uses workflow version 2. There is no runtime environment switch or
+  request field that can select a legacy editor.
 - A workflow-version-2 session owns exactly one source video. Once validation
   succeeds it cannot be replaced or modified. A different video always requires
   a new session. Existing workflow-version-1 sessions remain readable and keep
-  their original job-owned media paths; they are never silently converted into
-  reusable sessions.
+  their original job-owned media paths as administrative audit history; they are
+  never silently converted or accepted by the worker queue.
 - Prompt text and run settings are immutable per version. Each version can have
   multiple attempts, all attributable to the same source hash. At most one
   completed run in the session may be the human-selected favorite.
 - Database readiness uses an explicit compatibility set rather than revision
   ordering. The legacy `20260717_0001`, reusable-workspace `20260719_0002`,
-  and checkpoint `20260721_0003` schemas are accepted; missing, obsolete, and
-  unknown revisions fail closed with `DATABASE_SCHEMA_OUTDATED`.
-- Deploy the compatibility bridge before applying the additive migration, and
-  keep mode `legacy` until a separately authorized canary. A normal rollback
-  returns to the bridge application while retaining the additive schema, source
-  metadata, prompt versions, activity, and media; it does not infer downgrade
-  safety.
+  checkpoint `20260721_0003`, and Agentic-default `20260723_0004` schemas are
+  accepted; missing, obsolete, and unknown revisions fail closed with
+  `DATABASE_SCHEMA_OUTDATED`.
+- Revision `20260723_0004` changes only the database default for new sessions;
+  it does not rewrite or delete workflow-version-1 records. A normal rollback
+  uses the previous compatible image while retaining the additive schema,
+  source metadata, prompt versions, activity, and media.
 
 ## Agentic creative QA
 
@@ -168,6 +174,14 @@ isolated so upstream behavior can continue to be merged into this fork.
   `OPENSTORYLINE_SEMANTIC_QA_MAX_FRAMES`, stores no frame bytes or raw provider
   body, cannot authorize actions or modify the edit plan, and degrades to an
   unavailable review note on provider failure.
+- `OPENSTORYLINE_POST_RENDER_REVIEW_MODE=off|shadow|report|enforce` is an
+  operator rollout control, not an editor mode. `shadow` and `report` create a
+  bounded `render_critic.json` advisory report after final rendered evidence;
+  they cannot change the plan, candidate, effects, or promotion. `enforce`
+  activates the bounded typed post-render repair and candidate comparison path.
+  Critic or repair unavailability becomes a truthful creative limitation and
+  never selects a legacy renderer. Checkpoints store only sanitized metadata,
+  stable finding fingerprints, attribution, and lifecycle state.
 - Optional FFMPEGA finishing runs in a separate, non-root, model-free container
   built from pinned upstream commit
   `0cfe2db05df104f95c98cc45e11f129fa5ef5193`. The service exposes only the

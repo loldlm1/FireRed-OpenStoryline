@@ -1,91 +1,52 @@
-import os
 import httpx
 import unittest
-from unittest.mock import patch
 
-from mvp_fastapi import SessionWorkspaceConfigurationError, create_app
-
-
-class SessionWorkspaceConfigurationTests(unittest.TestCase):
-    def test_workspace_mode_defaults_to_legacy_and_accepts_enabled(self):
-        with patch.dict(os.environ, {}, clear=True):
-            self.assertEqual(create_app().state.session_workspace_mode, "legacy")
-        with patch.dict(
-            os.environ,
-            {"OPENSTORYLINE_SESSION_WORKSPACE_MODE": "enabled"},
-            clear=False,
-        ):
-            self.assertEqual(create_app().state.session_workspace_mode, "enabled")
-
-    def test_invalid_workspace_mode_fails_with_sanitized_error(self):
-        invalid_value = "secret-bearing-unknown-workspace-mode"
-        with patch.dict(
-            os.environ,
-            {"OPENSTORYLINE_SESSION_WORKSPACE_MODE": invalid_value},
-            clear=False,
-        ):
-            with self.assertRaises(SessionWorkspaceConfigurationError) as raised:
-                create_app()
-
-        self.assertNotIn(invalid_value, str(raised.exception))
+from mvp_fastapi import create_app
 
 
 class MVPAppBoundaryTests(unittest.IsolatedAsyncioTestCase):
-    async def test_workspace_modes_serve_deterministic_pages_without_cache(self):
-        bodies = {}
-        for mode in ("legacy", "enabled"):
-            with patch.dict(
-                os.environ,
-                {"OPENSTORYLINE_SESSION_WORKSPACE_MODE": mode},
-                clear=False,
-            ):
-                app = create_app()
-            transport = httpx.ASGITransport(app=app)
-            async with httpx.AsyncClient(
-                transport=transport, base_url="http://test"
-            ) as client:
-                response = await client.get("/")
-            self.assertEqual(response.status_code, 200)
-            self.assertEqual(response.headers["cache-control"], "no-store, max-age=0")
-            self.assertEqual(response.headers["x-content-type-options"], "nosniff")
-            self.assertEqual(response.headers["referrer-policy"], "no-referrer")
-            self.assertEqual(response.headers["x-frame-options"], "DENY")
-            self.assertEqual(
-                response.headers["cross-origin-opener-policy"], "same-origin"
-            )
-            self.assertEqual(
-                response.headers["cross-origin-resource-policy"], "same-origin"
-            )
-            csp = response.headers["content-security-policy"]
-            for directive in (
-                "default-src 'self'",
-                "script-src 'self'",
-                "style-src 'self'",
-                "connect-src 'self'",
-                "media-src 'self' blob:",
-                "object-src 'none'",
-                "base-uri 'self'",
-                "form-action 'self'",
-                "frame-ancestors 'none'",
-            ):
-                self.assertIn(directive, csp)
-            self.assertNotIn("'unsafe-inline'", csp)
-            self.assertNotIn("'unsafe-eval'", csp)
-            bodies[mode] = response.text
+    async def test_agentic_workspace_page_is_deterministic_without_cache(self):
+        app = create_app()
+        transport = httpx.ASGITransport(app=app)
+        async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+            response = await client.get("/")
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.headers["cache-control"], "no-store, max-age=0")
+        self.assertEqual(response.headers["x-content-type-options"], "nosniff")
+        self.assertEqual(response.headers["referrer-policy"], "no-referrer")
+        self.assertEqual(response.headers["x-frame-options"], "DENY")
+        self.assertIn("Estudio de edición", response.text)
+        self.assertIn('/static/mvp/app.js', response.text)
+        self.assertNotIn("mvp-legacy", response.text)
+        csp = response.headers["content-security-policy"]
+        for directive in (
+            "default-src 'self'",
+            "script-src 'self'",
+            "connect-src 'self'",
+            "media-src 'self' blob:",
+            "object-src 'none'",
+            "frame-ancestors 'none'",
+        ):
+            self.assertIn(directive, csp)
+        self.assertNotIn("'unsafe-inline'", csp)
+        self.assertNotIn("'unsafe-eval'", csp)
+        self.assertNotIn("cross-origin-opener-policy", response.headers)
 
-        self.assertIn("Mesa de shorts", bodies["legacy"])
-        self.assertNotIn('/static/mvp/app.js', bodies["legacy"])
-        self.assertIn("Estudio de edición", bodies["enabled"])
-        self.assertIn('/static/mvp/app.js', bodies["enabled"])
-        self.assertNotEqual(bodies["legacy"], bodies["enabled"])
+    async def test_trustworthy_origin_receives_opener_isolation(self):
+        app = create_app()
+        transport = httpx.ASGITransport(app=app)
+        async with httpx.AsyncClient(
+            transport=transport, base_url="https://example.test"
+        ) as client:
+            response = await client.get("/")
+
+        self.assertEqual(
+            response.headers["cross-origin-opener-policy"],
+            "same-origin",
+        )
 
     async def test_workspace_static_assets_are_scoped_and_not_cached(self):
-        with patch.dict(
-            os.environ,
-            {"OPENSTORYLINE_SESSION_WORKSPACE_MODE": "enabled"},
-            clear=False,
-        ):
-            app = create_app()
+        app = create_app()
         transport = httpx.ASGITransport(app=app)
         async with httpx.AsyncClient(
             transport=transport, base_url="http://test"

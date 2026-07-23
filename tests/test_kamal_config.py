@@ -22,6 +22,7 @@ def validate_rollout_flags(**overrides: str) -> subprocess.CompletedProcess[str]
         "OPENSTORYLINE_LLM_DEFECT_REPAIR_MODE": "off",
         "OPENSTORYLINE_AGENTIC_EDITING_MODE": "off",
         "OPENSTORYLINE_SEMANTIC_QA_ENABLED": "false",
+        "OPENSTORYLINE_POST_RENDER_REVIEW_MODE": "off",
         "OPENSTORYLINE_FFMPEGA_ENABLED": "false",
         "OPENSTORYLINE_DELIVERY_POLICY": "qa_enforced",
         "OPENSTORYLINE_RETRY_UX_ENABLED": "false",
@@ -161,6 +162,10 @@ class KamalConfigTests(unittest.TestCase):
             config["env"]["clear"]["OPENSTORYLINE_LLM_DEFECT_REPAIR_MODE"],
             "off",
         )
+        self.assertEqual(
+            config["env"]["clear"]["OPENSTORYLINE_POST_RENDER_REVIEW_MODE"],
+            "off",
+        )
         self.assertNotIn("OPENSTORYLINE_STT_MODELS", config["env"]["clear"])
         self.assertEqual(config["env"]["clear"]["MISTRAL_STT_TIMEOUT"], 180)
         self.assertEqual(
@@ -183,10 +188,6 @@ class KamalConfigTests(unittest.TestCase):
         self.assertEqual(
             config["env"]["clear"]["OPENSTORYLINE_AGENTIC_EDITING_MODE"],
             "off",
-        )
-        self.assertEqual(
-            config["env"]["clear"]["OPENSTORYLINE_SESSION_WORKSPACE_MODE"],
-            "legacy",
         )
         self.assertIs(
             config["env"]["clear"]["OPENSTORYLINE_GENERATED_ASSETS_ENABLED"],
@@ -269,8 +270,8 @@ class KamalConfigTests(unittest.TestCase):
         self.assertIn("PEXELS_API_KEY=$PEXELS_API_KEY", secrets)
         self.assertNotIn("replace-with", secrets)
         self.assertIn("MISTRAL_QA_STT_AUDIO=", kamal_env)
-        self.assertIn("OPENSTORYLINE_SESSION_WORKSPACE_MODE=legacy", kamal_env)
-        self.assertIn("OPENSTORYLINE_SESSION_WORKSPACE_MODE=legacy", local_env)
+        self.assertNotIn("OPENSTORYLINE_SESSION_WORKSPACE_MODE", kamal_env)
+        self.assertNotIn("OPENSTORYLINE_SESSION_WORKSPACE_MODE", local_env)
         self.assertIn("OPENSTORYLINE_STRUCTURED_OUTPUT_MODE=json_object", kamal_env)
         self.assertIn("OPENSTORYLINE_STRUCTURED_OUTPUT_MODE=json_object", local_env)
         self.assertIn("OPENSTORYLINE_STRUCTURED_OUTPUT_BOUNDARIES=", kamal_env)
@@ -482,7 +483,8 @@ class KamalConfigTests(unittest.TestCase):
             OPENSTORYLINE_STRUCTURED_OUTPUT_CAPABILITY_VERIFIED="true",
             OPENSTORYLINE_STRUCTURED_OUTPUT_BOUNDARIES=(
                 "shorts_selection.v1,visual_understanding.v1,edit_plan.v1,"
-                "edit_plan_repair.v1,semantic_qa.v1,"
+                "edit_plan_repair.v1,semantic_qa.v1,render_critic.v1,"
+                "post_render_repair.v1,post_render_repair.v2,candidate_comparison.v1,"
                 "ffmpega_agentic_finishing.v1,ffmpega_deterministic_effects.v1"
             ),
             OPENSTORYLINE_LLM_DEFECT_REPAIR_MODE="enforce",
@@ -505,7 +507,8 @@ class KamalConfigTests(unittest.TestCase):
             "OPENSTORYLINE_STRUCTURED_OUTPUT_CAPABILITY_VERIFIED": "true",
             "OPENSTORYLINE_STRUCTURED_OUTPUT_BOUNDARIES": (
                 "shorts_selection.v1,visual_understanding.v1,edit_plan.v1,"
-                "edit_plan_repair.v1,semantic_qa.v1,"
+                "edit_plan_repair.v1,semantic_qa.v1,render_critic.v1,"
+                "post_render_repair.v1,post_render_repair.v2,candidate_comparison.v1,"
                 "ffmpega_agentic_finishing.v1,ffmpega_deterministic_effects.v1"
             ),
             "OPENSTORYLINE_AGENTIC_EDITING_MODE": "render",
@@ -534,13 +537,66 @@ class KamalConfigTests(unittest.TestCase):
             OPENSTORYLINE_STRUCTURED_OUTPUT_CAPABILITY_VERIFIED="true",
             OPENSTORYLINE_STRUCTURED_OUTPUT_BOUNDARIES=(
                 "shorts_selection.v1,visual_understanding.v1,edit_plan.v1,"
-                "edit_plan_repair.v1,semantic_qa.v1,"
+                "edit_plan_repair.v1,semantic_qa.v1,render_critic.v1,"
+                "post_render_repair.v1,post_render_repair.v2,candidate_comparison.v1,"
                 "ffmpega_agentic_finishing.v1,ffmpega_deterministic_effects.v1"
             ),
             OPENSTORYLINE_LLM_DEFECT_REPAIR_MODE="report",
             OPENSTORYLINE_AGENTIC_EDITING_MODE="shadow",
         )
         self.assertEqual(result.returncode, 0, result.stderr)
+
+    def test_post_render_review_requires_strict_critic_and_repair_boundaries(self):
+        incomplete = validate_rollout_flags(
+            OPENSTORYLINE_STRUCTURED_OUTPUT_MODE="json_schema",
+            OPENSTORYLINE_STRUCTURED_OUTPUT_CAPABILITY_VERIFIED="true",
+            OPENSTORYLINE_STRUCTURED_OUTPUT_BOUNDARIES=(
+                "shorts_selection.v1,visual_understanding.v1,edit_plan.v1,"
+                "edit_plan_repair.v1,semantic_qa.v1"
+            ),
+            OPENSTORYLINE_AGENTIC_EDITING_MODE="render",
+            OPENSTORYLINE_POST_RENDER_REVIEW_MODE="report",
+        )
+        self.assertNotEqual(incomplete.returncode, 0)
+        self.assertIn("requires render_critic.v1", incomplete.stderr)
+
+        complete = {
+            "OPENSTORYLINE_STRUCTURED_OUTPUT_MODE": "json_schema",
+            "OPENSTORYLINE_STRUCTURED_OUTPUT_CAPABILITY_VERIFIED": "true",
+            "OPENSTORYLINE_STRUCTURED_OUTPUT_BOUNDARIES": (
+                "shorts_selection.v1,visual_understanding.v1,edit_plan.v1,"
+                "edit_plan_repair.v1,semantic_qa.v1,render_critic.v1,"
+                "post_render_repair.v1,post_render_repair.v2,candidate_comparison.v1,"
+                "ffmpega_agentic_finishing.v1,ffmpega_deterministic_effects.v1"
+            ),
+            "OPENSTORYLINE_LLM_DEFECT_REPAIR_MODE": "enforce",
+            "OPENSTORYLINE_AGENTIC_EDITING_MODE": "render",
+            "OPENSTORYLINE_BASELINE_FALLBACKS_ENABLED": "true",
+            "OPENSTORYLINE_RETRY_UX_ENABLED": "true",
+            "OPENSTORYLINE_DELIVERY_POLICY": "technical_pass_guaranteed",
+            "OPENSTORYLINE_RENDER_PROMOTION_MODE": "enforce",
+        }
+        report = validate_rollout_flags(
+            **complete,
+            OPENSTORYLINE_POST_RENDER_REVIEW_MODE="report",
+        )
+        self.assertEqual(report.returncode, 0, report.stderr)
+        legacy_enforce = validate_rollout_flags(
+            **{
+                **complete,
+                "OPENSTORYLINE_STRUCTURED_OUTPUT_BOUNDARIES": complete[
+                    "OPENSTORYLINE_STRUCTURED_OUTPUT_BOUNDARIES"
+                ].replace(",post_render_repair.v2,candidate_comparison.v1", ""),
+            },
+            OPENSTORYLINE_POST_RENDER_REVIEW_MODE="enforce",
+        )
+        self.assertNotEqual(legacy_enforce.returncode, 0)
+        self.assertIn("requires post_render_repair.v2", legacy_enforce.stderr)
+        enforce = validate_rollout_flags(
+            **complete,
+            OPENSTORYLINE_POST_RENDER_REVIEW_MODE="enforce",
+        )
+        self.assertEqual(enforce.returncode, 0, enforce.stderr)
 
     def test_plan_repair_call_cap_is_hard_coded_not_operator_tunable(self):
         repair = (ROOT / "src" / "open_storyline" / "mvp" / "repair.py").read_text(

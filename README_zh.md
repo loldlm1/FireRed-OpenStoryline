@@ -1,389 +1,80 @@
-<div align="center">
-  <a href="#gh-light-mode-only">
-    <img
-      src="https://image-url-2-feature-1251524319.cos.ap-shanghai.myqcloud.com/openstoryline/web/static/brand_white.png"
-      alt="openstoryline"
-      width="70%"
-    />
-  </a>
+# FireRed-OpenStoryline
 
-  <a href="#gh-dark-mode-only">
-    <img
-      src="https://image-url-2-feature-1251524319.cos.ap-shanghai.myqcloud.com/openstoryline/web/static/brand_black.png"
-      alt="openstoryline"
-      width="70%"
-    />
-  </a>
+[English](README.md)
 
-  <p>
-    <a href="./README_zh.md">🇨🇳 简体中文</a> | 
-    <a href="./README.md">🌏 English</a>
-  </p>
-  <p>
-    <a href="https://huggingface.co/FireRedTeam" target="_blank"><img alt="Hugging Face" src="https://img.shields.io/badge/%F0%9F%A4%97%20Hugging%20Face-FireRedTeam-ffc107?color=ffc107&logoColor=white" style="display: inline-block;"/></a>
-    <a href="https://www.modelscope.cn/studios/FireRedTeam/FireRed-OpenStoryline" target="_blank">
-        <img alt="ModelScope Demo" src="https://img.shields.io/badge/ModelScope-Demo-4B6CFF?style=flat&logo=modelscope&logoColor=white" style="display: inline-block;"/></a>
-    <img src="https://img.shields.io/badge/python-≥3.11-blue" alt="Python">
-    <img src="https://img.shields.io/badge/license-Apache%202.0-blue" alt="License">
-    <a href="https://image-url-2-feature-1251524319.cos.ap-shanghai.myqcloud.com/openstoryline/docs/media/others/group_20260329.jpg"><img src="https://img.shields.io/badge/Xiaohongshu-Group-E9DBFC?style=flat&logo=xiaohongshu&logoColor=white" alt="xiaohongshu"></a>
-    <a href="https://hellogithub.com/repository/FireRedTeam/FireRed-OpenStoryline" target="_blank"><img src="https://api.hellogithub.com/v1/widgets/recommend.svg?rid=fb457793a87e4bdab9c4f5ca26451a7f&claim_uid=4QpcNTrHEAg3O8n&theme=small" alt="Featured｜HelloGitHub" /></a>
-  </p>
-</div>
+FireRed-OpenStoryline 是一个远程会话式视频编辑服务，用于将一次上传的源视频
+转换为经过验证的社交短视频。模型负责规划和审查编辑创意；确定性的 Python 与
+FFmpeg 代码负责输入验证、能力约束、渲染和发布保护。
 
-<div align="center">
+已弃用的本地 CLI/MCP 完整应用已经删除。当前唯一受支持的运行时是
+`mvp_fastapi.py` 中带密码认证的 FastAPI MVP，并通过 `Dockerfile.remote` 和
+Kamal 部署。
 
-[🤗 HuggingFace Demo](https://fireredteam-firered-openstoryline.hf.space/) • [🌐 Homepage](https://fireredteam.github.io/demos/firered_openstoryline/)
+## 运行时
 
-</div>
+- 9Router 提供规划、帧理解和图片生成。
+- Mistral Voxtral 直连服务提供带时间戳的语音转文字。
+- PostgreSQL 是会话、任务、事件、产物、评审、保留状态和审计证据的权威来源。
+- CPU FFmpeg 执行有边界的确定性媒体处理。
+- 可选的固定版本 FFMPEGA sidecar 只执行有类型且在白名单内的特效。
+- 任务媒体和工作文件隔离在 `outputs/mvp_jobs/<job_id>` 下。
 
-<div align="center">
-  <video src="https://github.com/user-attachments/assets/9116767e-bcd9-417a-93d8-2db4d3d5df8e" width="70%" poster=""> </video>
-</div>
+可复用的 Agentic 工作区是唯一可执行的编辑工作流。历史 workflow-version-1
+记录仅作为不可执行的审计历史保留，不能进入工作队列。
 
+## 文档
 
-**FireRed-OpenStoryline** 将复杂的视频创作转化为自然直观的对话体验。兼顾易用性和企业级可靠性，让视频创作对初学者和创意爱好者都变得简单友好。
-> FireRed，字面意思红色的火苗，取自“星星之火，可以燎原”。我们将这团火苗取名为 FireRed，就是希望将我们在真实场景中打磨出的 SOTA 能力，像火种一样撒向旷野，点燃全球开发者的想象力，共同改变这个 AI 的世界。
+- [架构](docs/mvp/architecture.md)
+- [西班牙语运维指南](docs/mvp/guia-es.md)
+- [API 密钥和提供商检查](docs/mvp/api-keys.md)
+- [9Router VPS 手册](docs/mvp/9router-vps-runbook.md)
+- [审计和数据库运维](docs/mvp/audit-and-database.md)
+- [Agent 工程指南](docs/agent-engineering.md)
+- [实现历史](docs/mvp/implementation-history.md)
 
-## 远程社交短视频 MVP（Fork）
+## 本地开发
 
-本 Fork 提供隔离的远程 Web 服务，可将长视频生成多个经过校验的
-18–25 秒竖屏片段。本地仅使用 CPU FFmpeg 做确定性媒体处理，模型推理均
-通过远程服务完成。可复用工作区中，每个剪辑会话只上传一个不可修改的
-源视频；之后可以创建多个不可修改的提示词版本和重跑尝试，无需重复上传
-或复制源视频。用户可以比较已完成的输出并标记一个人工最爱结果，确定性
-QA 仍作为独立证据。上传百分比、经过脱敏的处理/渲染步骤、SSE 重连和轮询
-回退会持续展示长任务进度。若要编辑另一个视频，只需创建新会话。
-
-该服务还包含 PostgreSQL 浏览器会话、可恢复分块上传、Voxtral 直连转录、
-GPT‑5.6 Sol 规划和可选的固定版本、无模型 FFMPEGA sidecar。新工作区默认通过
-`OPENSTORYLINE_SESSION_WORKSPACE_MODE=legacy` 保持关闭；启用它需要单独授权的
-发布操作。生产部署使用 Kamal，并支持 IP:端口或域名/HTTPS、密码登录和仅对
-失败登录计数的持久限流。
-
-请从[西班牙语快速指南](docs/mvp/guia-es.md)开始，或查阅
-[免费服务容量](docs/mvp/limites-gratis.md)、
-[远程图像生成](docs/mvp/imagenes-generadas.md)、
-[架构](docs/mvp/architecture.md)和
-[实现历史](docs/mvp/implementation-history.md)。
-
-## ✨ 核心特性
-- 🌐 **智能素材搜索与整理**： 自动在线搜索并下载符合你需求的图片和视频片段。基于用户主题素材进行片段拆分与内容理解。
-- ✍️ **智能文案生成**： 结合用户主题、画面理解与情绪识别，自动构建故事线及契合的旁白。内置少样本（Few-shot）仿写能力，支持通过输入参考文本（如种草测评、日常碎碎念等）定义文案风格，实现语感、节奏与句式的精准复刻。
-- 🎵 **智能推荐音乐、配音与字体**：支持导入私有歌单，根据视频内容和情绪自动推荐背景音乐并智能卡点。只需描述"克制一点","偏情绪化","像纪录片旁白"等风格，系统即可匹配合适的配音与字体，保证整体风格协调统一。
-- 💬 **对话式精修**：支持快速删减、替换或重组片段；修改任意字幕文案；调整文字颜色、字体、描边、位置等视觉元素——所有操作均通过自然语言完成，即改即得。
-- ⚡ **剪辑技能沉淀**： 可一键保存为专属剪辑Skill，记录完整的剪辑逻辑。下次只需更换素材并选择对应Skill，即可快速复刻同款风格，实现高效批量生产。
-
-## NEWS
-- 🎬 **2026-04-02**：新增 **AI 转场生成** 功能，支持基于相邻片段的首尾画面与自然语言描述自动生成过渡镜头，让镜头衔接更自然、叙事更连贯。
-- 🚀 **2026-03-22**：新增**基于ASR的口播视频粗剪Skill**，支持自动去除口头禅、语气词和重复表达，并结合时间戳进行精准切分，提升口播类视频的剪辑效率与成片质量。
-- 🔥 **2026-03-12**：接入**OpenClaw**，新增 `openstoryline-install` 与 `openstoryline-use` 两个 OpenClaw Skills，分别覆盖安装首跑与实际使用流程；添加面向 **Claude Code** 的 Skill 使用说明，方便 **Claude Code** 依据仓库规范完成安装与调用。
-- **2026-2-10**：FireRed-OpenStoryline 正式开源。
-
-> <sub>
-> ⚠️ 注意：AI 转场依赖第三方 AIGC 视频生成服务，<b>成本相对较高</b>。受素材质量、提示词和模型波动影响，生成结果存在一定随机性，建议按需开启。
-> </sub>
-
-## 🏗️ 架构
-
-<p align="center">
-  <img src="https://raw.githubusercontent.com/FireRedTeam/fireredteam.github.io/main/demos/firered_openstoryline/pics/structure.jpg" alt="openstoryline 架构" width="800">
-</p>
-
-## ✨ 演示案例
-
-<table align="center">
-  <tr>
-    <td align="center"><b>种草视频</b></td>
-    <td align="center"><b>幽默有趣</b></td>
-    <td align="center"><b>好物分享</b></td>
-    <td align="center"><b>文艺风格</b></td>
-  </tr>
-  <tr>
-    <td align="center"><video src="https://github.com/user-attachments/assets/28043813-1fda-4077-80d4-c6f540d7c7cb" controls width="220"></video></td>
-    <td align="center"><video src="https://github.com/user-attachments/assets/a1e33da2-a799-4398-a1bb-b25bb5143d7c" controls width="220"></video></td>
-    <td align="center"><video src="https://github.com/user-attachments/assets/444fd0fb-8824-4c25-b449-9309b0fcfd85" controls width="220"></video></td>
-    <td align="center"><video src="https://github.com/user-attachments/assets/2e69fa0d-b693-4d4f-b4d2-45146254f9e8" controls width="220"></video></td>
-  </tr>
-  </tr>
-
-  <tr>
-    <td align="center"><b>开箱视频</b></td>
-    <td align="center"><b>宠物说话</b></td>
-    <td align="center"><b>旅行Vlog</b></td>
-    <td align="center"><b>年终总结</b></td>
-  </tr>
-  <tr>
-    <td align="center"><video src="https://github.com/user-attachments/assets/ff1d669b-1d27-4cf8-b0be-1b141c717466" controls width="220"></video></td>
-    <td align="center"><video src="https://github.com/user-attachments/assets/063608bb-7fbd-4841-a08f-032ae459499f" controls width="220"></video></td>
-    <td align="center"><video src="https://github.com/user-attachments/assets/bc441dfa-e995-4575-8401-ecefa269e57b" controls width="220"></video></td>
-    <td align="center"><video src="https://github.com/user-attachments/assets/533ef5c3-bb76-4416-bff7-825e88b00b7d" controls width="220"></video></td>
-  </tr>
-  </tr>
-</table>
-
-> <sub>
-> 🎨 <b>效果说明：</b>受限于开源素材的版权协议，第一行默认演示中的元素（字体/音乐）仅为基础效果。<b>强烈建议</b>接入<a href="https://github.com/FireRedTeam/FireRed-OpenStoryline/blob/main/docs/source/zh/guide.md#2-%E9%AB%98%E7%BA%A7%E4%BD%BF%E7%94%A8%E6%95%99%E7%A8%8B">自建元素库教程</a>，解锁商用级字体、音乐、特效等，可实现显著优于默认效果的视频质量。<br>
-> ⚠️ <b>画质注：</b>受限于README展示空间，演示视频经过极限压缩。实际运行默认保持原分辨率输出，支持自定义尺寸。<br>
-> Demo中：<b>第一行</b>为默认开源素材效果（受限模式），<b>第二行</b>为小红书App「AI剪辑」元素库效果。👉 <a href="https://image-url-2-feature-1251524319.cos.ap-shanghai.myqcloud.com/openstoryline/docs/media/others/ai_cut_guide.png">点击查看体验教程</a><br>
-> ⚖️ <b>免责声明：</b>演示中包含的用户自摄素材及品牌标识仅作技术能力展示，版权归原作者所有。如有侵权请联系删除。
-> </sub>
-
-## 🤖 通过 Agent 使用
-
-FireRed-OpenStoryline 支持通过 Agent Skills 使用。
-我们提供了两个 Skills：
-
-- `openstoryline-install`：用于安装、配置与首跑验证。
-- `openstoryline-use`：用于启动服务并执行实际视频剪辑流程。
-
-### Codex 与仓库工程
-
-在本仓库中进行代码修改的 Agent 应先阅读 [`AGENTS.md`](AGENTS.md) 和
-[`Agent Engineering Guide`](docs/agent-engineering.md)。下方安装/使用 Skills
-用于操作产品，不会覆盖仓库中的工程、安全、测试或部署规则。
-
-### OpenClaw
-
-直接告诉OpenClaw：“我想体验 openstoryline，帮我安装相关 Skills”，即可自动触发安装。
-如果安装遇到问题，使用下面的命令手动安装：
+要求：Python 3.11+、PostgreSQL、FFmpeg 和 FFprobe。
 
 ```bash
-openclaw skills install openstoryline-install
-openclaw skills install openstoryline-use
+python3.11 -m venv .venv
+.venv/bin/pip install -r requirements-remote.txt
 ```
 
-如果你的 OpenClaw 版本不支持 `openclaw skills install`，或者安装仍然失败，可以改用 ClawHub：
-```bash
-npx clawhub install openstoryline-install
-npx clawhub install openstoryline-use
-```
-
-安装后，只需要将素材发给 OpenClaw，它就可以帮你完成从安装 FireRed-OpenStoryline 到成片的整个过程。
-
-### Claude Code
-
-本仓库内置了 Claude Code Skills。  
-如果你在**仓库根目录**启动 Claude Code，可直接使用仓库中的项目级 Skills，Claude Code 可以帮你完成 FireRed-OpenStoryline 的安装与使用。
+根据已提交的环境变量模板创建私有本地配置，并设置数据库、密码、安全、9Router
+和 Mistral 所需值。不要提交真实密钥。
 
 ```bash
-/openstoryline-install
-/openstoryline-use
+PYTHONPATH=src .venv/bin/python -m alembic upgrade head
+PYTHONPATH=src .venv/bin/uvicorn mvp_fastapi:app --host 127.0.0.1 --port 8000
 ```
 
-如果你想把这两个 Skills 安装到你自己的 Claude Code 全局配置中，可执行：
+浏览器服务位于 `http://127.0.0.1:8000`。`/health` 和 `/up` 是公开健康检查；
+`/api/mvp` 下的路由遵循架构文档中的浏览器会话和 CSRF 合同。
+
+## 验证
+
+以下命令不会调用真实模型提供商：
 
 ```bash
-mkdir -p ~/.claude/skills
-cp -R .claude/skills/openstoryline-install ~/.claude/skills/
-cp -R .claude/skills/openstoryline-use ~/.claude/skills/
+PYTHONPATH=src .venv/bin/python -m unittest discover -s tests -p 'test_*.py' -v
+PYTHONPATH=src .venv/bin/python -c "import mvp_fastapi; import open_storyline.mvp.pipeline; print('mvp_only_ok')"
+bash -n bin/kamal-mvp scripts/mvp-postgres-init.sh \
+  scripts/mvp-postgres-backup.sh scripts/mvp-postgres-restore-check.sh \
+  .kamal/hooks/pre-deploy .kamal/hooks/post-deploy
+docker build -f Dockerfile.remote .
 ```
 
-### Codex
+未设置 `TEST_DATABASE_URL` 时，依赖数据库的测试类会跳过。真实提供商检查和部署
+可能产生费用或修改外部状态，只应作为明确的发布操作执行。
 
-在本仓库内启动 Codex 时，Codex 会通过 `.agents/skills/` 自动发现这两个项目级 Skills。可显式调用：
+## 部署
 
-```text
-$openstoryline-install
-$openstoryline-use
-```
+生产环境使用 `config/deploy.yml`、`Dockerfile.remote` 和 `bin/kamal-mvp`。
+Kamal 流程会验证提供商能力、数据库就绪状态、持久卷、健康检查和回滚边界。
+发布前请阅读[架构](docs/mvp/architecture.md)和
+[审计/数据库指南](docs/mvp/audit-and-database.md)。
 
-`.agents/skills/` 中的条目是指向规范 `.claude/skills/` 目录的仓库相对链接，因此 Claude Code、OpenClaw 和 Codex 使用同一份工作流内容。若要安装到 Codex 用户级目录，请调用 `$skill-installer`，并让它从 `FireRedTeam/FireRed-OpenStoryline` 安装 `.claude/skills/openstoryline-install` 与 `.claude/skills/openstoryline-use`。
+## 许可证
 
-### 其他兼容 Agent（实验性）
-
-这些 Skills 使用开放的 Agent Skills 格式，也可能适用于其他兼容 Agent。请遵循对应 Agent 当前的安装与发现文档，不要假设 Codex 的仓库路径同样适用。
-
-## 📦 安装
-
-### 1. 克隆仓库
-```bash
-# 如果没有安装git，参考官方网站进行安装：https://git-scm.com/install/
-# 或手动打包下载，并解压
-git clone https://github.com/FireRedTeam/FireRed-OpenStoryline.git
-cd FireRed-OpenStoryline
-```
-
-### 2. 创建虚拟环境
-
-按照官方指南安装 Conda（推荐Miniforge，安装过程中建议勾选上自动配置环境变量）：https://docs.conda.io/projects/conda/en/latest/user-guide/install/index.html
-
-```
-# 要求python>=3.11
-conda create -n storyline python=3.11
-conda activate storyline
-```
-
-### 3. 资源下载与依赖安装
-#### 3.1 一键安装（仅支持Linux和MacOS）
-```
-sh build_env.sh
-```
-
-#### 3.2 手动安装
-##### A. MacOS 或 Linux
-  - Step 1: 安装 wget（如果尚未安装）
-    
-    ```
-    # MacOS: 如果你还没有安装 Homebrew，请先安装：https://brew.sh/
-    brew install wget
-    
-    # Ubuntu/Debian
-    sudo apt-get install wget
-    
-    # CentOS
-    sudo yum install wget
-    ```
-
-  - Step 2: 下载资源
-  
-    ```bash
-    chmod +x download.sh
-    ./download.sh
-    ```
-  
-  - Step 3: 安装依赖
-
-    ```bash
-    pip install -r requirements.txt
-    ```
-    如果你计划使用 `storyline.local_asr`，请确认当前环境已安装 `torchaudio`。
-
-###### B. Windows
-  - Step 1: 准备目录：在项目根目录下新建目录 `resource`。
-
-  - Step 2: 下载并解压：
-
-    *   [下载模型 (models.zip)](https://image-url-2-feature-1251524319.cos.ap-shanghai.myqcloud.com/openstoryline/models.zip) -> 解压至 `.storyline` 目录。
-  
-    *   [下载资源 (resource.zip)](https://image-url-2-feature-1251524319.cos.ap-shanghai.myqcloud.com/openstoryline/resource.zip) -> 解压至 `resource` 目录。
-  - Step 3:  **安装依赖**：
-    ```bash
-    pip install -r requirements.txt
-    ```
-    如果你计划使用 `storyline.local_asr`，请确认当前环境已安装 `torchaudio`。
-
-
-## 🚀 快速开始
-注意：在开始之前，您需要先在 config.toml 中配置 API-Key。详细信息请参阅文档 [API-Key 配置](docs/source/zh/api-key.md)
-
-### 1. 启动 MCP 服务器
-
-#### MacOS or Linux
-  ```bash
-  PYTHONPATH=src python -m open_storyline.mcp.server
-  ```
-
-#### Windows
-  ```
-  $env:PYTHONPATH="src"; python -m open_storyline.mcp.server
-  ```
-
-
-### 2. 启动对话界面
-
-- 方式 1：命令行界面
-
-  ```bash
-  python cli.py
-  ```
-
-- 方式 2：Web 界面
-
-  ```bash
-  uvicorn agent_fastapi:app --host 127.0.0.1 --port 7860
-  ```
-
-## 🐳 Docker 部署
-
-如果未安装 Docker，请先安装 https://www.docker.com/products/docker-desktop/
-
-### 拉取镜像
-```
-# 从 Docker Hub 官方仓库拉取镜像
-# 推荐海外用户使用
-docker pull openstoryline/openstoryline:v1.0.1
-
-# 从阿里云容器镜像服务拉取镜像
-# 推荐国内用户使用（速度更快，更稳定）
-docker pull crpi-6knxem4w8ggpdnsn.cn-shanghai.personal.cr.aliyuncs.com/openstoryline/openstoryline:v1.0.1
-```
-
-### 启动镜像
-```
-docker run \
-  -v $(pwd)/config.toml:/app/config.toml \
-  -v $(pwd)/outputs:/app/outputs \
-  -v $(pwd)/run.sh:/app/run.sh \
-  -p 7860:7860 \
-  openstoryline/openstoryline:v1.0.1
-```
-启动后访问Web界面 http://0.0.0.0:7860
-
-## 📁 项目结构
-```
-FireRed-OpenStoryline/
-├── 🎯 src/open_storyline/           核心应用
-│   ├── mcp/                         🔌 模型上下文协议
-│   ├── nodes/                       🎬 视频处理节点
-│   ├── skills/                      🛠️ Agent 技能库
-│   ├── storage/                     💾 Agent 记忆系统
-│   ├── utils/                       🧰 工具函数
-│   ├── agent.py                     🤖 Agent 构建
-│   └── config.py                    ⚙️ 配置管理
-├── 📚 docs/                         文档
-├── 🐳 Dockerfile                    Docker 配置
-├── 💬 prompts/                      LLM 提示词模板
-├── 🎨 resource/                     静态资源
-│   ├── bgms/                        背景音乐库
-│   ├── fonts/                       字体文件
-│   ├── script_templates/            视频脚本模板
-│   └── unicode_emojis.json          Emoji 列表
-├── 🔧 scripts/                      工具脚本
-├── 🌐 web/                          Web 界面
-├── 🚀 agent_fastapi.py              FastAPI 服务器
-├── 🖥️ cli.py                        命令行界面
-├── ⚙️ config.toml                   主配置文件
-├── 🚀 build_env.sh                  环境构建脚本
-├── 📥 download.sh                   资源下载脚本
-├── 📦 requirements.txt              运行时依赖
-└── ▶️ run.sh                        启动脚本
-
-```
-
-## 📚 文档
-
-### 📖 教程索引
-
-- [API申请与配置](docs/source/zh/api-key.md) - 如何申请和配置 API 密钥
-- [使用教程](docs/source/zh/guide.md) - 常见用例和基本操作
-- [常见问题](docs/source/zh/faq.md) - 常见问题解答
-- [Agent 工程指南](docs/agent-engineering.md) - 面向代码 Agent 的架构、契约与验证规则
-- [远程 MVP 架构](docs/mvp/architecture.md) - 当前远程推理运行策略
-- [远程 MVP 数据库与审计](docs/mvp/audit-and-database.md) - PostgreSQL、保留策略、备份与 Agent 审查操作
-- [远程 MVP 实现历史](docs/mvp/implementation-history.md) - 已完成的实现记录
-
-## TODO
-
-- [ ] 添加口播类型视频剪辑功能
-- [ ] 添加音色克隆功能
-- [ ] 添加更多的转场/滤镜/特效功能
-- [ ] 添加图像/视频生成和编辑能力
-- [ ] 支持GPU渲染和高光裁切
-
-## 致谢
-
-本项目基于以下优秀的开源项目构建：
-
-
-### 核心依赖
-- [MoviePy](https://github.com/Zulko/moviepy) - 视频编辑库
-- [FFmpeg](https://ffmpeg.org/) - 多媒体框架
-- [LangChain](https://www.langchain.com/) - 提供预构建Agent的框架
-
-## 📄 License
-
-This project is licensed under the Apache License 2.0 - see the [LICENSE](LICENSE) file for details.
-
-## ⭐ Star History
-
-<div align="center"> <p> <img width="800" src="https://api.star-history.com/svg?repos=FireRedTeam/FireRed-OpenStoryline&type=Date" alt="Star-history"> </p> </div>
+Apache License 2.0。详见 [LICENSE](LICENSE)。

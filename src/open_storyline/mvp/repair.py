@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, field
 from enum import StrEnum
 from hashlib import sha256
 from typing import Any, Iterable, Mapping
@@ -130,10 +130,24 @@ class RepairContractError(ValueError):
 class RepairBudget:
     visual_attempts_used: int = 0
     plan_attempts_used: int = 0
+    visual_attempts_used_by_clip: Mapping[int, int] = field(default_factory=dict)
 
-    def available(self, stage: RepairStage) -> bool:
+    def available(
+        self,
+        stage: RepairStage,
+        *,
+        clip_index: int | None = None,
+    ) -> bool:
         if stage is RepairStage.VISUAL_UNDERSTANDING:
-            return self.visual_attempts_used < 1
+            attempts_used = self.visual_attempts_used
+            if clip_index is not None:
+                attempts_used = int(
+                    self.visual_attempts_used_by_clip.get(
+                        int(clip_index),
+                        attempts_used,
+                    )
+                )
+            return attempts_used < 1
         return self.plan_attempts_used < MAX_PLAN_REPAIR_ROUNDS
 
 
@@ -699,7 +713,7 @@ def repair_disposition(
     available = {str(item) for item in available_capabilities}
     if set(finding.required_capabilities) - available:
         return result("required_capability_unavailable")
-    if not budget.available(stage):
+    if not budget.available(stage, clip_index=finding.clip_index):
         return result("semantic_budget_exhausted")
     return result("report_only" if mode is RepairMode.REPORT else "eligible", eligible=True)
 

@@ -1,14 +1,11 @@
 from __future__ import annotations
 
-from pathlib import Path
 from typing import Callable
-import asyncio
 import mimetypes
-import os
 
-from fastapi import APIRouter, File, Form, Header, HTTPException, Request, UploadFile
+from fastapi import APIRouter, Header, HTTPException, Request
 from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from open_storyline.mvp.activity import ActivityService
 from open_storyline.mvp.jobs import JobManager, JobStore, JobStoreError
@@ -19,9 +16,6 @@ from open_storyline.mvp.prompt_versions import (
 )
 from open_storyline.mvp.retention import RetentionService
 from open_storyline.mvp.session_media import SessionMediaStore
-
-
-ALLOWED_VIDEO_SUFFIXES = {".mp4", ".mov", ".mkv", ".webm", ".avi", ".m4v"}
 
 
 class SessionPayload(BaseModel):
@@ -35,14 +29,24 @@ class SessionSourceUploadPayload(BaseModel):
 
 
 class PromptVersionPayload(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     prompt: str = Field(min_length=1, max_length=12000)
     max_clips: int = Field(default=8, ge=1, le=50)
-    edit_mode: str = Field(default="legacy", max_length=32)
     asset_policy: str = Field(default="auto", max_length=32)
     max_generated_assets_per_clip: int = Field(default=2, ge=0, le=20)
     stock_policy: str = Field(default="off", max_length=32)
     max_stock_assets_per_clip: int = Field(default=0, ge=0, le=20)
     stock_asset_kind: str = Field(default="video", max_length=16)
+
+    @model_validator(mode="before")
+    @classmethod
+    def reject_retired_edit_mode(cls, value):
+        if isinstance(value, dict) and "edit_mode" in value:
+            raise ValueError(
+                "edit_mode is retired; Agentic editing is the only workflow"
+            )
+        return value
 
 
 class FavoriteRunPayload(BaseModel):
@@ -82,6 +86,7 @@ def _http_error(exc: JobStoreError) -> HTTPException:
         "UPLOAD_STATE_INVALID",
         "SESSION_WORKFLOW_LEGACY",
         "SESSION_WORKFLOW_REUSABLE",
+        "EDIT_MODE_RETIRED",
         "PROMPT_VERSION_CONFLICT",
         "PROMPT_RUN_CONFLICT",
         "FAVORITE_RUN_INVALID",
@@ -126,7 +131,6 @@ def create_mvp_router(
     get_manager: Callable[[], JobManager],
     get_retention: Callable[[], RetentionService | None] | None = None,
     get_session_media: Callable[[], SessionMediaStore | None] | None = None,
-    get_workspace_mode: Callable[[], str] | None = None,
     get_prompt_versions: Callable[[], PromptVersionService | None] | None = None,
     get_activity: Callable[[], ActivityService | None] | None = None,
 ) -> APIRouter:
@@ -135,10 +139,9 @@ def create_mvp_router(
     @router.post("/sessions", status_code=201)
     async def create_session(payload: SessionPayload):
         try:
-            mode = get_workspace_mode() if get_workspace_mode is not None else "legacy"
             return await get_store().create_session(
                 payload.title,
-                workflow_version=2 if mode == "enabled" else 1,
+                workflow_version=2,
             )
         except JobStoreError as exc:
             raise _http_error(exc) from exc
@@ -146,7 +149,11 @@ def create_mvp_router(
     @router.get("/sessions")
     async def list_sessions(limit: int = 20, cursor: str | None = None):
         try:
-            return await get_store().list_sessions(limit=limit, cursor=cursor)
+            return await get_store().list_sessions(
+                limit=limit,
+                cursor=cursor,
+                workflow_version=2,
+            )
         except JobStoreError as exc:
             raise _http_error(exc) from exc
 
@@ -159,6 +166,11 @@ def create_mvp_router(
         try:
             store = get_store()
             current = await store.get_session(session_id)
+            if current["workflow_version"] != 2:
+                raise JobStoreError(
+                    "SESSION_WORKFLOW_LEGACY",
+                    "historical sessions are read-only audit records",
+                )
             jobs = await store.list_jobs(
                 session_id,
                 limit=job_limit,
@@ -184,7 +196,10 @@ def create_mvp_router(
                 detail={"code": "RETENTION_UNAVAILABLE"},
             )
         try:
-            return await service.delete_session(session_id)
+            return await service.delete_session(
+                session_id,
+                require_workflow_version=2,
+            )
         except JobStoreError as exc:
             raise _http_error(exc) from exc
 
@@ -195,106 +210,15 @@ def create_mvp_router(
         cursor: str | None = None,
     ):
         try:
+            current = await get_store().get_session(session_id)
+            if current["workflow_version"] != 2:
+                raise JobStoreError(
+                    "SESSION_WORKFLOW_LEGACY",
+                    "historical sessions are read-only audit records",
+                )
             return await get_store().list_jobs(session_id, limit=limit, cursor=cursor)
         except JobStoreError as exc:
             raise _http_error(exc) from exc
-
-    @router.post("/sessions/{session_id}/jobs", status_code=202)
-    async def create_session_job(
-        session_id: str,
-        file: UploadFile = File(...),
-        prompt: str = Form(...),
-        max_clips: int = Form(8),
-        edit_mode: str = Form("legacy"),
-        asset_policy: str = Form("auto"),
-        max_generated_assets_per_clip: int = Form(2),
-        stock_policy: str = Form("off"),
-        max_stock_assets_per_clip: int = Form(0),
-        stock_asset_kind: str = Form("video"),
-    ):
-        suffix = Path(file.filename or "").suffix.lower()
-        if suffix not in ALLOWED_VIDEO_SUFFIXES:
-            raise HTTPException(
-                status_code=415,
-                detail={
-                    "code": "VIDEO_TYPE_UNSUPPORTED",
-                    "message": f"supported extensions: {', '.join(sorted(ALLOWED_VIDEO_SUFFIXES))}",
-                },
-            )
-        store = get_store()
-        try:
-            editing_session = await store.get_session(session_id)
-            if editing_session["workflow_version"] != 1:
-                raise JobStoreError(
-                    "SESSION_WORKFLOW_REUSABLE",
-                    "create prompt versions and runs for reusable sessions",
-                )
-            state = await store.create(
-                editing_session_id=session_id,
-                prompt=prompt,
-                filename=file.filename or "video.mp4",
-                max_clips=max_clips,
-                edit_mode=edit_mode,
-                asset_policy=asset_policy,
-                max_generated_assets_per_clip=max_generated_assets_per_clip,
-                stock_policy=stock_policy,
-                max_stock_assets_per_clip=max_stock_assets_per_clip,
-                stock_asset_kind=stock_asset_kind,
-            )
-        except JobStoreError as exc:
-            await file.close()
-            raise _http_error(exc) from exc
-
-        target = store.input_path(state["id"], file.filename or "video.mp4")
-        limit = int(
-            os.getenv("OPENSTORYLINE_MAX_UPLOAD_BYTES", str(8 * 1024 * 1024 * 1024))
-        )
-        size = 0
-        try:
-            with target.open("xb") as stream:
-                while chunk := await file.read(1024 * 1024):
-                    size += len(chunk)
-                    if size > limit:
-                        raise JobStoreError(
-                            "UPLOAD_TOO_LARGE",
-                            f"upload exceeds {limit} bytes",
-                        )
-                    await asyncio.to_thread(stream.write, chunk)
-                await asyncio.to_thread(stream.flush)
-                await asyncio.to_thread(os.fsync, stream.fileno())
-            state = await store.mark_uploaded(state["id"], target, size)
-            await get_manager().enqueue(state["id"])
-            return await store.load(state["id"])
-        except JobStoreError as exc:
-            await asyncio.to_thread(target.unlink, missing_ok=True)
-            await store.fail(state["id"], code=exc.code, message=str(exc))
-            raise _http_error(exc) from exc
-        except asyncio.CancelledError:
-            await asyncio.to_thread(target.unlink, missing_ok=True)
-            try:
-                await asyncio.shield(
-                    store.fail(
-                        state["id"],
-                        code="UPLOAD_INTERRUPTED",
-                        message="the upload was interrupted",
-                    )
-                )
-            except (JobStoreError, OSError):
-                pass
-            raise
-        except OSError as exc:
-            await asyncio.to_thread(target.unlink, missing_ok=True)
-            await store.fail(
-                state["id"],
-                code="UPLOAD_WRITE_FAILED",
-                message=str(exc),
-            )
-            raise HTTPException(
-                status_code=500,
-                detail={"code": "UPLOAD_WRITE_FAILED"},
-            ) from exc
-        finally:
-            await file.close()
 
     def session_media() -> SessionMediaStore:
         service = get_session_media() if get_session_media is not None else None
@@ -434,7 +358,6 @@ def create_mvp_router(
                 prompt=payload.prompt,
                 settings=validate_run_settings(
                     max_clips=payload.max_clips,
-                    edit_mode=payload.edit_mode,
                     asset_policy=payload.asset_policy,
                     max_generated_assets_per_clip=(
                         payload.max_generated_assets_per_clip
@@ -492,7 +415,7 @@ def create_mvp_router(
             {
                 "detail": {
                     "code": "SESSION_REQUIRED",
-                    "message": "create the job under /api/mvp/sessions/{session_id}/jobs",
+                    "message": "create an Agentic prompt version under /api/mvp/sessions/{session_id}/prompt-versions",
                 }
             },
             status_code=409,

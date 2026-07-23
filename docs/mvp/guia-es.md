@@ -308,10 +308,12 @@ pendientes o activos para proteger la capacidad del VPS. Es backpressure
 operacional, no una cuota por usuario ni una ventana RPM/RPD. Un exceso devuelve
 `JOB_QUEUE_FULL`; espera a que termine un trabajo antes de reintentar.
 
-Los trabajos nuevos se crean en
-`POST /api/mvp/sessions/{session_id}/jobs`. El antiguo
-`POST /api/mvp/jobs` devuelve `SESSION_REQUIRED` de forma intencional. Las rutas
-de consulta, artefactos y ZIP continúan usando el identificador del trabajo.
+El flujo nuevo crea una sesión con `POST /api/mvp/sessions`, carga su fuente
+inmutable mediante las rutas `input-video/uploads` y crea cada ejecución con
+`POST /api/mvp/sessions/{session_id}/prompt-versions`. Las rutas antiguas
+`POST /api/mvp/sessions/{session_id}/jobs` y `POST /api/mvp/jobs` ya no crean
+trabajos. Las rutas de consulta, artefactos y ZIP continúan usando el
+identificador del trabajo.
 
 Para rotar la contraseña, genera un hash nuevo, reemplaza
 `OPENSTORYLINE_WEB_PASSWORD_HASH` en el archivo ignorado y despliega/reinicia.
@@ -388,7 +390,10 @@ restaura metadatos y texto, no medios ya eliminados.
 
 ## 7. Rollout agentivo y Pexels
 
-El release seguro mantiene estos valores iniciales:
+La aplicación tiene un solo editor ejecutable: el Agentic. Los estados
+`shadow`, `report` y `off` que aparecen en esta sección son controles temporales
+del operador para observación y rollback; no exponen otra UI ni un renderer
+legacy. Un rollout nuevo comienza con estos valores:
 
 ```dotenv
 OPENSTORYLINE_AGENTIC_EDITING_MODE=shadow
@@ -414,7 +419,12 @@ contingencia sólo si aparece un defecto autoritativo nuevo. Un candidato que
 introduce defectos se descarta y no consume esa contingencia. Un proveedor que
 falla después de iniciar la llamada cuenta como intento; sólo entonces el motor
 puede aplicar un fallback local por segmento. El compositor debe pasar su
-dry-run final antes de invocar FFmpeg. Luego autoriza un
+dry-run final antes de invocar FFmpeg. Después del render, la revisión adaptativa
+selecciona anclas y ventanas justificadas en lugar de enviar cada frame al LLM.
+El crítico creativo puede proponer una reparación tipada consolidada por clip;
+el servidor valida límites, capacidades y evidencia, vuelve a renderizar sólo
+los clips afectados y compara candidatos sin permitir que una preferencia del
+LLM ignore un bloqueo técnico. Luego autoriza un
 canary privado con fuente sintética, seguido por una sesión de producción
 autorizada y al menos dos nichos no relacionados; sus identificadores, medios y
 reportes nunca entran a Git. Activa en
@@ -448,15 +458,11 @@ la UX de reintento en un reinicio separado. Este orden mantiene un kill switch
 independiente para catálogo, promoción, checkpoints y UI.
 
 Sin autorización para desplegar o llamar proveedores, todos los flags permanecen
-apagados. El rollback normal no requiere restaurar PostgreSQL: vuelve la UI a
-legacy, fija `OPENSTORYLINE_AGENTIC_EDITING_MODE=off`, desactiva assets/QA
-semántica, catálogo, promoción limitada, UX de reintento y lectura de
-checkpoints; luego usa `OPENSTORYLINE_DELIVERY_POLICY=qa_enforced`,
-`OPENSTORYLINE_COMPLETION_POLICY=strict`,
-`OPENSTORYLINE_RENDER_PROMOTION_MODE=off` y el perfil `legacy`, y
-ejecuta `./bin/kamal-mvp rollback VERSION_EXPLICITA` al release previo. Restaura la base
-sólo ante una migración incompatible revisada por separado; esta entrega no añade
-migraciones.
+apagados. El rollback normal no restaura una UI ni un renderer legacy: vuelve a
+la imagen Agentic anterior con `./bin/kamal-mvp rollback VERSION_EXPLICITA`,
+mantiene la política `qa_enforced` y pausa la promoción mientras se revisa la
+causa. Restaura PostgreSQL sólo ante una migración incompatible revisada por
+separado; la migración Agentic-only conserva las filas históricas.
 
 ## 8. Activa el servicio FFMPEGA determinista, si lo deseas
 

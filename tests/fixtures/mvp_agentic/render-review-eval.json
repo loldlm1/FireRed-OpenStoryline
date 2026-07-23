@@ -1,0 +1,23 @@
+{
+  "version": "render_review_eval.v1",
+  "private_data": false,
+  "dimensions": [
+    "visual_clarity",
+    "caption_readability",
+    "pacing_rhythm",
+    "narrative_coherence",
+    "effect_appropriateness",
+    "instruction_fidelity",
+    "overall_preference"
+  ],
+  "scenarios": [
+    "slow_opening",
+    "abrupt_cut",
+    "subtitle_overload",
+    "effect_heavy_request",
+    "coherent_unchanged_candidate"
+  ],
+  "allowed_preferences": ["original", "repaired", "tie", "uncertain"],
+  "raw_media_included": false,
+  "raw_provider_bodies_included": false
+}

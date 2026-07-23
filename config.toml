@@ -1,100 +1,29 @@
-# ============= 开发者选项 / Developer Options ===============
-[developer]
-developer_mode = true
-print_context = false # 在拦截器打印模型拿到的全部上下文，会很长 / Print full context in interceptor (output will be very long)
+# FireRed-OpenStoryline remote MVP configuration.
+# Secrets should be provided through the documented environment variables.
 
-# ============= 项目路径 / Project Paths ======================
 [project]
-media_dir = "./outputs/media"
-bgm_dir = "./resource/bgms"
 outputs_dir = "./outputs"
 
-# ============= 模型配置 for user / Model Config for User =============
-[llm]
-model = ""
-base_url = ""
-api_key = "" 
-timeout = 30.0 # 单位：秒
-temperature = 0.1
-max_retries = 2
-
-[vlm]
-model = ""
-base_url = ""
-api_key = "" 
-timeout = 20.0 # 单位：秒
-temperature = 0.1
-max_retries = 2
-
-# ============= MCP Server 相关 / MCP Server Related =============
-[local_mcp_server]
-server_name = "storyline"
-server_cache_dir = ".storyline/.server_cache"
-server_transport = "streamable-http"  # server 和 host之间的传输方式 / Transport method between server and host
-url_scheme = "http"  
-connect_host = "127.0.0.1" # 不要改动 / Do not change
-inline_media = "auto"      # 传输策略 / Transport policy: auto=根据 connect_host 自动选择 / auto-detect from connect_host; always=总是使用 base64 / always use base64; never=总是只用 path / always use path (e.g. Docker / LAN same-machine)
-port = 8001                # 如果端口冲突，可以随便用一个有空的端口 / Use any available port if conflict occurs
-path = "/mcp"              # 默认值，一般不用改 / Default value, usually unchanged
-
-json_response = true       # 建议用 True / Recommended: True
-stateless_http = false     # 强烈建议用 False / Strongly recommended: False
-timeout = 600
-available_node_pkgs = [
-    "open_storyline.nodes.core_nodes"
-]
-available_nodes = [
-    "LoadMediaNode", "SearchMediaNode", "SplitShotsNode", "RemoteASRNode", "SpeechRoughCutNode", "GenerateAITransitionNode",
-    "UnderstandClipsNode", "FilterClipsNode", "GroupClipsNode", "GenerateScriptNode", "ScriptTemplateRecomendation",
-    "GenerateVoiceoverNode", "SelectBGMNode", "RecommendTransitionNode", "RecommendTextNode",
-    "PlanTimelineProNode", "PlanTimelineAITransitionNode", "RenderVideoNode"
-]
-
-# =========== skills ==========
-[skills]
-skill_dir = "./.storyline/skills"
-
-# =========== pexels ==========
-[search_media]
-pexels_api_key = ""
-
-# ============= 镜头分割 / Shot Segmentation =============
-[split_shots]
-transnet_weights = ".storyline/models/transnetv2-pytorch-weights.pth"
-transnet_device = "cpu"
-
-# ============= 视频视觉理解 / Video Visual Understanding =============
-[understand_clips]
-sample_fps = 2.0                 # 每秒抽几帧 / Frames sampled per second
-max_frames = 64                  # 单clip抽帧上限兜底，避免长视频爆 token / Max frames per clip limit to prevent token overflow
-
-# ============= Remote-only speech to text ======================
 [remote_asr]
 timeout = 180.0
-language = "" # Mistral timestamps and explicit language cannot be combined.
+language = ""
 
-# ============= 9Router planning and vision =====================
 [ninerouter]
-base_url = "" # Prefer NINEROUTER_URL
-api_key = ""  # Prefer NINEROUTER_KEY
+base_url = "" # Prefer NINEROUTER_URL.
+api_key = ""  # Prefer NINEROUTER_KEY.
 model = "cx/gpt-5.6-sol"
 reasoning_effort = "medium"
 timeout = 180.0
 max_retries = 2
 
-# ============= Remote-only image generation ===================
 [remote_image]
-base_url = "" # Prefer NINEROUTER_URL
-api_key = ""  # Prefer NINEROUTER_KEY
-# The approved model must appear in GET /v1/models/image on your 9Router instance.
-models = [
-    "cx/gpt-5.5-image",
-]
+base_url = "" # Prefer NINEROUTER_URL.
+api_key = ""  # Prefer NINEROUTER_KEY.
+models = ["cx/gpt-5.5-image"]
 timeout = 180.0
 max_bytes = 26214400
 size = "1024x1024"
 
-# ============= Remote-only video MVP ===========================
 [mvp]
 frame_count = 6
 render_width = 1080
@@ -104,8 +33,6 @@ render_fps_cap = 60
 
 [agentic_editing]
 mode = "off"
-# Strict output, repair, delivery, and retry rollout controls remain env-only so
-# bin/kamal-mvp can validate their production ordering before a release.
 shadow_allow_blocked_plans = true
 baseline_fallbacks_enabled = false
 max_segments_per_clip = 24
@@ -128,6 +55,15 @@ completion_policy = "strict"
 delivery_policy = "qa_enforced"
 semantic_qa_enabled = false
 semantic_qa_max_frames = 4
+post_render_review_mode = "off"
+render_evidence_max_frames_per_clip = 12
+render_evidence_max_frames_total = 64
+render_evidence_max_bursts_per_clip = 8
+render_evidence_max_frame_bytes = 1500000
+render_evidence_max_total_bytes = 12582912
+render_evidence_max_width = 512
+render_evidence_max_height = 512
+render_evidence_timeout_seconds = 120.0
 scene_threshold = 0.35
 min_scene_duration_ms = 1000
 max_scenes = 64
@@ -144,105 +80,11 @@ crop_hysteresis_ratio = 0.03
 crop_smoothing_alpha = 0.65
 max_crop_velocity_ratio_per_second = 0.45
 
-# ============= Optional ComfyUI-FFMPEGA tool ===================
 [ffmpega]
-enabled = false # OPENSTORYLINE_FFMPEGA_ENABLED overrides this value
-base_url = "http://127.0.0.1:8188" # FFMPEGA_URL overrides this value
+enabled = false
+base_url = "http://127.0.0.1:8188"
 timeout = 1800.0
 poll_interval = 1.0
 quality_preset = "high"
-shared_local_root = ""  # e.g. /app/outputs inside this container
-shared_remote_root = "" # same volume path as seen by ComfyUI
-
-# ============= 镜头分组 / Clip Grouping =============
-[group_clips]
-base_max_tokens = 4096           # group_clips 基础输出 token 预算 / Base output token budget for group_clips
-tokens_per_clip = 48             # 每个 clip 额外 token 预算 / Extra output token budget per selected clip
-max_tokens_cap = 16384           # token 预算上限 / Upper bound of output token budget
-retry_token_step = 2048          # 每次重试增加的 token 预算 / Token increase per retry
-max_parse_retries = 2            # JSON 解析失败时重试次数 / Retry count when JSON parsing fails
-
-# ============= 文案模板 / Script Templates =============
-[script_template]
-script_template_dir = "./resource/script_templates"
-script_template_info_path = "./resource/script_templates/meta.json"
-
-# ============= 配音生成 / Voiceover Generation ===================
-[generate_voiceover]
-tts_provider_params_path = "./resource/tts/tts_providers.json"
-
-[generate_voiceover.providers.302]
-base_url = ""
-api_key = ""
-
-[generate_voiceover.providers.bytedance]
-uid = ""
-appid = ""
-access_token = ""
-
-[generate_voiceover.providers.minimax]
-base_url = ""
-api_key = ""
-
-
-# ============= AI 转场生成 / AI transition generation ===================
-[generate_ai_transition]
-
-[generate_ai_transition.providers.dashscope] # 阿里通义万相 / Alibaba’s Tongyi Wanxiang (Wan) video model
-model_name = ""
-api_key = ""
-
-[generate_ai_transition.providers.minimax] # Minimax 海螺 / Hailuo
-model_name = ""
-api_key = ""
-
-
-# ============= BGM选择 / BGM Selection ====================
-# 主要是用于计算音乐特征的一些参数 / Mainly parameters for calculating music features
-[select_bgm]
-sample_rate = 22050
-hop_length = 2048   # 每次分析窗口向前跳多少个采样点，越小越精细（但更慢） / Hop length samples; smaller = more precise but slower
-frame_length = 2048 # 计算信号的均方根RMS的窗口大小。越大越稳定，但对瞬态不敏感 / Window size for RMS; larger = stable but less sensitive to transients
-
-# ============= 字体推荐 / Font Recommendation ====================
-[recommend_text]
-font_info_path = "resource/fonts/font_info.json"
-
-# ============= 时间线组织 / Timeline Organization ====================
-[plan_timeline]
-beat_type_max = 1 # 使用多强的鼓点，例如4/4中，鼓点类似1,2,1,3，其中1是最强的，3最弱 / Beat strength (e.g., in 4/4: 1=strongest, 3=weakest)
-title_duration = 0 # 片头时长 (ms) / Intro duration (ms)
-bgm_loop = true # 是否允许 bgm 循环 / Allow BGM loop
-min_clip_duration = 1000
-
-estimate_text_min = 1500 # 在没有TTS的情况下，估计每段字幕至少上屏多久 / Min on-screen duration for subtitles without TTS
-estimate_text_char_per_sec = 6.0 # 在没有TTS的情况下，估计每秒展示几个字 / Estimated characters per second without TTS
-
-image_default_duration = 3000 # 默认的图片播放时长 / Default image duration
-group_margin_over_voiceover = 1000 # 在一个group中，画面比配音多出现多久 / Extra visual duration over voiceover in a group
-
-[plan_timeline_pro]
-
-min_single_text_duration = 200      # 单段文字最小时长 (ms) / min single text duration (ms)
-max_text_duration        = 5000     # 单句文字最大时长 (ms) / max text sentence duration (ms)
-img_default_duration     = 1500     # 默认图片时长 (ms) / default image duration (ms)
-
-min_group_margin = 1500             # 段落/组最小间距 (ms) / min paragraph/group margin (ms)
-max_group_margin = 2000             # 段落/组最大间距 (ms) / max paragraph/group margin (ms)
-
-min_clip_duration = 1000            # 最小片段时长 (ms) / min clip duration (ms)
-
-tts_margin_mode = "random"          # random | avg | max | min
-min_tts_margin  = 300               # 最小 TTS 间隔 (ms) / min TTS gap (ms)
-max_tts_margin  = 400               # 最大 TTS 间隔 (ms) / max TTS gap (ms)
-
-text_tts_offset_mode = "random"     # random | avg | max | min
-min_text_tts_offset  = 0            # 最小文字-TTS偏移 (ms) / min text–TTS offset (ms)
-max_text_tts_offset  = 0            # 最大文字-TTS偏移 (ms) / max text–TTS offset (ms)
-
-long_short_text_duration = 3000     # 长/短文本阈值 (ms) / long/short text threshold (ms)
-long_text_margin_rate   = 0.0       # 长文本起始边距率 / long text start margin rate
-short_text_margin_rate  = 0.0       # 短文本起始边距率 / short text start margin rate
-
-text_duration_mode = "with_tts"     # with_tts | with_clip (随配音 | 随片段)
-is_text_beats      = false          # 文字对齐音乐节拍 / align text with music beats
+shared_local_root = ""
+shared_remote_root = ""

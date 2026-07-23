@@ -3,7 +3,7 @@
 The remote social-clips MVP uses PostgreSQL as its application database while
 keeping video files on the existing persistent output volume. PostgreSQL runs
 as the private `db` Kamal accessory on the same VPS and does not publish port
-5432. The full local LangChain/MCP profile remains independent.
+5432. It is the only supported application database/runtime profile.
 
 ## Database topology
 
@@ -41,10 +41,10 @@ The additive `20260719_0002` revision introduces workflow versions,
 `session_input_videos`, `prompt_versions`, run attempts, favorites, and public
 activity without removing legacy job columns. The additive `20260721_0003`
 revision adds session-analysis and job-stage checkpoints without removing or
-rewriting existing rows. `/up` accepts `20260717_0001`, `20260719_0002`, and
-`20260721_0003` for the compatibility bridge and fails closed on unknown
-revisions. Apply migrations in order; do not enable reusable sessions or
-checkpoint reads until migration, backup, restore, and canary gates pass.
+rewriting existing rows. The additive `20260723_0004` revision changes the
+server default for new sessions to workflow version 2 without rewriting any
+historical row. `/up` accepts all four known revisions and fails closed on
+unknown revisions.
 
 Create or inspect the schema with:
 
@@ -65,17 +65,24 @@ tables in place. `./bin/kamal-mvp rollback VERSION` requires an explicit target
 image and runs that image's database readiness contract before Kamal selects
 it. Do not use Alembic downgrade as a production rollback method.
 
-After migrating, link legacy jobs to immutable compatibility prompt versions in
-bounded, advisory-locked batches. This does not change workflow version or move
-media:
+Inventory historical ownership before migration or deployment. The report is
+aggregate-only and never includes prompt text, media paths, or provider data:
+
+```bash
+./bin/kamal-mvp workspace inventory
+```
+
+If historical audit records require immutable compatibility prompt versions,
+link them in bounded, advisory-locked batches. This does not change workflow
+version or move media:
 
 ```bash
 ./bin/kamal-mvp workspace backfill-prompts --dry-run --limit 1000 --batch-size 100
 ./bin/kamal-mvp workspace backfill-prompts --apply --limit 1000 --batch-size 100
 ```
 
-Repeat apply until no eligible unlinked jobs remain. Existing sessions stay at
-workflow version 1 and remain readable through the legacy interface.
+Repeat apply until no eligible unlinked jobs remain. Existing workflow-version-1
+sessions remain non-executable administrative audit history.
 
 ## One-file migration backup
 
@@ -153,8 +160,14 @@ deterministic structural reviews, and optional agent/human reviews. Video,
 audio, frame, thumbnail, and ZIP bytes never enter PostgreSQL.
 
 Agentic render candidates also produce bounded `frame_quality_qa.json`,
-`render_promotion.json`, `repair_report.json`, and `outcome_report.json`
-documents. Frame quality records cropdetect active-area
+`render_evidence.json`, `render_promotion.json`, `repair_report.json`, and
+`outcome_report.json` documents. When the operator enables post-render review,
+`render_critic.json` records non-mutating evidence-grounded findings and stable
+defect fingerprints without prompt text, provider bodies, or frame bytes.
+Render evidence stores only candidate hashes,
+timestamps, selection reasons, bounded dimensions, frame hashes, and checkpoint
+fingerprints; JPEG data URLs remain transient in memory. Frame quality records
+cropdetect active-area
 ratios, decoded frame counts, bounded blur/blockiness signal summaries, and
 caption-masked aligned SSIM/PSNR samples without retaining sampled frames or
 private paths. `OPENSTORYLINE_RENDER_PROMOTION_MODE=report` preserves completion
@@ -295,42 +308,28 @@ with explicit operator approval. `OPENSTORYLINE_MEDIA_RETENTION_DAYS=7`,
 `OPENSTORYLINE_RETENTION_BATCH_SIZE=100` are bounded operational controls; the
 example production policy preserves seven and 30 days.
 
-## Reusable workspace rollout and rollback gate
+## Agentic-only workspace rollout and rollback gate
 
-Real server commands require a separately authorized maintenance window. Keep
-`OPENSTORYLINE_SESSION_WORKSPACE_MODE=legacy` throughout steps 1–9.
+Real server commands require an authorized maintenance window.
 
-1. Deploy the `20260717_0001` compatibility bridge and verify `/up`, `/health`,
-   legacy login/session/job behavior, backup, and isolated restore.
-2. Apply additive migration `20260719_0002` from the exact candidate image and
-   verify `db current`; never hand-create the new tables.
-3. Run `workspace backfill-prompts` in dry-run mode, then apply bounded batches
-   until verification reports no eligible unlinked jobs.
-4. Deploy the completed image with workspace mode still `legacy` and
-   `OPENSTORYLINE_RETENTION_ENABLED=false`.
-5. Verify the legacy UI/API, worker recovery, audit, static modules, authenticated
-   SSE, polling fallback, and that the domain proxy has response buffering off.
-6. Run retention preview twice and review job/source counts and estimated bytes;
-   the output intentionally excludes private payload text.
-7. Inspect `outputs/mvp_sessions/` for files not represented by
-   `session_input_videos`. Do not delete suspected orphans during rollback;
-   preserve the volume and use the workspace-capable code plus retention records
-   for an idempotent cleanup review.
-8. Enable automatic retention only after explicit approval.
-9. Enable workspace mode for one controlled synthetic/private canary only after
-   separate authorization. Verify one upload, two prompt versions, one rerun,
-   output playback, favorite switching, retention renewal, and SSE timing before
-   expanding activation.
+1. Run `workspace inventory`; stop if workflow-version-1 has active jobs.
+2. Create a backup and complete the isolated restore check.
+3. Apply migration `20260723_0004` from the exact candidate image and verify
+   `db current`; never hand-edit the default or historical rows.
+4. Deploy with `OPENSTORYLINE_RETENTION_ENABLED=false`, then verify `/up`,
+   `/health`, authentication, workflow-v2 session creation, immutable upload,
+   prompt-version runs, SSE, artifacts, and worker recovery.
+5. Run `workspace inventory` again and verify workflow-v1 counts and artifact
+   availability are unchanged while no v1 job is executable.
+6. Run retention preview twice before separately approving automatic retention.
 
-The normal emergency action is to set
-`OPENSTORYLINE_SESSION_WORKSPACE_MODE=legacy` and redeploy/restart, preserving
-all workflow-v2 rows and files. If code rollback is required, return to the
-compatibility bridge image (`71c9082`), not a pre-bridge image. Keep the current
-additive schema, including `20260721_0003` after checkpoint rollout; do not
-downgrade after workflow-v2 or checkpoint data exists. Disable retention before
-investigating inconsistent state, preserve the output volume and restore-checked
-`openstoryline.latest.dump`, and repair bounded records idempotently. Restore
-only with writes stopped and an empty/isolated target.
+The normal emergency action is to deploy the previous compatible Agentic image,
+not to restore a legacy workspace or renderer. Keep the additive schema,
+including `20260723_0004`; do not downgrade after workflow-v2 data exists.
+Disable retention before investigating inconsistent state, preserve the output
+volume and restore-checked `openstoryline.latest.dump`, and repair bounded
+records idempotently. Restore only with writes stopped and an empty/isolated
+target.
 Media already purged by expiry or session deletion is irreversible and cannot
 be recovered from the database dump.
 

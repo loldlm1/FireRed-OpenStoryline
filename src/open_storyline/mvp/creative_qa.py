@@ -704,14 +704,24 @@ def _structural_clip_report(
             segments=analysis["freeze"],
         ))
     if silence_total > 0:
+        # Several short speech pauses can be valid pacing. Only one sustained
+        # silent interval is an objective technical blocker; cumulative silence
+        # remains visible to the creative review as a warning.
         hard_limit = max(6.0, duration_seconds * 0.35)
-        severity = "blocker" if strict and silence_total > hard_limit else "warning"
+        longest_segment = max(
+            (float(item["duration"]) for item in analysis["silence"]),
+            default=0.0,
+        )
+        sustained_limit = max(4.0, duration_seconds * 0.25)
+        severity = "blocker" if strict and longest_segment > sustained_limit else "warning"
         findings.append(_finding(
             "long_silence_detected",
             severity,
             "Long silence was detected in an output expected to retain source audio.",
             total_seconds=round(silence_total, 3),
             hard_limit_seconds=round(hard_limit, 3),
+            longest_segment_seconds=round(longest_segment, 3),
+            sustained_limit_seconds=round(sustained_limit, 3),
             segments=analysis["silence"],
         ))
     return {

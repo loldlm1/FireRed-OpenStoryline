@@ -7,7 +7,7 @@ from unittest.mock import patch
 
 import httpx
 
-from open_storyline.utils.remote_image import RemoteImageCascade, RemoteImageError
+from open_storyline.mvp.remote_image import RemoteImageCascade, RemoteImageError
 
 
 PNG = base64.b64decode(

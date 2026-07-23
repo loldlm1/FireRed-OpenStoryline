@@ -200,6 +200,58 @@ class RenderPromotionTests(unittest.TestCase):
         self.assertEqual(mixed["delivery_decision"], "withhold_technical")
         self.assertFalse(mixed["download_available"])
 
+    def test_enforced_critic_unavailability_is_a_visible_creative_limitation(self):
+        report = build_render_promotion_report(
+            mode="enforce",
+            delivery="technical_pass_guaranteed",
+            frame_quality={"status": "pass", "findings": []},
+            render_qa={"status": "pass", "findings": []},
+            creative_conformance={"status": "pass", "findings": []},
+            creative_review={
+                "mode": "enforce",
+                "status": "unavailable",
+                "error_code": "RENDER_CRITIC_EVIDENCE_INVALID",
+            },
+            caption_footprints=[],
+        )
+
+        self.assertEqual(report["decision"], "promote")
+        self.assertEqual(report["status"], "limited")
+        self.assertEqual(
+            report["creative_limitation_codes"],
+            ["RENDER_CRITIC_UNAVAILABLE"],
+        )
+        self.assertEqual(
+            report["delivery_decision"],
+            "publish_with_limitations",
+        )
+
+    def test_unresolved_critic_findings_and_repair_failure_are_visible(self):
+        report = build_render_promotion_report(
+            mode="enforce",
+            delivery="technical_pass_guaranteed",
+            frame_quality={"status": "pass", "findings": []},
+            render_qa={"status": "pass", "findings": []},
+            creative_conformance={"status": "pass", "findings": []},
+            creative_review={
+                "mode": "enforce",
+                "status": "review",
+                "findings": [{"finding_id": "finding-1", "repairable": True}],
+            },
+            post_render_repair={
+                "status": "unavailable",
+                "error_code": "POST_RENDER_REPAIR_RESPONSE_INVALID",
+            },
+            caption_footprints=[],
+        )
+
+        self.assertEqual(report["status"], "limited")
+        self.assertEqual(
+            report["creative_limitation_codes"],
+            ["POST_RENDER_REPAIR_UNAVAILABLE", "RENDER_CRITIC_FINDING"],
+        )
+        self.assertEqual(report["delivery_decision"], "publish_with_limitations")
+
     def test_unmet_creative_intent_is_published_only_as_a_limitation(self):
         report = build_render_promotion_report(
             mode="enforce",

@@ -10,7 +10,6 @@ import shutil
 import subprocess
 import sys
 import unittest
-from unittest.mock import patch
 
 import httpx
 from sqlalchemy import text, update
@@ -247,7 +246,7 @@ class SessionMediaPostgresTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(cancelled["failure_code"], "UPLOAD_CANCELLED")
 
     async def test_legacy_sessions_reject_the_reusable_source_contract(self):
-        legacy = await self.store.create_session("Legacy")
+        legacy = await self.store.create_session("Legacy", workflow_version=1)
         with self.assertRaises(SessionMediaError) as raised:
             await self.media.status(legacy["id"])
         self.assertEqual(raised.exception.code, "SESSION_WORKFLOW_LEGACY")
@@ -491,12 +490,7 @@ class SessionMediaPostgresTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_authenticated_routes_enforce_csrf_range_and_path_safety(self):
         video = self.synthetic_video()
-        with patch.dict(
-            os.environ,
-            {"OPENSTORYLINE_SESSION_WORKSPACE_MODE": "enabled"},
-            clear=False,
-        ):
-            app = create_app()
+        app = create_app()
         app.state.database = self.database
         app.state.auth_service = _AuthStub()
         app.state.mvp_jobs = self.store

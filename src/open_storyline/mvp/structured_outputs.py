@@ -19,6 +19,10 @@ VISUAL_UNDERSTANDING_SCHEMA = "visual_understanding.v1"
 EDIT_PLAN_SCHEMA = "edit_plan.v1"
 EDIT_PLAN_REPAIR_SCHEMA = "edit_plan_repair.v1"
 SEMANTIC_QA_SCHEMA = "semantic_qa.v1"
+RENDER_CRITIC_SCHEMA = "render_critic.v1"
+CANDIDATE_COMPARISON_SCHEMA = "candidate_comparison.v1"
+POST_RENDER_REPAIR_COMPAT_SCHEMA = "post_render_repair.v1"
+POST_RENDER_REPAIR_SCHEMA = "post_render_repair.v2"
 FFMPEGA_AGENTIC_SCHEMA = "ffmpega_agentic_finishing.v1"
 FFMPEGA_DETERMINISTIC_SCHEMA = "ffmpega_deterministic_effects.v1"
 
@@ -223,6 +227,91 @@ class SemanticQAResponseWire(WireModel):
     observations: list[SemanticObservationWire] = Field(max_length=8)
 
 
+class RenderCriticFindingWire(WireModel):
+    finding_key: str = Field(min_length=1, max_length=80, pattern=r"^[A-Za-z0-9._:-]+$")
+    category: Literal[
+        "composition",
+        "framing",
+        "captions",
+        "pacing",
+        "narrative",
+        "transitions",
+        "effects",
+        "visual_hierarchy",
+        "relevance",
+    ]
+    severity: Literal["advisory", "warning", "blocker"]
+    classification: Literal["creative", "objective", "technical", "advisory"]
+    confidence: float = Field(ge=0, le=1, allow_inf_nan=False)
+    clip_index: int = Field(ge=1, le=50)
+    start_ms: int = Field(ge=0)
+    end_ms: int = Field(gt=0)
+    evidence_ids: list[str] = Field(min_length=1, max_length=16)
+    explanation: str = Field(min_length=1, max_length=600)
+    repair_objective: str = Field(min_length=1, max_length=320)
+    requested_capabilities: list[Literal[
+        "crop",
+        "fit",
+        "letterbox",
+        "subtitles",
+        "hard_cut",
+        "fade",
+        "xfade",
+        "image_overlay",
+        "pip",
+        "zoom",
+        "effect",
+    ]] = Field(max_length=8)
+    repairable: bool
+
+
+class RenderCriticResponseWire(WireModel):
+    status: Literal["pass", "review"]
+    scope: Literal["rendered_evidence_only"]
+    non_mutating: bool
+    summary: str = Field(min_length=1, max_length=600)
+    findings: list[RenderCriticFindingWire] = Field(max_length=64)
+
+
+class CandidateComparisonResponseWire(WireModel):
+    selection: Literal["original", "repaired", "tie"]
+    confidence: float = Field(ge=0, le=1, allow_inf_nan=False)
+    rationale: str = Field(min_length=1, max_length=600)
+    evidence_ids: list[str] = Field(min_length=1, max_length=32)
+    uncertainty: Literal["low", "medium", "high"]
+
+
+class PostRenderRepairDecisionWire(WireModel):
+    finding_id: str = Field(
+        min_length=1,
+        max_length=80,
+        pattern=r"^finding-[A-Za-z0-9._:-]+$",
+    )
+    decision: Literal["repair", "no_change"]
+    reason: str = Field(min_length=1, max_length=320)
+    affected_clip_indexes: list[int] = Field(max_length=8)
+
+
+class PostRenderRepairResponseWire(WireModel):
+    status: Literal["repair", "no_change"]
+    decisions: list[PostRenderRepairDecisionWire] = Field(min_length=1, max_length=64)
+    requested_capabilities: list[str] = Field(max_length=32)
+    clips: list[ClipEditPlanWire] = Field(max_length=8)
+
+
+class PostRenderRepairDecisionV2Wire(PostRenderRepairDecisionWire):
+    target: Literal["clip_plan", "effect_plan", "none"]
+
+
+class PostRenderRepairResponseV2Wire(WireModel):
+    status: Literal["repair", "no_change"]
+    decisions: list[PostRenderRepairDecisionV2Wire] = Field(min_length=1, max_length=64)
+    requested_capabilities: list[str] = Field(max_length=32)
+    clips: list[ClipEditPlanWire] = Field(max_length=8)
+    effect_action: Literal["preserve", "replace"]
+    effect_plan: FFMPEGAAgenticFinishingResponse
+
+
 @dataclass(frozen=True)
 class StructuredOutputDefinition:
     name: str
@@ -303,6 +392,10 @@ STRUCTURED_OUTPUTS = {
         _definition(EDIT_PLAN_SCHEMA, EditPlanWire),
         _definition(EDIT_PLAN_REPAIR_SCHEMA, EditPlanWire),
         _definition(SEMANTIC_QA_SCHEMA, SemanticQAResponseWire),
+        _definition(RENDER_CRITIC_SCHEMA, RenderCriticResponseWire),
+        _definition(CANDIDATE_COMPARISON_SCHEMA, CandidateComparisonResponseWire),
+        _definition(POST_RENDER_REPAIR_COMPAT_SCHEMA, PostRenderRepairResponseWire),
+        _definition(POST_RENDER_REPAIR_SCHEMA, PostRenderRepairResponseV2Wire),
         _definition(FFMPEGA_AGENTIC_SCHEMA, FFMPEGAAgenticFinishingResponse),
         _definition(FFMPEGA_DETERMINISTIC_SCHEMA, FFMPEGADeterministicEffectsResponse),
     )
@@ -332,6 +425,10 @@ __all__ = [
     "FFMPEGA_AGENTIC_SCHEMA",
     "FFMPEGA_DETERMINISTIC_SCHEMA",
     "SEMANTIC_QA_SCHEMA",
+    "RENDER_CRITIC_SCHEMA",
+    "CANDIDATE_COMPARISON_SCHEMA",
+    "POST_RENDER_REPAIR_SCHEMA",
+    "POST_RENDER_REPAIR_COMPAT_SCHEMA",
     "SHORTS_SELECTION_SCHEMA",
     "STRUCTURED_OUTPUTS",
     "StructuredOutputDefinition",

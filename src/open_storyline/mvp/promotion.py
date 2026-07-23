@@ -172,6 +172,8 @@ def build_render_promotion_report(
     frame_quality: dict[str, Any] | None,
     render_qa: dict[str, Any] | None,
     creative_conformance: dict[str, Any] | None,
+    creative_review: dict[str, Any] | None = None,
+    post_render_repair: dict[str, Any] | None = None,
     caption_footprints: Sequence[dict[str, Any]],
 ) -> dict[str, Any]:
     frame_blockers = _normalized_codes(_blocker_codes(frame_quality))
@@ -190,6 +192,17 @@ def build_render_promotion_report(
         technical_blockers.add("RENDER_STRUCTURE_UNAVAILABLE")
     if (creative_conformance or {}).get("status") in {None, "unavailable"} and mode != "off":
         technical_blockers.add("CREATIVE_CONFORMANCE_UNAVAILABLE")
+    if (creative_review or {}).get("status") == "unavailable" and mode != "off":
+        creative_limitations.add("RENDER_CRITIC_UNAVAILABLE")
+    elif mode == "enforce" and (creative_review or {}).get("status") == "review" and (
+        creative_review or {}
+    ).get("findings"):
+        creative_limitations.add("RENDER_CRITIC_FINDING")
+    if mode == "enforce" and (post_render_repair or {}).get("status") in {
+        "unavailable",
+        "rejected",
+    }:
+        creative_limitations.add("POST_RENDER_REPAIR_UNAVAILABLE")
     conformance_blockers = {
         "asset_overlay_duplicated",
         "asset_overlay_not_visible",

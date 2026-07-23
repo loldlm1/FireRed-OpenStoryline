@@ -43,7 +43,7 @@ test.describe('remote MVP password sessions', () => {
     await expect(page.locator('#submit')).toBeDisabled();
     await expect(page.locator('#video')).toBeFocused();
     await page.locator('.settings-disclosure summary').click();
-    await expect(page.locator('#edit-mode')).toHaveValue('agentic');
+    await expect(page.locator('#edit-mode')).toHaveCount(0);
     await expect(page.locator('#asset-policy')).toBeEnabled();
     await expect(page.locator('#max-generated-assets')).toBeEnabled();
     await expect(page.locator('#stock-policy')).toBeEnabled();
@@ -56,10 +56,6 @@ test.describe('remote MVP password sessions', () => {
     await page.locator('#asset-policy').selectOption('required');
     await expect(page.locator('#max-generated-assets')).toBeEnabled();
     await expect(page.locator('#asset-policy-help')).toContainText('obligatoria');
-    await page.locator('#edit-mode').selectOption('legacy');
-    await expect(page.locator('#asset-policy')).toBeDisabled();
-    await expect(page.locator('#stock-policy')).toBeDisabled();
-    await page.locator('#edit-mode').selectOption('agentic');
 
     const cookies = await context.cookies();
     const sessionCookie = cookies.find((cookie) => cookie.name === 'openstoryline_session');

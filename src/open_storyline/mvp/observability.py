@@ -21,6 +21,9 @@ SAFE_CODE = re.compile(r"^[A-Z0-9_]{1,120}$")
 SAFE_VERSION = re.compile(r"^[A-Za-z0-9._-]{1,80}$")
 QUALITY_FEEDBACK_VERSION = "quality_feedback.v1"
 REPAIR_OBSERVABILITY_VERSION = "repair_observability.v1"
+RENDER_EVIDENCE_OBSERVABILITY_VERSION = "render_evidence_observability.v1"
+RENDER_CRITIC_OBSERVABILITY_VERSION = "render_critic_observability.v1"
+CANDIDATE_COMPARISON_OBSERVABILITY_VERSION = "candidate_comparison_observability.v1"
 REPAIR_EVIDENCE_TYPES = frozenset(
     evidence_type
     for definition in DEFECT_REGISTRY.values()
@@ -337,6 +340,179 @@ def compact_repair_observability(report: dict[str, Any]) -> dict[str, Any]:
         "evidence_count": _integer(source.get("evidence_count"), maximum=64),
         "would_call": source.get("would_call") is True,
         "call_allowed": source.get("call_allowed") is True,
+    }
+
+
+def compact_render_evidence_observability(manifest: dict[str, Any]) -> dict[str, Any]:
+    """Keep only bounded evidence-selection metadata in logs and audit events."""
+    source = _mapping(manifest)
+    clips = []
+    reasons: set[str] = set()
+    for clip in _records(source.get("clips"), limit=50):
+        selected = [
+            value
+            for value in clip.get("selected_reasons") or []
+            if isinstance(value, str) and SAFE_VERSION.fullmatch(value)
+        ][:32]
+        reasons.update(selected)
+        frames = _records(clip.get("frames"), limit=32)
+        bursts = _records(clip.get("bursts"), limit=16)
+        effect_execution = _mapping(clip.get("effect_execution"))
+        clips.append({
+            "clip_index": _integer(clip.get("clip_index"), minimum=1, maximum=50),
+            "frame_count": len(frames),
+            "burst_count": len(bursts),
+            "encoded_bytes": sum(
+                _integer(frame.get("encoded_bytes"), maximum=8 * 1024 * 1024)
+                for frame in frames
+            ),
+            "selected_reasons": selected,
+            "effect_execution": {
+                "status": _token(effect_execution.get("status"), limit=20),
+                "planned_skills": [
+                    _token(item, limit=40)
+                    for item in effect_execution.get("planned_skills") or ()
+                ][:5],
+                "executed_skills": [
+                    _token(item, limit=40)
+                    for item in effect_execution.get("executed_skills") or ()
+                ][:5],
+                "reason_code": _token(
+                    effect_execution.get("reason_code"),
+                    limit=80,
+                ),
+                "before_effect_sha256": (
+                    str(effect_execution.get("before_effect_sha256") or "")
+                    if re.fullmatch(
+                        r"[a-f0-9]{64}",
+                        str(effect_execution.get("before_effect_sha256") or ""),
+                    )
+                    else ""
+                ),
+                "after_effect_sha256": (
+                    str(effect_execution.get("after_effect_sha256") or "")
+                    if re.fullmatch(
+                        r"[a-f0-9]{64}",
+                        str(effect_execution.get("after_effect_sha256") or ""),
+                    )
+                    else ""
+                ),
+            },
+        })
+    return {
+        "version": RENDER_EVIDENCE_OBSERVABILITY_VERSION,
+        "manifest_version": (
+            "render_evidence.v1" if source.get("version") == "render_evidence.v1" else ""
+        ),
+        "sampler_version": _token(source.get("sampler_version"), limit=64),
+        "candidate_fingerprint": (
+            str(source.get("candidate_fingerprint") or "")
+            if re.fullmatch(r"[a-f0-9]{64}", str(source.get("candidate_fingerprint") or ""))
+            else ""
+        ),
+        "checkpoint_reused": source.get("checkpoint_reused") is True,
+        "frame_count": _integer(source.get("frame_count"), maximum=128),
+        "burst_count": _integer(source.get("burst_count"), maximum=800),
+        "encoded_bytes": _integer(source.get("encoded_bytes"), maximum=64 * 1024 * 1024),
+        "selected_reasons": sorted(reasons)[:32],
+        "clips": clips,
+    }
+
+
+def compact_render_critic_observability(report: dict[str, Any]) -> dict[str, Any]:
+    """Project critic outcomes without prompts, explanations, or provider bodies."""
+    source = _mapping(report)
+    findings = []
+    for finding in _records(source.get("findings"), limit=64):
+        finding_id = str(finding.get("finding_id") or "")
+        fingerprint = str(finding.get("finding_fingerprint") or "")
+        findings.append({
+            "finding_id": finding_id if SAFE_ID.fullmatch(finding_id) else "",
+            "finding_fingerprint": fingerprint if re.fullmatch(r"[a-f0-9]{64}", fingerprint) else "",
+            "category": _token(finding.get("category"), limit=40),
+            "severity": _token(finding.get("severity"), limit=40),
+            "classification": _token(finding.get("classification"), limit=40),
+            "clip_index": _integer(finding.get("clip_index"), minimum=1, maximum=50),
+            "start_ms": _integer(finding.get("start_ms")),
+            "end_ms": _integer(finding.get("end_ms")),
+            "evidence_count": len([
+                value
+                for value in finding.get("evidence_ids") or []
+                if isinstance(value, str) and SAFE_ID.fullmatch(value)
+            ][:16]),
+            "repairable": finding.get("repairable") is True,
+            "lifecycle": _token(finding.get("lifecycle"), limit=40),
+        })
+    call_fingerprint = str(source.get("call_fingerprint") or "")
+    candidate_fingerprint = str(source.get("candidate_fingerprint") or "")
+    return {
+        "version": RENDER_CRITIC_OBSERVABILITY_VERSION,
+        "report_version": (
+            "render_critic.v1" if source.get("version") == "render_critic.v1" else ""
+        ),
+        "mode": _token(source.get("mode"), limit=20),
+        "status": _token(source.get("status"), limit=20),
+        "model": _token(source.get("model"), limit=80),
+        "reasoning_effort": _token(source.get("reasoning_effort"), limit=20),
+        "prompt_version": _token(source.get("prompt_version"), limit=80),
+        "response_schema": _token(source.get("response_schema"), limit=80),
+        "non_mutating": source.get("non_mutating") is True,
+        "call_fingerprint": call_fingerprint if re.fullmatch(r"[a-f0-9]{64}", call_fingerprint) else "",
+        "candidate_fingerprint": candidate_fingerprint if re.fullmatch(r"[a-f0-9]{64}", candidate_fingerprint) else "",
+        "provider_calls": _integer(source.get("provider_calls"), maximum=1),
+        "finding_count": len(findings),
+        "error_code": (
+            str(source.get("error_code") or "")
+            if SAFE_CODE.fullmatch(str(source.get("error_code") or ""))
+            else ""
+        ),
+        "findings": findings,
+    }
+
+
+def compact_candidate_comparison_observability(
+    report: dict[str, Any],
+) -> dict[str, Any]:
+    """Keep candidate preference telemetry private and bounded."""
+    source = _mapping(report)
+    selection = str(source.get("selection") or "tie")
+    if selection not in {"original", "repaired", "tie"}:
+        selection = "tie"
+    status = str(source.get("status") or "unavailable")
+    if status not in {"completed", "skipped", "unavailable"}:
+        status = "unavailable"
+    call_fingerprint = str(source.get("call_fingerprint") or "")
+    return {
+        "version": CANDIDATE_COMPARISON_OBSERVABILITY_VERSION,
+        "report_version": (
+            "candidate_comparison.v1"
+            if source.get("version") == "candidate_comparison.v1"
+            else ""
+        ),
+        "status": status,
+        "selection": selection,
+        "confidence": _number(source.get("confidence"), maximum=1) or 0,
+        "uncertainty": _token(source.get("uncertainty"), limit=12),
+        "provider_calls": _integer(source.get("provider_calls"), maximum=1),
+        "checkpoint_reused": source.get("checkpoint_reused") is True,
+        "call_fingerprint": (
+            call_fingerprint
+            if re.fullmatch(r"[a-f0-9]{64}", call_fingerprint)
+            else ""
+        ),
+        "evidence_count": min(
+            32,
+            len([
+                value
+                for value in source.get("evidence_ids") or ()
+                if isinstance(value, str) and SAFE_ID.fullmatch(value)
+            ]),
+        ),
+        "error_code": (
+            str(source.get("error_code") or "")
+            if SAFE_CODE.fullmatch(str(source.get("error_code") or ""))
+            else ""
+        ),
     }
 
 

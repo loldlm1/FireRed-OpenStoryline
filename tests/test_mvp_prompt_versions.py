@@ -56,7 +56,6 @@ class RunSettingsTests(unittest.TestCase):
     def test_required_asset_mix_is_explicit_and_versioned(self):
         settings = validate_run_settings(
             max_clips=1,
-            edit_mode="agentic",
             asset_policy="required",
             max_generated_assets_per_clip=1,
             stock_policy="required",
@@ -166,7 +165,6 @@ class PromptVersionPostgresTests(unittest.IsolatedAsyncioTestCase):
         self.service = PromptVersionService(self.store, self.media)
         self.settings = validate_run_settings(
             max_clips=3,
-            edit_mode="agentic",
             asset_policy="off",
             max_generated_assets_per_clip=1,
             stock_policy="off",
@@ -573,7 +571,6 @@ class PromptVersionPostgresTests(unittest.IsolatedAsyncioTestCase):
         editing_session, _source, _source_path = await self.ready_session()
         settings = validate_run_settings(
             max_clips=1,
-            edit_mode="agentic",
             asset_policy="required",
             max_generated_assets_per_clip=1,
             stock_policy="required",
@@ -838,7 +835,6 @@ class PromptVersionPostgresTests(unittest.IsolatedAsyncioTestCase):
                 lambda: manager,
                 None,
                 lambda: self.media,
-                lambda: "enabled",
                 lambda: self.service,
             )
         )
@@ -851,12 +847,22 @@ class PromptVersionPostgresTests(unittest.IsolatedAsyncioTestCase):
             self.assertTrue(
                 session_state.json()["capabilities"]["retry_ux_enabled"]
             )
-            created = await client.post(
+            retired = await client.post(
                 f"/api/mvp/sessions/{editing_session['id']}/prompt-versions",
                 json={
                     "prompt": "API immutable prompt",
                     "max_clips": 2,
                     "edit_mode": "legacy",
+                    "asset_policy": "off",
+                },
+            )
+            self.assertEqual(retired.status_code, 422)
+            self.assertIn("Agentic editing is the only workflow", retired.text)
+            created = await client.post(
+                f"/api/mvp/sessions/{editing_session['id']}/prompt-versions",
+                json={
+                    "prompt": "API immutable prompt",
+                    "max_clips": 2,
                     "asset_policy": "off",
                 },
             )

@@ -81,7 +81,7 @@ class EditingSession(Base):
     id: Mapped[str] = mapped_column(String(32), primary_key=True)
     title: Mapped[str] = mapped_column(String(160), nullable=False)
     workflow_version: Mapped[int] = mapped_column(
-        Integer, nullable=False, server_default="1"
+        Integer, nullable=False, server_default="2"
     )
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False

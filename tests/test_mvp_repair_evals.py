@@ -54,6 +54,7 @@ LLM_STRATEGIES = frozenset({
 })
 
 FIXTURE = Path(__file__).parent / "fixtures" / "mvp_agentic" / "crop-geometry-overflow.json"
+RENDER_REVIEW_FIXTURE = Path(__file__).parent / "fixtures" / "mvp_agentic" / "render-review-eval.json"
 
 
 def stage_for(strategy: RepairStrategy) -> RepairStage:
@@ -199,6 +200,16 @@ class IncidentRecoveryEvalTests(unittest.TestCase):
         self.original = incident_plan()
         self.finding = composition_finding()
         self.fingerprint = authoritative_plan_fingerprint(self.original)
+
+    def test_render_review_fixture_is_private_and_covers_subjective_dimensions(self):
+        fixture = json.loads(RENDER_REVIEW_FIXTURE.read_text(encoding="utf-8"))
+        self.assertEqual(fixture["version"], "render_review_eval.v1")
+        self.assertFalse(fixture["private_data"])
+        self.assertEqual(len(fixture["dimensions"]), 7)
+        self.assertIn("pacing_rhythm", fixture["dimensions"])
+        self.assertIn("tie", fixture["allowed_preferences"])
+        self.assertFalse(fixture["raw_media_included"])
+        self.assertFalse(fixture["raw_provider_bodies_included"])
 
     def assert_preserved_contract(self, candidate: EditPlan) -> None:
         expected = self.fixture["recovery_contract"]

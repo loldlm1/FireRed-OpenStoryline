@@ -43,9 +43,6 @@ export const elements = Object.freeze({
   workspaceTitle: byId('workspace-title'),
   sessionSummary: byId('session-summary'),
   sessionSeal: byId('session-seal'),
-  legacyWorkspace: byId('legacy-workspace'),
-  legacyCreateSession: byId('legacy-create-session'),
-  legacyHistory: byId('legacy-history'),
   modernWorkspace: byId('modern-workspace'),
   video: byId('video'),
   videoResume: byId('video-resume'),
@@ -74,7 +71,6 @@ export const elements = Object.freeze({
   promptCount: byId('prompt-count'),
   promptVersionLabel: byId('prompt-version-label'),
   maxClips: byId('max-clips'),
-  editMode: byId('edit-mode'),
   assetPolicy: byId('asset-policy'),
   maxGeneratedAssets: byId('max-generated-assets'),
   stockPolicy: byId('stock-policy'),
@@ -168,9 +164,9 @@ export function renderSessions(sessions, selectedId, onSelect) {
     const title = document.createElement('strong');
     title.textContent = session.title;
     const state = document.createElement('span');
-    state.textContent = session.workflow_version === 1
-      ? 'Sesión anterior'
-      : (session.input_video?.state === 'ready' ? 'Fuente lista' : 'Fuente pendiente');
+    state.textContent = session.input_video?.state === 'ready'
+      ? 'Fuente lista'
+      : 'Fuente pendiente';
     copy.append(title, state);
     button.append(marker, copy);
     button.addEventListener('click', () => onSelect(session.id));
@@ -183,19 +179,13 @@ export function renderSessions(sessions, selectedId, onSelect) {
 
 export function renderWorkspace(session, { favoriteLabel = '' } = {}) {
   const hasSession = Boolean(session);
-  const legacy = hasSession && session.workflow_version === 1;
   elements.workspaceEmpty.hidden = hasSession;
   elements.workspaceContent.hidden = !hasSession;
-  elements.legacyWorkspace.hidden = !legacy;
-  elements.modernWorkspace.hidden = legacy;
-  elements.sessionSeal.hidden = legacy;
   elements.sessionDelete.disabled = !hasSession;
   elements.headerSessionTitle.textContent = session?.title || 'Sin seleccionar';
   if (!hasSession) return;
   elements.workspaceTitle.textContent = session.title;
-  if (legacy) {
-    elements.sessionSummary.textContent = 'Historial de solo lectura del flujo anterior, donde cada ejecución tenía su propia carga.';
-  } else if (favoriteLabel) {
+  if (favoriteLabel) {
     elements.sessionSummary.textContent = `${favoriteLabel} es tu elección favorita; la evidencia técnica permanece separada de esa decisión.`;
   } else {
     elements.sessionSummary.textContent = 'La fuente permanece vinculada a esta sesión; cada nueva instrucción crea una versión auditable.';
@@ -453,8 +443,7 @@ function outcomeCodes(outcome, field, recordsField) {
 }
 
 function settingsLabels(settings = {}) {
-  const labels = [];
-  labels.push(settings.edit_mode === 'agentic' ? 'Edición agéntica' : 'Edición esencial');
+  const labels = ['Edición agéntica'];
   if (Number.isInteger(settings.max_clips)) labels.push(`Hasta ${settings.max_clips} clips`);
   if (settings.asset_policy === 'required') {
     labels.push(`${settings.max_generated_assets_per_clip || 0} imagen(es) obligatoria(s) por clip`);
@@ -872,54 +861,6 @@ function loadingDetail() {
   detail.className = 'media-unavailable';
   detail.textContent = 'Cargando salidas y evidencia técnica…';
   return detail;
-}
-
-export function renderLegacyHistory(jobs) {
-  elements.legacyHistory.replaceChildren();
-  if (!jobs.length) {
-    const empty = document.createElement('p');
-    empty.className = 'media-unavailable';
-    empty.textContent = 'Esta sesión anterior no conserva ejecuciones visibles.';
-    elements.legacyHistory.append(empty);
-    return;
-  }
-  for (const job of jobs) {
-    const card = document.createElement('article');
-    card.className = 'version-card legacy-job';
-    const copy = document.createElement('span');
-    copy.className = 'recent-job-copy';
-    const title = document.createElement('strong');
-    title.textContent = job.prompt || `Ejecución ${job.id.slice(0, 8)}`;
-    const meta = document.createElement('span');
-    meta.textContent = `${stateLabel(job.state)} · ${dateLabel(job.created_at)}`;
-    copy.append(title, meta);
-    const state = document.createElement('span');
-    state.className = 'run-state';
-    state.textContent = stateLabel(job.state);
-    const header = document.createElement('header');
-    header.className = 'version-card-header';
-    header.append(copy, state);
-    card.append(header);
-    const available = (job.artifacts || []).filter((artifact) => artifact.availability === 'available');
-    if (available.length) {
-      const actions = document.createElement('div');
-      actions.className = 'attempt-actions';
-      for (const artifact of available) {
-        const link = document.createElement('a');
-        link.className = 'button button-quiet';
-        link.href = `/api/mvp/jobs/${job.id}/artifacts/${encodeURIComponent(artifact.name)}`;
-        link.textContent = `Descargar ${artifact.name}`;
-        actions.append(link);
-      }
-      card.append(actions);
-    } else {
-      const unavailable = document.createElement('p');
-      unavailable.className = 'media-unavailable';
-      unavailable.textContent = 'Los medios de esta ejecución ya no están disponibles; la instrucción y el estado permanecen visibles.';
-      card.append(unavailable);
-    }
-    elements.legacyHistory.append(card);
-  }
 }
 
 export function renderComparison(entries) {

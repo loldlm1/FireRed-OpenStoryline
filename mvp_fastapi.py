@@ -1,10 +1,10 @@
 from __future__ import annotations
 
 from contextlib import asynccontextmanager
-from dataclasses import dataclass
+from ipaddress import ip_address
 from pathlib import Path
+from urllib.parse import urlsplit
 import hmac
-import os
 import sys
 import time
 
@@ -17,7 +17,6 @@ SRC_DIR = ROOT_DIR / "src"
 if str(SRC_DIR) not in sys.path:
     sys.path.insert(0, str(SRC_DIR))
 
-from open_storyline.config import default_config_path, load_settings
 from open_storyline.mvp.activity import ActivityService
 from open_storyline.mvp.api import create_mvp_router
 from open_storyline.mvp.audit import AuditService
@@ -49,9 +48,9 @@ from open_storyline.mvp.retention import (
     RetentionSettings,
 )
 from open_storyline.mvp.session_media import SessionMediaStore
+from open_storyline.mvp.settings import default_mvp_config_path, load_mvp_settings
 
 
-SESSION_WORKSPACE_MODES = frozenset({"legacy", "enabled"})
 WORKSPACE_CONTENT_SECURITY_POLICY = "; ".join(
     (
         "default-src 'self'",
@@ -72,30 +71,24 @@ WORKSPACE_CONTENT_SECURITY_POLICY = "; ".join(
 )
 
 
-class SessionWorkspaceConfigurationError(RuntimeError):
-    pass
-
-
-@dataclass(frozen=True)
-class SessionWorkspaceSettings:
-    mode: str
-
-    @classmethod
-    def from_env(cls) -> "SessionWorkspaceSettings":
-        mode = os.getenv("OPENSTORYLINE_SESSION_WORKSPACE_MODE", "legacy").strip()
-        if len(mode) > 16 or mode not in SESSION_WORKSPACE_MODES:
-            raise SessionWorkspaceConfigurationError(
-                "OPENSTORYLINE_SESSION_WORKSPACE_MODE must be legacy or enabled"
-            )
-        return cls(mode=mode)
+def _browser_origin_is_trustworthy(origin: str) -> bool:
+    parsed = urlsplit(str(origin or ""))
+    if parsed.scheme == "https":
+        return True
+    if parsed.scheme != "http" or not parsed.hostname:
+        return False
+    if parsed.hostname == "localhost":
+        return True
+    try:
+        return ip_address(parsed.hostname).is_loopback
+    except ValueError:
+        return False
 
 
 def create_app() -> FastAPI:
-    workspace_settings = SessionWorkspaceSettings.from_env()
-
     @asynccontextmanager
     async def lifespan(app: FastAPI):
-        config = load_settings(default_config_path())
+        config = load_mvp_settings(default_mvp_config_path())
         render_promotion_mode(config.agentic_editing)
         completion_policy(config.agentic_editing)
         delivery_policy(config.agentic_editing)
@@ -173,7 +166,6 @@ def create_app() -> FastAPI:
     app.state.prompt_versions = None
     app.state.activity = None
     app.state.creative_catalog = None
-    app.state.session_workspace_mode = workspace_settings.mode
 
     @app.middleware("http")
     async def request_observability(request: Request, call_next):
@@ -260,7 +252,14 @@ def create_app() -> FastAPI:
             response.headers["Content-Security-Policy"] = (
                 WORKSPACE_CONTENT_SECURITY_POLICY
             )
-            response.headers["Cross-Origin-Opener-Policy"] = "same-origin"
+            service = app.state.auth_service
+            browser_origin = (
+                service.settings.public_origin
+                if service is not None
+                else str(request.base_url)
+            )
+            if _browser_origin_is_trustworthy(browser_origin):
+                response.headers["Cross-Origin-Opener-Policy"] = "same-origin"
             response.headers["Cross-Origin-Resource-Policy"] = "same-origin"
         return response
 
@@ -272,12 +271,7 @@ def create_app() -> FastAPI:
 
     @app.get("/", include_in_schema=False)
     async def index():
-        page = (
-            "mvp.html"
-            if app.state.session_workspace_mode == "enabled"
-            else "mvp-legacy.html"
-        )
-        return FileResponse(ROOT_DIR / "web" / page)
+        return FileResponse(ROOT_DIR / "web" / "mvp.html")
 
     @app.get("/health")
     async def health():
@@ -304,7 +298,6 @@ def create_app() -> FastAPI:
         lambda: app.state.mvp_manager,
         lambda: app.state.retention_service,
         lambda: app.state.session_media,
-        lambda: app.state.session_workspace_mode,
         lambda: app.state.prompt_versions,
         lambda: app.state.activity,
     ))

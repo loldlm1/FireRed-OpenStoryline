@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import json
 import unittest
 from unittest.mock import patch
 
@@ -15,6 +16,69 @@ from open_storyline.mvp.repair import RepairMode, build_repair_report
 
 
 class OutcomeTests(unittest.TestCase):
+    def test_post_render_repair_outcome_is_compact_and_private(self):
+        private_marker = "private prompt transcript and /private/source.mp4"
+        report = build_completed_outcome_report(
+            outputs=[{"video": "short-01.mp4", "subtitles": None}],
+            post_render_repair={
+                "version": "post_render_repair.v1",
+                "mode": "enforce",
+                "status": "accepted",
+                "selected_candidate": "repaired",
+                "provider_calls": 1,
+                "rounds": 1,
+                "affected_clip_indexes": [1],
+                "improvement": {
+                    "demonstrated": True,
+                    "original_finding_count": 1,
+                    "repaired_finding_count": 0,
+                    "private_reason": private_marker,
+                },
+                "round_records": [{"private_reason": private_marker}],
+            },
+        )
+
+        repair = report["post_render_repair"]
+        self.assertEqual(repair["status"], "accepted")
+        self.assertEqual(repair["selected_candidate"], "repaired")
+        self.assertTrue(repair["improvement"]["demonstrated"])
+        self.assertNotIn(private_marker, json.dumps(repair))
+
+    def test_render_critic_lifecycle_is_compact_non_mutating_and_private(self):
+        private_marker = "private prompt transcript and /private/source.mp4"
+        report = build_completed_outcome_report(
+            outputs=[{"video": "short-01.mp4", "subtitles": None}],
+            render_critic={
+                "version": "render_critic.v1",
+                "mode": "report",
+                "status": "review",
+                "non_mutating": True,
+                "call_fingerprint": "a" * 64,
+                "candidate_fingerprint": "b" * 64,
+                "provider_calls": 1,
+                "summary": private_marker,
+                "findings": [{
+                    "finding_id": "finding-" + "c" * 24,
+                    "finding_fingerprint": "d" * 64,
+                    "defect_code": "RENDER_CRITIC_FINDING",
+                    "category": "captions",
+                    "severity": "warning",
+                    "classification": "creative",
+                    "clip_index": 1,
+                    "start_ms": 100,
+                    "end_ms": 500,
+                    "repairable": True,
+                    "lifecycle": "observed",
+                    "explanation": private_marker,
+                }],
+            },
+        )
+        review = report["creative_review"]
+        self.assertEqual(review["finding_count"], 1)
+        self.assertTrue(review["non_mutating"])
+        self.assertEqual(review["findings"][0]["lifecycle"], "observed")
+        self.assertNotIn(private_marker, json.dumps(review))
+
     def test_completed_outcome_separates_creative_and_technical_findings(self):
         limited = build_completed_outcome_report(
             outputs=[{"video": "short-01.mp4", "subtitles": None}],
