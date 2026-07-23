@@ -210,6 +210,35 @@ class PostRenderRepairTests(unittest.IsolatedAsyncioTestCase):
         self.assertIsNone(proposal.candidate_plan)
         self.assertEqual(proposal.affected_clip_indexes, ())
 
+    async def test_consolidated_finding_accepts_a_source_finding_alias(self):
+        caption = {
+            **_finding(severity="advisory", confidence=0.7),
+            "finding_id": "finding-caption",
+            "finding_fingerprint": "4" * 64,
+            "category": "captions",
+            "repair_objective": "Reduce caption competition.",
+            "requested_capabilities": ["subtitles"],
+        }
+        batched = consolidate_render_findings((_finding(), caption))
+        response = _response(self.plan)
+        response["decisions"][0]["finding_id"] = batched[0]["source_finding_ids"][0]
+        proposal = await request_post_render_repair(
+            manifest=self.manifest,
+            image_data_urls=self.images,
+            base_plan=self.plan,
+            base_effects=self.effects,
+            findings=batched,
+            editing_prompt="Improve the opening framing.",
+            round_name="primary",
+            client=FakeClient(response),
+            plan_validator=self._validator,
+        )
+        self.assertEqual(proposal.status, "repair")
+        self.assertEqual(
+            proposal.decisions[0]["finding_id"],
+            batched[0]["finding_id"],
+        )
+
     async def test_effect_repair_replaces_only_an_allowlisted_typed_plan(self):
         current = validate_effects({
             "effects": [{"skill": "vignette", "params": {"intensity": 0.8}}],

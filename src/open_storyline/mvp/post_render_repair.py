@@ -509,19 +509,30 @@ def _validated_response(
             "post-render repair response does not match the strict schema",
         ) from exc
     finding_map = {str(item["finding_id"]): item for item in findings}
+    finding_aliases: dict[str, str] = {}
+    for finding_id, finding in finding_map.items():
+        for source_id in finding.get("source_finding_ids") or ():
+            alias = str(source_id)
+            if alias not in finding_map and alias not in finding_aliases:
+                finding_aliases[alias] = finding_id
     decisions = []
     seen: set[str] = set()
     clip_affected: set[int] = set()
     effect_affected: set[int] = set()
     for item in response.decisions:
-        finding = finding_map.get(item.finding_id)
+        finding_id = (
+            item.finding_id
+            if item.finding_id in finding_map
+            else finding_aliases.get(item.finding_id, item.finding_id)
+        )
+        finding = finding_map.get(finding_id)
         indexes = tuple(sorted(set(item.affected_clip_indexes)))
-        if finding is None or item.finding_id in seen:
+        if finding is None or finding_id in seen:
             raise PostRenderRepairError(
                 "POST_RENDER_REPAIR_RESPONSE_INVALID",
                 "repair decisions must reference every supplied finding exactly once",
             )
-        seen.add(item.finding_id)
+        seen.add(finding_id)
         expected_index = int(finding["clip_index"])
         if item.decision == "no_change" and (
             item.target != "none" or indexes
@@ -553,7 +564,7 @@ def _validated_response(
                 "repair decisions require a typed clip or effect target",
             )
         decisions.append({
-            "finding_id": item.finding_id,
+            "finding_id": finding_id,
             "decision": item.decision,
             "target": item.target,
             "reason": sanitize_text(item.reason, limit=320),
