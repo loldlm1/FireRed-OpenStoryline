@@ -11,6 +11,7 @@ from open_storyline.mvp.post_render_repair import (
     PostRenderRepairError,
     PostRenderRepairState,
     compare_critic_improvement,
+    consolidate_render_findings,
     eligible_render_findings,
     post_render_repair_fingerprint,
     post_render_repair_from_checkpoint,
@@ -274,7 +275,7 @@ class PostRenderRepairTests(unittest.IsolatedAsyncioTestCase):
         unsafe["clips"][0]["source_window"]["end_ms"] = 7_500
         for response in (omitted, unsafe):
             with self.subTest(response=response):
-                with self.assertRaises(PostRenderRepairError):
+                with self.assertRaises(PostRenderRepairError) as raised:
                     await request_post_render_repair(
                         manifest=self.manifest,
                         image_data_urls=self.images,
@@ -286,6 +287,8 @@ class PostRenderRepairTests(unittest.IsolatedAsyncioTestCase):
                         client=FakeClient(response),
                         plan_validator=self._validator,
                     )
+                self.assertEqual(raised.exception.provider_calls, 1)
+                self.assertEqual(len(raised.exception.attempts), 1)
 
     async def test_provider_failure_is_sanitized_and_checkpoint_round_trip_is_strict(self):
         unavailable = await request_post_render_repair(
@@ -382,6 +385,24 @@ class PostRenderRepairTests(unittest.IsolatedAsyncioTestCase):
             supported_capabilities=("zoom",),
         )
         self.assertEqual([item["finding_id"] for item in findings], [_finding()["finding_id"]])
+        batched = consolidate_render_findings((
+            _finding(severity="warning", confidence=0.8),
+            {
+                **_finding(severity="advisory", confidence=0.7),
+                "finding_id": "finding-caption",
+                "finding_fingerprint": "4" * 64,
+                "category": "captions",
+                "repair_objective": "Reduce caption competition.",
+                "requested_capabilities": ["subtitles"],
+            },
+        ))
+        self.assertEqual(len(batched), 1)
+        self.assertEqual(batched[0]["clip_index"], 1)
+        self.assertEqual(
+            set(batched[0]["requested_capabilities"]),
+            {"subtitles", "zoom"},
+        )
+        self.assertEqual(len(batched[0]["source_finding_ids"]), 2)
         improvement = compare_critic_improvement(
             {"status": "review", "findings": [_finding(severity="blocker", confidence=0.9)]},
             {"status": "review", "findings": [_finding(severity="advisory", confidence=0.2)]},

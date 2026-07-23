@@ -35,6 +35,8 @@ _SEVERITY_WEIGHT = {"advisory": 1.0, "warning": 2.0, "blocker": 4.0}
 class PostRenderRepairError(RuntimeError):
     def __init__(self, code: str, message: str) -> None:
         self.code = code
+        self.provider_calls = 0
+        self.attempts: tuple[dict[str, Any], ...] = ()
         super().__init__(f"{code}: {message}")
 
 
@@ -223,6 +225,83 @@ def eligible_render_findings(
             "repairable": True,
         })
     return tuple(selected[key] for key in sorted(selected))
+
+
+def consolidate_render_findings(
+    findings: Sequence[Mapping[str, Any]],
+) -> tuple[dict[str, Any], ...]:
+    """Collapse related findings into one useful repair objective per clip/target."""
+    grouped: dict[tuple[int, str], list[Mapping[str, Any]]] = {}
+    for finding in findings:
+        clip_index = int(finding.get("clip_index") or 0)
+        target = (
+            "effect_plan"
+            if str(finding.get("category") or "") == "effects"
+            or "effect" in set(finding.get("requested_capabilities") or ())
+            else "clip_plan"
+        )
+        grouped.setdefault((clip_index, target), []).append(finding)
+
+    batches: list[dict[str, Any]] = []
+    for (clip_index, target), items in sorted(grouped.items()):
+        ordered = sorted(
+            items,
+            key=lambda item: (
+                -_SEVERITY_WEIGHT.get(str(item.get("severity") or "advisory"), 0.0),
+                -float(item.get("confidence") or 0.0),
+                str(item.get("finding_id") or ""),
+            ),
+        )
+        if len(ordered) == 1:
+            batches.append(dict(ordered[0]))
+            continue
+        source_ids = [str(item.get("finding_id") or "")[:80] for item in ordered]
+        digest = _hash_json({"clip_index": clip_index, "target": target, "ids": source_ids})
+        evidence_ids = list(dict.fromkeys(
+            str(evidence_id)[:80]
+            for item in ordered
+            for evidence_id in (item.get("evidence_ids") or ())
+        ))[:16]
+        requested_capabilities = sorted({
+            str(capability)[:40]
+            for item in ordered
+            for capability in (item.get("requested_capabilities") or ())
+        })
+        primary = ordered[0]
+        batches.append({
+            "finding_id": f"finding-batch-{digest[:24]}",
+            "finding_fingerprint": digest,
+            "source_finding_ids": source_ids[:16],
+            "category": str(primary.get("category") or "composition")[:40],
+            "severity": str(primary.get("severity") or "warning")[:20],
+            "classification": (
+                "objective"
+                if any(str(item.get("classification") or "") == "objective" for item in ordered)
+                else "creative"
+            ),
+            "confidence": max(float(item.get("confidence") or 0.0) for item in ordered),
+            "clip_index": clip_index,
+            "start_ms": min(int(item.get("start_ms") or 0) for item in ordered),
+            "end_ms": max(int(item.get("end_ms") or 1) for item in ordered),
+            "evidence_ids": evidence_ids,
+            "explanation": sanitize_text(
+                "; ".join(
+                    f"{item.get('category')}: {item.get('explanation')}"
+                    for item in ordered
+                ),
+                limit=600,
+            ),
+            "repair_objective": sanitize_text(
+                "; ".join(
+                    str(item.get("repair_objective") or "") for item in ordered
+                ),
+                limit=320,
+            ),
+            "requested_capabilities": requested_capabilities,
+            "repair_target": target,
+            "repairable": True,
+        })
+    return tuple(batches)
 
 
 def objective_findings_for_contingency(
@@ -675,7 +754,9 @@ async def request_post_render_repair(
             attempts=_attempts(client),
             no_op=no_op,
         )
-    except PostRenderRepairError:
+    except PostRenderRepairError as exc:
+        exc.provider_calls = 1
+        exc.attempts = _attempts(client)
         raise
     except Exception as exc:
         return PostRenderRepairProposal(
@@ -857,6 +938,7 @@ __all__ = [
     "PostRenderRepairState",
     "build_post_render_repair_prompt",
     "compare_critic_improvement",
+    "consolidate_render_findings",
     "eligible_render_findings",
     "objective_findings_for_contingency",
     "post_render_repair_fingerprint",

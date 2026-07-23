@@ -119,6 +119,7 @@ from open_storyline.mvp.post_render_repair import (
     PostRenderRepairError,
     PostRenderRepairState,
     compare_critic_improvement,
+    consolidate_render_findings,
     eligible_render_findings,
     objective_findings_for_contingency,
     post_render_repair_fingerprint,
@@ -4690,7 +4691,7 @@ class MVPJobProcessor:
             )
             original_blocker_codes = set(original_candidate_gate["blocker_codes"])
             eligible_findings = (
-                eligible_render_findings(
+                consolidate_render_findings(eligible_render_findings(
                     render_critic_report or {},
                     supported_capabilities=(
                         REFRAME_RENDER_CAPABILITIES
@@ -4704,7 +4705,7 @@ class MVPJobProcessor:
                             else set()
                         )
                     ),
-                )
+                ))
                 if critic_mode == "enforce"
                 else ()
             )
@@ -4916,6 +4917,10 @@ class MVPJobProcessor:
                                 },
                             )
                     except PostRenderRepairError as exc:
+                        provider_calls = max(
+                            0,
+                            int(getattr(exc, "provider_calls", 0) or 0),
+                        )
                         unavailable_report = {
                             "version": "post_render_repair.v2",
                             "round": round_name,
@@ -4939,12 +4944,14 @@ class MVPJobProcessor:
                             "effect_affected_clip_indexes": [],
                             "candidate_effect_skills": [],
                             "error_code": exc.code,
-                            "provider_calls": 0,
-                            "attempts": [],
+                            "validation_reason": str(exc).split(": ", 1)[-1][:160],
+                            "provider_calls": provider_calls,
+                            "attempts": list(getattr(exc, "attempts", ())),
                             "no_op": False,
                             "checkpoint_reused": repair_hit is not None,
                         }
                         repair_records.append(unavailable_report)
+                        repair_manifest["provider_calls"] += provider_calls
                         await save_job_checkpoint(
                             job_id=job_id,
                             stage=repair_stage,
@@ -5700,6 +5707,7 @@ class MVPJobProcessor:
                 render_qa=render_qa_report,
                 creative_conformance=creative_conformance_report,
                 creative_review=render_critic_report,
+                post_render_repair=post_render_repair_report,
                 caption_footprints=caption_footprints,
             )
             if promotion_report["decision"] == "block":

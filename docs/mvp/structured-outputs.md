@@ -81,6 +81,15 @@ creative judgment and avoids a redundant provider call. Unknown evidence,
 cross-clip references, invalid windows, and unsupported capabilities still fail
 closed.
 
+Before `post_render_repair.v2`, related repairable findings are consolidated
+into one composite clip-plan objective per affected clip, with a separate
+effect-plan objective only when final executed-effect evidence supports it.
+This preserves the critic's full report while keeping the repair request small
+and decision-complete. A schema or local-validation failure after the provider
+call remains attributable as one call and publishes
+`POST_RENDER_REPAIR_UNAVAILABLE` plus the unresolved critic limitation; it does
+not retry the same evidence or falsely label the original candidate enhanced.
+
 The deploy wrapper runs Responses-based strict acceptance and extra-field
 rejection probes whenever `json_schema` mode is selected. A failed probe blocks
 deployment. Run the isolated probe directly with:
